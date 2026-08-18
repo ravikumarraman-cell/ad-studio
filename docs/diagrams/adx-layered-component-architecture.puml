@@ -1,0 +1,226 @@
+@startuml ADX Layered Component Architecture
+title AutoDev Studio (ADX) — Layered Component Architecture
+
+' Source: ADX_TanStack_Implementation_Specification_10_10.md
+' Maintain this diagram with the specification. Components describe ownership and trust
+' boundaries; arrows identify primary request, command, evidence, or observation flow.
+
+left to right direction
+hide stereotype
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam packageStyle rectangle
+skinparam componentStyle rectangle
+skinparam roundcorner 8
+skinparam ArrowColor #52616B
+skinparam package {
+  BorderColor #4B6478
+  FontColor #17324D
+  BackgroundColor #F7FAFC
+}
+skinparam component {
+  BorderColor #3B5B74
+  BackgroundColor #FFFFFF
+  FontColor #102A43
+}
+
+actor "Requester\nProduct manager\nEngineer" as User
+actor "Reviewer /\nRelease authority" as Reviewer
+actor "Operator / SRE" as Operator
+
+package "Experience Plane\nUser interaction only — no privileged authority" #E8F4FD {
+  component "ADX Web App\nTanStack Start / Router" as Web
+  component "Change Case\nReview Workbench" as ReviewUI
+  component "Operations Console\nIncident / rollout control" as OpsUI
+  component "Policy & Settings\nAdministration" as AdminUI
+  component "Query, URL and\nlocal UI state layer" as ClientState
+}
+
+package "Control Plane\nAuthoritative decisions and durable workflow state" #EEF7EA {
+  component "API / BFF\nAuthentication, validation,\ncommand-query boundary" as API
+  component "Change Case Service\nDomain state machine\noptimistic concurrency" as Case
+  component "Durable Workflow Engine\nActivities, timers, retries,\ncompensation, cancellation" as Workflow
+  component "Policy Decision Point\nRBAC + ABAC + obligations" as PDP
+  component "Approval Service\nDigest-bound attestations\nseparation of duty" as Approval
+  component "Execution Lease Service\nSigned, expiring authority" as Lease
+  component "Budget Service\nReservation and settlement" as Budget
+  component "Provenance Service\nArtifact-set / release binding" as Provenance
+  component "Audit & Integrity Service\nEvent chain, signatures,\ncheckpoint verification" as Audit
+}
+
+package "Context Plane\nACL-aware, provenance-labelled data; never authority" #FFF7E6 {
+  component "Repository & Docs Indexer" as Indexer
+  component "Context Evidence Graph\nCode, symbols, dependencies,\nownership, APIs, incidents" as Graph
+  component "ACL-Aware Retrieval\nFreshness / source labels" as Retrieval
+}
+
+package "Execution Plane\nUntrusted work under a bounded lease" #FCEEEF {
+  component "Agent Dispatch Broker\nProvider-neutral adapter router" as Broker
+  component "Agent Adapter\nCodex / Claude Code /\nCopilot / local / custom" as Adapter
+  component "Ephemeral Sandbox\nFirecracker or hardened runtime" as Sandbox
+  component "Tool Gateway\nPolicy + lease enforcement\nreceipts for every side effect" as ToolGateway
+  component "Secret Broker\nJIT, scoped credentials" as SecretBroker
+}
+
+package "Verification Plane\nIndependent evidence; cannot modify the candidate" #F5EEFF {
+  component "Verification Orchestrator" as Verify
+  component "Fresh Verification\nEnvironment" as VerifyEnv
+  component "Build / Test /\nCompatibility Checks" as Tests
+  component "Security & Supply Chain\nSAST, secrets, SBOM, IaC" as Security
+  component "Independent Evaluator\nSemantic / adversarial eval" as Evaluator
+  component "Evidence Assembler\nClaim-to-proof mapping" as Evidence
+}
+
+package "Delivery Plane\nPromotion mechanics; never agent-controlled" #FFF1E6 {
+  component "Git Provider Adapter\nBranch / PR / merge state" as Git
+  component "CI Provider Adapter\nBuild status / artifacts" as CI
+  component "Release Controller\nProvenance + approval gate" as Release
+  component "Progressive Delivery Adapter\nFlags / Argo Rollouts / deploy" as Rollout
+  component "Telemetry Analysis Adapter\nSLO and release-contract queries" as Metrics
+  component "Reconciliation Worker\nObserved external state / drift" as Reconciler
+}
+
+package "Shared Security, Data & Operations Plane\nCross-cutting controls; no UI bypass" #F1F5F9 {
+  database "PostgreSQL\nCurrent-state projections\noutbox / inbox / idempotency" as PG
+  database "Immutable Object Storage\nEvidence blobs / reports /\nscreenshots / raw receipts" as ObjectStore
+  queue "Event Bus / Outbox\nAt-least-once delivery" as EventBus
+  component "Identity Provider\nSSO / OIDC / workload identity" as IdP
+  component "KMS / HSM\nSigning and encryption keys" as KMS
+  component "Observability Platform\nOpenTelemetry traces, metrics, logs" as OTel
+  component "Retention-Locked\nIntegrity Checkpoints" as Checkpoints
+}
+
+' --- Human and UI interaction ---
+User --> Web : intent, review, commands
+Reviewer --> ReviewUI : approval / rejection
+Operator --> OpsUI : pause, rollback, recovery
+Web --> ClientState
+Web --> API : typed query / command
+ReviewUI --> API : attest / authorize
+OpsUI --> API : controlled operations
+AdminUI --> API : policy / configuration
+
+' --- Control-plane command flow ---
+API --> IdP : authenticate principal
+API --> Case : commands and queries
+Case --> PDP : authorize transition
+Case --> Workflow : durable stage command
+Workflow --> Approval : request/validate approval
+Workflow --> Lease : issue / revoke lease
+Workflow --> Budget : reserve / settle execution budget
+Workflow --> Provenance : bind artifact set
+Case --> Audit : append domain event
+Workflow --> Audit : append workflow / side-effect event
+PDP --> Audit : policy decision receipt
+Approval --> Audit : signed attestation record
+Lease --> Audit : lease issuance / revocation
+Budget --> Audit : reservation / settlement record
+
+' --- Context acquisition ---
+Indexer --> Graph : commits, symbols, ownership
+Graph --> Retrieval : provenance-aware search
+Workflow --> Retrieval : approved context request
+Retrieval --> PDP : authorize context access
+Retrieval --> Audit : retrieval receipt
+Retrieval --> Broker : labelled context bundle
+
+' --- Agent execution flow ---
+Workflow --> Broker : dispatch under lease
+Broker --> Adapter : normalized request
+Adapter --> Sandbox : start agent run
+Sandbox --> ToolGateway : every capability-bearing action
+ToolGateway --> PDP : action authorization
+ToolGateway --> Lease : verify live scope
+ToolGateway --> Budget : verify reservation
+ToolGateway --> SecretBroker : request scoped secret
+SecretBroker --> IdP : workload identity
+SecretBroker --> KMS : unwrap / issue credential
+ToolGateway --> Audit : tool receipt
+Sandbox --> Provenance : runtime / input / output digests
+Adapter --> Audit : run status / provider identity
+
+' --- Independent verification ---
+Workflow --> Verify : verify pinned candidate
+Verify --> VerifyEnv : provision fresh read-only candidate
+VerifyEnv --> Tests
+VerifyEnv --> Security
+VerifyEnv --> Evaluator
+Tests --> Evidence
+Security --> Evidence
+Evaluator --> Evidence
+Evidence --> Provenance : evidence-set digest
+Evidence --> ObjectStore : raw reports and artifacts
+Evidence --> Audit : verification events
+
+' --- Git, CI, release and observe ---
+Workflow --> Git : create branch / PR
+Workflow --> CI : trigger / observe build
+Git --> EventBus : signed provider events
+CI --> EventBus : signed provider events
+EventBus --> Reconciler : inbox / deduplicate
+Reconciler --> Git : poll authoritative state
+Reconciler --> CI : poll authoritative state
+Reconciler --> Workflow : observed state / drift outcome
+Reconciler --> Audit : reconciliation event
+
+Workflow --> Release : create release candidate
+Release --> Provenance : verify exact bindings
+Release --> Approval : verify release approvals
+Release --> PDP : authorize promotion
+Release --> Rollout : execute approved rollout
+Rollout --> Metrics : evaluate service release contract
+Metrics --> Release : pause / promote / rollback signal
+Release --> Reconciler : deployment state reconciliation
+Release --> Audit : release / rollback decision
+
+' --- Persistence, integrity and observability ---
+Case --> PG
+Workflow --> PG
+Approval --> PG
+Lease --> PG
+Budget --> PG
+Audit --> PG
+Audit --> ObjectStore : signed event / evidence manifests
+Provenance --> ObjectStore
+Audit --> KMS : sign material decision
+Audit --> Checkpoints : anchored digest root
+Web --> OTel
+API --> OTel
+Workflow --> OTel
+Broker --> OTel
+Verify --> OTel
+Release --> OTel
+
+note right of PDP
+  Policy is evaluated for every
+  context read, tool invocation,
+  secret request, Git/CI action,
+  promotion, rollback, and exception.
+end note
+
+note right of Sandbox
+  Runtime enforces filesystem,
+  process, network, mount and
+  credential boundaries below
+  the agent process.
+end note
+
+note right of Evidence
+  Implementer evidence and
+  independent verifier evidence
+  are distinct artifacts.
+end note
+
+legend bottom
+  |= Boundary | Meaning |
+  | Experience | Presents state and requests actions; cannot grant authority. |
+  | Control | Makes authoritative policy, workflow, approval, and release decisions. |
+  | Context | Supplies labelled information; never executes or authorizes. |
+  | Execution | Runs replaceable agents with only a signed, revocable lease. |
+  | Verification | Produces independent evidence from pinned inputs. |
+  | Delivery | Performs provider actions only after ADX authorization. |
+  | Shared plane | Provides durable state, identity, integrity, telemetry, and retention. |
+endlegend
+
+@enduml

@@ -1,0 +1,2 @@
+main:has(.feature-layout) .metrics{grid-template-columns:repeat(3,1fr)}
+@media(max-width:700px){main:has(.feature-layout) .metrics{grid-template-columns:1fr}}

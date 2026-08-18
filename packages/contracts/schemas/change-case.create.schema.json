@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://adx.example/contracts/change-case.create.schema.json",
+  "title": "CreateChangeCaseCommand",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tenantId", "title", "riskTier", "idempotencyKey"],
+  "properties": {
+    "tenantId": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 240 },
+    "riskTier": { "type": "string", "enum": ["R0", "R1", "R2", "R3", "R4"] },
+    "idempotencyKey": { "type": "string", "minLength": 16, "maxLength": 128 }
+  }
+}

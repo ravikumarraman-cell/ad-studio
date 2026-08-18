@@ -1,0 +1,4 @@
+feature_id,title,description,priority,owner,target_repository,acceptance_criteria,risk_tier
+HI-1001,Provider prior-authorization intake,Allow providers to submit a complete traceable prior authorization request,P0,Provider Operations,health-auth-service,Submission is validated idempotent and creates an evidence-bound Change Case,R2
+HI-1002,Evidence packet and human review,Assemble coverage clinical-document and policy evidence for licensed reviewer consideration,P0,Clinical Operations,health-auth-service,Evidence is versioned and a licensed human records the determination,R3
+HI-1003,Reversible authorization-release canary,Release the portal workflow progressively with telemetry-driven pause and rollback,P1,Platform Reliability,member-portal,Promotion has provenance telemetry gates and a tested rollback path,R4

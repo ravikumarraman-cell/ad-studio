@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AutoDev Studio (ADX) layered component architecture.
+  Maintain docs/diagrams/adx-layered-component-architecture.puml as the canonical
+  source. This SVG is intentionally native/editable: every layer and component is
+  a named <g> with vector primitives and text, suitable for Figma, Inkscape, or Git diffs.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1420" viewBox="0 0 1800 1420" role="img" aria-labelledby="title description">
+  <title id="title">AutoDev Studio layered component architecture</title>
+  <desc id="description">A layered ADX component diagram showing the experience, control, context, execution, verification, delivery, and shared security, data and operations planes.</desc>
+  <defs>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill: #102a43; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #52616b; }
+      .layer-title { font: 700 19px Arial, sans-serif; fill: #17324d; }
+      .layer-subtitle { font: 400 13px Arial, sans-serif; fill: #52616b; }
+      .component-title { font: 700 14px Arial, sans-serif; fill: #102a43; text-anchor: middle; }
+      .component-subtitle { font: 400 12px Arial, sans-serif; fill: #334e68; text-anchor: middle; }
+      .flow { font: 600 12px Arial, sans-serif; fill: #52616b; }
+      .note { font: 400 12px Arial, sans-serif; fill: #334e68; }
+      .legend { font: 400 12px Arial, sans-serif; fill: #334e68; }
+      .actor { font: 700 13px Arial, sans-serif; fill: #102a43; text-anchor: middle; }
+      .layer { stroke: #4b6478; stroke-width: 1.4; rx: 12; }
+      .component { fill: #fff; stroke: #3b5b74; stroke-width: 1.3; rx: 8; }
+      .note-box { fill: #fffdf4; stroke: #c9a227; stroke-width: 1.2; rx: 7; }
+      .actor-box { fill: #fff; stroke: #52616b; stroke-width: 1.4; rx: 22; }
+      .flow-line { fill: none; stroke: #52616b; stroke-width: 1.5; marker-end: url(#arrow); }
+      .flow-line-dashed { fill: none; stroke: #52616b; stroke-width: 1.3; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+    </style>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,4 L0,8 z" fill="#52616b"/>
+    </marker>
+  </defs>
+
+  <rect width="1800" height="1420" fill="#ffffff"/>
+  <text class="title" x="900" y="42" text-anchor="middle">AutoDev Studio (ADX) — Layered Component Architecture</text>
+  <text class="subtitle" x="900" y="68" text-anchor="middle">High-assurance, evidence-first change delivery control plane</text>
+
+  <!-- Actors -->
+  <g id="actors">
+    <rect class="actor-box" x="20" y="122" width="150" height="56"/>
+    <text class="actor" x="95" y="146">Requester</text><text class="note" x="95" y="164" text-anchor="middle">Product / engineer</text>
+    <rect class="actor-box" x="1630" y="122" width="150" height="56"/>
+    <text class="actor" x="1705" y="146">Reviewer</text><text class="note" x="1705" y="164" text-anchor="middle">Approver / operator</text>
+  </g>
+
+  <!-- Experience plane -->
+  <g id="experience-plane">
+    <rect class="layer" x="190" y="92" width="1420" height="138" fill="#e8f4fd"/>
+    <text class="layer-title" x="214" y="120">Experience Plane</text>
+    <text class="layer-subtitle" x="214" y="140">User interaction only — no privileged authority</text>
+    <g id="web-app"><rect class="component" x="215" y="156" width="220" height="54"/><text class="component-title" x="325" y="180">ADX Web App</text><text class="component-subtitle" x="325" y="198">TanStack Start / Router</text></g>
+    <g id="review-workbench"><rect class="component" x="465" y="156" width="220" height="54"/><text class="component-title" x="575" y="180">Review Workbench</text><text class="component-subtitle" x="575" y="198">Change Case evidence</text></g>
+    <g id="operations-console"><rect class="component" x="715" y="156" width="220" height="54"/><text class="component-title" x="825" y="180">Operations Console</text><text class="component-subtitle" x="825" y="198">Incident / rollout control</text></g>
+    <g id="policy-settings"><rect class="component" x="965" y="156" width="220" height="54"/><text class="component-title" x="1075" y="180">Policy &amp; Settings</text><text class="component-subtitle" x="1075" y="198">Administration</text></g>
+    <g id="client-state"><rect class="component" x="1215" y="156" width="365" height="54"/><text class="component-title" x="1398" y="180">Query, URL &amp; Local UI State</text><text class="component-subtitle" x="1398" y="198">Server state in Query; UI state only locally</text></g>
+  </g>
+
+  <!-- Control plane -->
+  <g id="control-plane">
+    <rect class="layer" x="190" y="252" width="1420" height="192" fill="#eef7ea"/>
+    <text class="layer-title" x="214" y="280">Control Plane</text>
+    <text class="layer-subtitle" x="214" y="300">Authoritative decisions, durable workflow state, approvals and release authority</text>
+    <g id="api-bff"><rect class="component" x="215" y="320" width="165" height="82"/><text class="component-title" x="298" y="348">API / BFF</text><text class="component-subtitle" x="298" y="367">Auth, validation,</text><text class="component-subtitle" x="298" y="383">command/query boundary</text></g>
+    <g id="change-case-service"><rect class="component" x="400" y="320" width="165" height="82"/><text class="component-title" x="483" y="348">Change Case</text><text class="component-subtitle" x="483" y="367">State machine,</text><text class="component-subtitle" x="483" y="383">concurrency</text></g>
+    <g id="durable-workflow"><rect class="component" x="585" y="320" width="165" height="82"/><text class="component-title" x="668" y="348">Durable Workflow</text><text class="component-subtitle" x="668" y="367">Timers, retries,</text><text class="component-subtitle" x="668" y="383">compensation</text></g>
+    <g id="policy-decision"><rect class="component" x="770" y="320" width="165" height="82"/><text class="component-title" x="853" y="348">Policy Decision</text><text class="component-subtitle" x="853" y="367">RBAC + ABAC +</text><text class="component-subtitle" x="853" y="383">obligations</text></g>
+    <g id="approval-service"><rect class="component" x="955" y="320" width="165" height="82"/><text class="component-title" x="1038" y="348">Approval Service</text><text class="component-subtitle" x="1038" y="367">Digest-bound</text><text class="component-subtitle" x="1038" y="383">attestations</text></g>
+    <g id="lease-service"><rect class="component" x="1140" y="320" width="140" height="82"/><text class="component-title" x="1210" y="348">Lease Service</text><text class="component-subtitle" x="1210" y="367">Signed, expiring</text><text class="component-subtitle" x="1210" y="383">authority</text></g>
+    <g id="budget-service"><rect class="component" x="1300" y="320" width="130" height="82"/><text class="component-title" x="1365" y="348">Budget</text><text class="component-subtitle" x="1365" y="367">Reserve /</text><text class="component-subtitle" x="1365" y="383">settle</text></g>
+    <g id="provenance-audit"><rect class="component" x="1450" y="320" width="130" height="82"/><text class="component-title" x="1515" y="348">Provenance &amp;</text><text class="component-title" x="1515" y="365">Audit</text><text class="component-subtitle" x="1515" y="385">Integrity records</text></g>
+  </g>
+
+  <!-- Context plane -->
+  <g id="context-plane">
+    <rect class="layer" x="190" y="466" width="1420" height="112" fill="#fff7e6"/>
+    <text class="layer-title" x="214" y="494">Context Plane</text><text class="layer-subtitle" x="214" y="514">ACL-aware, provenance-labelled information; never authority</text>
+    <g id="indexer"><rect class="component" x="650" y="486" width="190" height="62"/><text class="component-title" x="745" y="512">Repository &amp; Docs</text><text class="component-subtitle" x="745" y="530">Indexer</text></g>
+    <g id="context-graph"><rect class="component" x="870" y="486" width="235" height="62"/><text class="component-title" x="987" y="512">Context Evidence Graph</text><text class="component-subtitle" x="987" y="530">Code, ownership, APIs, incidents</text></g>
+    <g id="retrieval"><rect class="component" x="1135" y="486" width="235" height="62"/><text class="component-title" x="1252" y="512">ACL-Aware Retrieval</text><text class="component-subtitle" x="1252" y="530">Freshness and source labels</text></g>
+  </g>
+
+  <!-- Execution plane -->
+  <g id="execution-plane">
+    <rect class="layer" x="190" y="600" width="1420" height="128" fill="#fceeef"/>
+    <text class="layer-title" x="214" y="628">Execution Plane</text><text class="layer-subtitle" x="214" y="648">Untrusted work under a signed, revocable execution lease</text>
+    <g id="dispatch-broker"><rect class="component" x="500" y="652" width="190" height="54"/><text class="component-title" x="595" y="676">Agent Dispatch Broker</text><text class="component-subtitle" x="595" y="694">Provider-neutral router</text></g>
+    <g id="agent-adapter"><rect class="component" x="720" y="652" width="190" height="54"/><text class="component-title" x="815" y="676">Agent Adapter</text><text class="component-subtitle" x="815" y="694">Codex / Claude / local</text></g>
+    <g id="sandbox"><rect class="component" x="940" y="652" width="190" height="54"/><text class="component-title" x="1035" y="676">Ephemeral Sandbox</text><text class="component-subtitle" x="1035" y="694">MicroVM / hardened runtime</text></g>
+    <g id="tool-gateway"><rect class="component" x="1160" y="652" width="190" height="54"/><text class="component-title" x="1255" y="676">Tool Gateway</text><text class="component-subtitle" x="1255" y="694">Policy, lease, receipts</text></g>
+    <g id="secret-broker"><rect class="component" x="1380" y="652" width="170" height="54"/><text class="component-title" x="1465" y="676">Secret Broker</text><text class="component-subtitle" x="1465" y="694">JIT scoped credentials</text></g>
+  </g>
+
+  <!-- Verification plane -->
+  <g id="verification-plane">
+    <rect class="layer" x="190" y="750" width="1420" height="128" fill="#f5eeff"/>
+    <text class="layer-title" x="214" y="778">Verification Plane</text><text class="layer-subtitle" x="214" y="798">Independent evidence; verifier cannot modify the candidate</text>
+    <g id="verification-orchestrator"><rect class="component" x="500" y="802" width="190" height="54"/><text class="component-title" x="595" y="826">Verification Orchestrator</text><text class="component-subtitle" x="595" y="844">Pinned candidate</text></g>
+    <g id="verification-environment"><rect class="component" x="720" y="802" width="190" height="54"/><text class="component-title" x="815" y="826">Fresh Verification</text><text class="component-subtitle" x="815" y="844">Environment</text></g>
+    <g id="checks"><rect class="component" x="940" y="802" width="190" height="54"/><text class="component-title" x="1035" y="826">Build, Test &amp; Security</text><text class="component-subtitle" x="1035" y="844">Compatibility / SBOM / IaC</text></g>
+    <g id="evaluator"><rect class="component" x="1160" y="802" width="190" height="54"/><text class="component-title" x="1255" y="826">Independent Evaluator</text><text class="component-subtitle" x="1255" y="844">Semantic / adversarial</text></g>
+    <g id="evidence-assembler"><rect class="component" x="1380" y="802" width="170" height="54"/><text class="component-title" x="1465" y="826">Evidence Assembler</text><text class="component-subtitle" x="1465" y="844">Claim-to-proof map</text></g>
+  </g>
+
+  <!-- Delivery plane -->
+  <g id="delivery-plane">
+    <rect class="layer" x="190" y="900" width="1420" height="128" fill="#fff1e6"/>
+    <text class="layer-title" x="214" y="928">Delivery Plane</text><text class="layer-subtitle" x="214" y="948">Promotion mechanics; never agent-controlled</text>
+    <g id="git-adapter"><rect class="component" x="465" y="952" width="180" height="54"/><text class="component-title" x="555" y="976">Git Adapter</text><text class="component-subtitle" x="555" y="994">Branch / PR / merge</text></g>
+    <g id="ci-adapter"><rect class="component" x="675" y="952" width="180" height="54"/><text class="component-title" x="765" y="976">CI Adapter</text><text class="component-subtitle" x="765" y="994">Build status / artifacts</text></g>
+    <g id="release-controller"><rect class="component" x="885" y="952" width="180" height="54"/><text class="component-title" x="975" y="976">Release Controller</text><text class="component-subtitle" x="975" y="994">Provenance + approvals</text></g>
+    <g id="rollout-adapter"><rect class="component" x="1095" y="952" width="180" height="54"/><text class="component-title" x="1185" y="976">Progressive Delivery</text><text class="component-subtitle" x="1185" y="994">Flags / rollout / deploy</text></g>
+    <g id="metrics-adapter"><rect class="component" x="1305" y="952" width="180" height="54"/><text class="component-title" x="1395" y="976">Telemetry Analysis</text><text class="component-subtitle" x="1395" y="994">Service release contract</text></g>
+  </g>
+
+  <!-- Shared plane -->
+  <g id="shared-security-data-operations-plane">
+    <rect class="layer" x="190" y="1050" width="1420" height="170" fill="#f1f5f9"/>
+    <text class="layer-title" x="214" y="1078">Shared Security, Data &amp; Operations Plane</text><text class="layer-subtitle" x="214" y="1098">Durable state, identity, integrity, telemetry and retention; no UI bypass</text>
+    <g id="postgres"><rect class="component" x="290" y="1130" width="180" height="62"/><text class="component-title" x="380" y="1156">PostgreSQL</text><text class="component-subtitle" x="380" y="1174">Projections, outbox, inbox</text></g>
+    <g id="object-storage"><rect class="component" x="500" y="1130" width="180" height="62"/><text class="component-title" x="590" y="1156">Immutable Object Store</text><text class="component-subtitle" x="590" y="1174">Evidence and receipts</text></g>
+    <g id="event-bus"><rect class="component" x="710" y="1130" width="180" height="62"/><text class="component-title" x="800" y="1156">Event Bus / Outbox</text><text class="component-subtitle" x="800" y="1174">At-least-once delivery</text></g>
+    <g id="identity-provider"><rect class="component" x="920" y="1130" width="180" height="62"/><text class="component-title" x="1010" y="1156">Identity Provider</text><text class="component-subtitle" x="1010" y="1174">SSO / workload identity</text></g>
+    <g id="kms"><rect class="component" x="1130" y="1130" width="180" height="62"/><text class="component-title" x="1220" y="1156">KMS / HSM</text><text class="component-subtitle" x="1220" y="1174">Signing / encryption</text></g>
+    <g id="observability"><rect class="component" x="1340" y="1130" width="180" height="62"/><text class="component-title" x="1430" y="1156">Observability Platform</text><text class="component-subtitle" x="1430" y="1174">Traces, metrics, logs</text></g>
+  </g>
+
+  <!-- Trust boundary notes -->
+  <g id="trust-boundary-notes">
+    <rect class="note-box" x="80" y="610" width="330" height="88"/><text class="note" x="100" y="635">Trust boundary: execution plane</text><text class="note" x="100" y="654">enforces filesystem, process, network,</text><text class="note" x="100" y="673">mount and credential limits below agent.</text>
+    <rect class="note-box" x="1430" y="478" width="320" height="88"/><text class="note" x="1450" y="503">Trust boundary: context is data,</text><text class="note" x="1450" y="522">never executable policy. Retrieval is</text><text class="note" x="1450" y="541">ACL-checked and provenance-labelled.</text>
+    <rect class="note-box" x="1540" y="775" width="230" height="88"/><text class="note" x="1560" y="800">Verifier is independent:</text><text class="note" x="1560" y="819">it reads pinned inputs but</text><text class="note" x="1560" y="838">cannot mutate candidate.</text>
+  </g>
+
+  <!-- Primary flows (numbered so the dense system remains readable) -->
+  <g id="primary-flows">
+    <path class="flow-line" d="M170 150 H215"/><text class="flow" x="177" y="136">1 intent / review</text>
+    <path class="flow-line" d="M435 183 H465"/><path class="flow-line" d="M685 183 H715"/><path class="flow-line" d="M935 183 H965"/>
+    <path class="flow-line" d="M325 210 V320"/><text class="flow" x="334" y="264">2 typed command/query</text>
+    <path class="flow-line" d="M380 360 H400"/><path class="flow-line" d="M565 360 H585"/><path class="flow-line" d="M750 360 H770"/>
+    <path class="flow-line" d="M668 402 V652 H500"/><text class="flow" x="680" y="525">3 dispatch under lease</text>
+    <path class="flow-line" d="M690 679 H720"/><path class="flow-line" d="M910 679 H940"/><path class="flow-line" d="M1130 679 H1160"/><path class="flow-line" d="M1350 679 H1380"/>
+    <path class="flow-line-dashed" d="M853 402 V486 H1135"/><text class="flow" x="914" y="474">4 authorize retrieval</text>
+    <path class="flow-line" d="M1252 548 V620 H500"/><text class="flow" x="1045" y="608">5 labelled context</text>
+    <path class="flow-line" d="M668 402 V802 H500"/><text class="flow" x="678" y="749">6 independent verification</text>
+    <path class="flow-line" d="M690 829 H720"/><path class="flow-line" d="M910 829 H940"/><path class="flow-line" d="M1130 829 H1160"/><path class="flow-line" d="M1350 829 H1380"/>
+    <path class="flow-line" d="M668 402 V952 H465"/><text class="flow" x="678" y="910">7 Git / CI / release</text>
+    <path class="flow-line" d="M645 979 H675"/><path class="flow-line" d="M855 979 H885"/><path class="flow-line" d="M1065 979 H1095"/><path class="flow-line" d="M1275 979 H1305"/>
+    <path class="flow-line-dashed" d="M1395 1006 V1108 H800"/><text class="flow" x="1170" y="1097">8 signed events and reconciliation</text>
+    <path class="flow-line-dashed" d="M1515 402 V1130"/><text class="flow" x="1524" y="760">9 audit / integrity</text>
+    <path class="flow-line" d="M1630 150 H1580"/><text class="flow" x="1540" y="136">approve / operate</text>
+  </g>
+
+  <!-- Legend -->
+  <g id="legend">
+    <rect x="190" y="1250" width="1420" height="126" rx="10" fill="#fbfcfe" stroke="#a0aec0"/>
+    <text class="layer-title" x="214" y="1278">Reading the diagram</text>
+    <text class="legend" x="214" y="1302">Solid arrows = primary command, evidence, or observation flow. Dashed arrows = policy-governed context, audit, or reconciliation flow.</text>
+    <text class="legend" x="214" y="1324">Agents are replaceable adapters in the execution plane. They never own policy, approvals, evidence truth, credentials, or release authority.</text>
+    <text class="legend" x="214" y="1346">Every external side effect is observed through provider events and reconciliation; every material decision binds to provenance and tamper-evident evidence.</text>
+  </g>
+</svg>

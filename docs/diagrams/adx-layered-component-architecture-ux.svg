@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ADX UX Edition — editable SVG presentation diagram.
+  Canonical detailed engineering source: adx-layered-component-architecture.puml
+  This file optimizes for comprehension in product, architecture, and executive reviews.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1550" viewBox="0 0 1800 1550" role="img" aria-labelledby="title description">
+  <title id="title">AutoDev Studio — trustworthy velocity architecture</title>
+  <desc id="description">A user-friendly layered ADX component diagram with a five-step lifecycle, seven architecture layers, and three trust guarantees.</desc>
+  <defs>
+    <linearGradient id="hero" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#102a43"/><stop offset="1" stop-color="#243b6b"/></linearGradient>
+    <linearGradient id="control" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#dff5e4"/><stop offset="1" stop-color="#eef9f1"/></linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#102a43" flood-opacity=".13"/></filter>
+    <filter id="softShadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#102a43" flood-opacity=".10"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#52718d"/></marker>
+    <marker id="accentArrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#2f80ed"/></marker>
+    <style>
+      .h1 { font: 700 34px Arial, sans-serif; fill:#fff; }
+      .subtitle { font: 400 17px Arial, sans-serif; fill:#d8e6f3; }
+      .eyebrow { font:700 12px Arial, sans-serif; letter-spacing:1.8px; fill:#8dd2ff; }
+      .section { font:700 20px Arial, sans-serif; fill:#102a43; }
+      .body { font:400 13px Arial, sans-serif; fill:#52616b; }
+      .layerTitle { font:700 17px Arial, sans-serif; fill:#102a43; }
+      .layerText { font:400 12px Arial, sans-serif; fill:#52616b; }
+      .chipTitle { font:700 13px Arial, sans-serif; fill:#17324d; text-anchor:middle; }
+      .chipText { font:400 11px Arial, sans-serif; fill:#52616b; text-anchor:middle; }
+      .stepNumber { font:700 14px Arial, sans-serif; fill:#fff; text-anchor:middle; }
+      .stepLabel { font:700 13px Arial, sans-serif; fill:#102a43; text-anchor:middle; }
+      .stepText { font:400 11px Arial, sans-serif; fill:#52616b; text-anchor:middle; }
+      .calloutTitle { font:700 14px Arial, sans-serif; fill:#102a43; }
+      .calloutText { font:400 12px Arial, sans-serif; fill:#52616b; }
+      .card { fill:#fff; stroke:#d8e2eb; stroke-width:1.2; rx:12; }
+      .chip { fill:#fff; stroke:#bfd0df; stroke-width:1; rx:8; }
+      .line { fill:none; stroke:#52718d; stroke-width:1.5; marker-end:url(#arrow); }
+      .lineAccent { fill:none; stroke:#2f80ed; stroke-width:2; marker-end:url(#accentArrow); }
+      .lineDashed { fill:none; stroke:#af7a00; stroke-width:1.5; stroke-dasharray:6 5; marker-end:url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1550" fill="#f6f9fc"/>
+  <!-- Hero -->
+  <rect x="0" y="0" width="1800" height="186" fill="url(#hero)"/>
+  <circle cx="1570" cy="-55" r="260" fill="#2f80ed" opacity=".18"/>
+  <circle cx="1700" cy="145" r="170" fill="#62d3ff" opacity=".11"/>
+  <text class="eyebrow" x="90" y="54">AUTODEV STUDIO · HIGH-ASSURANCE CHANGE DELIVERY</text>
+  <text class="h1" x="90" y="100">Trustworthy velocity, made visible.</text>
+  <text class="subtitle" x="90" y="131">A policy-governed control plane that turns intent into reviewed, evidenced and reversible software change.</text>
+  <g filter="url(#softShadow)">
+    <rect x="1320" y="53" width="360" height="80" rx="14" fill="#fff" opacity=".96"/>
+    <text class="calloutTitle" x="1346" y="82">The ADX promise</text>
+    <text class="calloutText" x="1346" y="105">Agents execute. ADX governs.</text>
+    <text class="calloutText" x="1346" y="122">Humans approve. Evidence decides.</text>
+  </g>
+
+  <!-- Guided lifecycle -->
+  <g id="guided-lifecycle" filter="url(#shadow)">
+    <rect x="90" y="214" width="1620" height="142" rx="18" fill="#fff"/>
+    <text class="section" x="125" y="250">One simple story across a complex system</text>
+    <text class="body" x="125" y="273">Every change follows the same understandable lifecycle. ADX pauses when evidence or authority is incomplete.</text>
+    <path class="lineAccent" d="M306 315 H1494"/>
+    <!-- Step 1 -->
+    <circle cx="315" cy="315" r="20" fill="#2f80ed"/><text class="stepNumber" x="315" y="320">1</text>
+    <text class="stepLabel" x="315" y="344">Intent</text><text class="stepText" x="315" y="362">Clarify the change</text>
+    <!-- Step 2 -->
+    <circle cx="610" cy="315" r="20" fill="#20a36a"/><text class="stepNumber" x="610" y="320">2</text>
+    <text class="stepLabel" x="610" y="344">Govern</text><text class="stepText" x="610" y="362">Approve scope &amp; design</text>
+    <!-- Step 3 -->
+    <circle cx="905" cy="315" r="20" fill="#8b5cf6"/><text class="stepNumber" x="905" y="320">3</text>
+    <text class="stepLabel" x="905" y="344">Execute</text><text class="stepText" x="905" y="362">Bounded agent work</text>
+    <!-- Step 4 -->
+    <circle cx="1200" cy="315" r="20" fill="#e58a15"/><text class="stepNumber" x="1200" y="320">4</text>
+    <text class="stepLabel" x="1200" y="344">Verify</text><text class="stepText" x="1200" y="362">Independent evidence</text>
+    <!-- Step 5 -->
+    <circle cx="1495" cy="315" r="20" fill="#d34b67"/><text class="stepNumber" x="1495" y="320">5</text>
+    <text class="stepLabel" x="1495" y="344">Release &amp; Learn</text><text class="stepText" x="1495" y="362">Promote, observe, recover</text>
+  </g>
+
+  <!-- Left narrative rail -->
+  <g id="trust-guarantees">
+    <text class="section" x="90" y="415">Three guarantees</text>
+    <text class="body" x="90" y="438">The architecture protects these properties at every layer.</text>
+    <g filter="url(#softShadow)"><rect class="card" x="90" y="462" width="250" height="128"/><circle cx="124" cy="497" r="16" fill="#dff5e4"/><text class="calloutTitle" x="153" y="501">Authority</text><text class="calloutText" x="112" y="529">No agent exceeds its signed,</text><text class="calloutText" x="112" y="547">expiring execution lease.</text><text class="calloutText" x="112" y="569">Policy is enforced below prompts.</text></g>
+    <g filter="url(#softShadow)"><rect class="card" x="90" y="612" width="250" height="128"/><circle cx="124" cy="647" r="16" fill="#e5ddff"/><text class="calloutTitle" x="153" y="651">Truth</text><text class="calloutText" x="112" y="679">Approvals bind to exact,</text><text class="calloutText" x="112" y="697">tamper-evident evidence.</text><text class="calloutText" x="112" y="719">Verification is independent.</text></g>
+    <g filter="url(#softShadow)"><rect class="card" x="90" y="762" width="250" height="128"/><circle cx="124" cy="797" r="16" fill="#ffe9c7"/><text class="calloutTitle" x="153" y="801">Recovery</text><text class="calloutText" x="112" y="829">External state is reconciled;</text><text class="calloutText" x="112" y="847">rollouts pause, roll back,</text><text class="calloutText" x="112" y="869">or escalate safely.</text></g>
+  </g>
+
+  <!-- Architecture layers -->
+  <g id="architecture-layers">
+    <text class="section" x="390" y="415">The ADX system, in seven layers</text>
+    <text class="body" x="390" y="438">Follow the blue spine for the primary change path. Gold dashed links are information and evidence flows.</text>
+
+    <!-- Experience -->
+    <g id="experience-layer" filter="url(#softShadow)">
+      <rect x="390" y="462" width="1320" height="102" rx="14" fill="#e8f4fd" stroke="#acd1ec"/>
+      <text class="layerTitle" x="420" y="493">01 · Experience</text><text class="layerText" x="420" y="514">Human interaction</text>
+      <g><rect class="chip" x="660" y="480" width="180" height="62"/><text class="chipTitle" x="750" y="505">ADX Web App</text><text class="chipText" x="750" y="525">TanStack Start / Router</text></g>
+      <g><rect class="chip" x="860" y="480" width="180" height="62"/><text class="chipTitle" x="950" y="505">Review Workbench</text><text class="chipText" x="950" y="525">Evidence &amp; approvals</text></g>
+      <g><rect class="chip" x="1060" y="480" width="180" height="62"/><text class="chipTitle" x="1150" y="505">Operations Console</text><text class="chipText" x="1150" y="525">Pause / rollback</text></g>
+      <g><rect class="chip" x="1260" y="480" width="180" height="62"/><text class="chipTitle" x="1350" y="505">Policy Settings</text><text class="chipText" x="1350" y="525">Administrative control</text></g>
+      <g><rect class="chip" x="1460" y="480" width="220" height="62"/><text class="chipTitle" x="1570" y="505">Query &amp; URL State</text><text class="chipText" x="1570" y="525">Shareable decision views</text></g>
+    </g>
+
+    <!-- Control -->
+    <g id="control-layer" filter="url(#shadow)">
+      <rect x="390" y="584" width="1320" height="144" rx="14" fill="url(#control)" stroke="#8ebd98" stroke-width="1.5"/>
+      <rect x="390" y="584" width="10" height="144" rx="5" fill="#20a36a"/>
+      <text class="layerTitle" x="420" y="619">02 · Control</text><text class="layerText" x="420" y="640">The authority spine</text><text class="layerText" x="420" y="658">ADx decides; agents do not.</text>
+      <g><rect class="chip" x="660" y="602" width="145" height="48"/><text class="chipTitle" x="733" y="624">API / BFF</text><text class="chipText" x="733" y="641">validate</text></g>
+      <g><rect class="chip" x="820" y="602" width="145" height="48"/><text class="chipTitle" x="893" y="624">Change Case</text><text class="chipText" x="893" y="641">state machine</text></g>
+      <g><rect class="chip" x="980" y="602" width="145" height="48"/><text class="chipTitle" x="1053" y="624">Workflow</text><text class="chipText" x="1053" y="641">durable execution</text></g>
+      <g><rect class="chip" x="1140" y="602" width="145" height="48"/><text class="chipTitle" x="1213" y="624">Policy</text><text class="chipText" x="1213" y="641">RBAC + ABAC</text></g>
+      <g><rect class="chip" x="1300" y="602" width="145" height="48"/><text class="chipTitle" x="1373" y="624">Approvals</text><text class="chipText" x="1373" y="641">attestations</text></g>
+      <g><rect class="chip" x="1460" y="602" width="220" height="48"/><text class="chipTitle" x="1570" y="624">Lease · Budget · Audit</text><text class="chipText" x="1570" y="641">bound authority &amp; evidence</text></g>
+      <text class="layerText" x="660" y="687">Every consequential action passes through policy, a signed lease, evidence binding, and durable workflow state.</text>
+    </g>
+
+    <!-- Context -->
+    <g id="context-layer" filter="url(#softShadow)">
+      <rect x="390" y="748" width="1320" height="92" rx="14" fill="#fff7e6" stroke="#efcb83"/>
+      <text class="layerTitle" x="420" y="779">03 · Context</text><text class="layerText" x="420" y="800">Information only</text>
+      <g><rect class="chip" x="760" y="766" width="220" height="52"/><text class="chipTitle" x="870" y="788">Repository &amp; Docs Indexer</text><text class="chipText" x="870" y="806">commits, symbols, ownership</text></g>
+      <g><rect class="chip" x="1000" y="766" width="220" height="52"/><text class="chipTitle" x="1110" y="788">Context Evidence Graph</text><text class="chipText" x="1110" y="806">dependencies, APIs, incidents</text></g>
+      <g><rect class="chip" x="1240" y="766" width="300" height="52"/><text class="chipTitle" x="1390" y="788">ACL-Aware Retrieval</text><text class="chipText" x="1390" y="806">fresh, attributed, untrusted data</text></g>
+    </g>
+
+    <!-- Execution -->
+    <g id="execution-layer" filter="url(#softShadow)">
+      <rect x="390" y="860" width="1320" height="104" rx="14" fill="#fceeef" stroke="#eeb6c1"/>
+      <text class="layerTitle" x="420" y="892">04 · Execution</text><text class="layerText" x="420" y="913">Untrusted work</text><text class="layerText" x="420" y="930">under a live lease</text>
+      <g><rect class="chip" x="680" y="878" width="190" height="62"/><text class="chipTitle" x="775" y="903">Dispatch Broker</text><text class="chipText" x="775" y="923">provider-neutral routing</text></g>
+      <g><rect class="chip" x="890" y="878" width="190" height="62"/><text class="chipTitle" x="985" y="903">Agent Adapter</text><text class="chipText" x="985" y="923">Codex, Claude, local…</text></g>
+      <g><rect class="chip" x="1100" y="878" width="190" height="62"/><text class="chipTitle" x="1195" y="903">Ephemeral Sandbox</text><text class="chipText" x="1195" y="923">runtime-enforced limits</text></g>
+      <g><rect class="chip" x="1310" y="878" width="190" height="62"/><text class="chipTitle" x="1405" y="903">Tool Gateway</text><text class="chipText" x="1405" y="923">policy, receipts, secrets</text></g>
+    </g>
+
+    <!-- Verification -->
+    <g id="verification-layer" filter="url(#softShadow)">
+      <rect x="390" y="984" width="1320" height="104" rx="14" fill="#f5eeff" stroke="#cbb7f0"/>
+      <text class="layerTitle" x="420" y="1016">05 · Verify</text><text class="layerText" x="420" y="1037">Independent proof</text><text class="layerText" x="420" y="1054">from pinned inputs</text>
+      <g><rect class="chip" x="680" y="1002" width="190" height="62"/><text class="chipTitle" x="775" y="1027">Verification Orchestrator</text><text class="chipText" x="775" y="1047">fresh environment</text></g>
+      <g><rect class="chip" x="890" y="1002" width="190" height="62"/><text class="chipTitle" x="985" y="1027">Build &amp; Test</text><text class="chipText" x="985" y="1047">compatibility checks</text></g>
+      <g><rect class="chip" x="1100" y="1002" width="190" height="62"/><text class="chipTitle" x="1195" y="1027">Security &amp; Supply Chain</text><text class="chipText" x="1195" y="1047">SAST, SBOM, IaC</text></g>
+      <g><rect class="chip" x="1310" y="1002" width="190" height="62"/><text class="chipTitle" x="1405" y="1027">Evidence Assembler</text><text class="chipText" x="1405" y="1047">claim-to-proof map</text></g>
+    </g>
+
+    <!-- Delivery -->
+    <g id="delivery-layer" filter="url(#softShadow)">
+      <rect x="390" y="1108" width="1320" height="104" rx="14" fill="#fff1e6" stroke="#efbd89"/>
+      <text class="layerTitle" x="420" y="1140">06 · Deliver</text><text class="layerText" x="420" y="1161">Controlled promotion</text><text class="layerText" x="420" y="1178">and recovery</text>
+      <g><rect class="chip" x="680" y="1126" width="160" height="62"/><text class="chipTitle" x="760" y="1151">Git / CI</text><text class="chipText" x="760" y="1171">PR and build state</text></g>
+      <g><rect class="chip" x="860" y="1126" width="190" height="62"/><text class="chipTitle" x="955" y="1151">Release Controller</text><text class="chipText" x="955" y="1171">provenance &amp; approval</text></g>
+      <g><rect class="chip" x="1070" y="1126" width="190" height="62"/><text class="chipTitle" x="1165" y="1151">Progressive Delivery</text><text class="chipText" x="1165" y="1171">flags / rollout / deploy</text></g>
+      <g><rect class="chip" x="1280" y="1126" width="220" height="62"/><text class="chipTitle" x="1390" y="1151">Telemetry &amp; Reconciliation</text><text class="chipText" x="1390" y="1171">pause, promote, roll back</text></g>
+    </g>
+
+    <!-- Foundation -->
+    <g id="foundation-layer" filter="url(#softShadow)">
+      <rect x="390" y="1232" width="1320" height="104" rx="14" fill="#edf2f7" stroke="#b8c7d5"/>
+      <text class="layerTitle" x="420" y="1264">07 · Foundation</text><text class="layerText" x="420" y="1285">Durability, identity</text><text class="layerText" x="420" y="1302">and observability</text>
+      <g><rect class="chip" x="680" y="1250" width="145" height="62"/><text class="chipTitle" x="753" y="1275">PostgreSQL</text><text class="chipText" x="753" y="1295">state + inbox/outbox</text></g>
+      <g><rect class="chip" x="845" y="1250" width="145" height="62"/><text class="chipTitle" x="918" y="1275">Object Store</text><text class="chipText" x="918" y="1295">raw evidence</text></g>
+      <g><rect class="chip" x="1010" y="1250" width="145" height="62"/><text class="chipTitle" x="1083" y="1275">Identity</text><text class="chipText" x="1083" y="1295">SSO + workload</text></g>
+      <g><rect class="chip" x="1175" y="1250" width="145" height="62"/><text class="chipTitle" x="1248" y="1275">KMS / HSM</text><text class="chipText" x="1248" y="1295">sign + encrypt</text></g>
+      <g><rect class="chip" x="1340" y="1250" width="160" height="62"/><text class="chipTitle" x="1420" y="1275">Observability</text><text class="chipText" x="1420" y="1295">traces, metrics, logs</text></g>
+    </g>
+  </g>
+
+  <!-- Primary vertical spine and context link -->
+  <g id="primary-architecture-flows">
+    <path class="lineAccent" d="M625 564 V584"/><text class="body" x="642" y="577">typed command</text>
+    <path class="lineAccent" d="M625 728 V860"/><text class="body" x="642" y="800">approved execution</text>
+    <path class="lineAccent" d="M625 964 V984"/><text class="body" x="642" y="977">candidate</text>
+    <path class="lineAccent" d="M625 1088 V1108"/><text class="body" x="642" y="1101">evidence</text>
+    <path class="lineDashed" d="M1540 794 C1650 794 1650 910 1500 910"/><text class="body" x="1532" y="780">labelled context only</text>
+    <path class="lineDashed" d="M1510 940 C1650 940 1650 1035 1500 1035"/><text class="body" x="1530" y="1020">tool receipts &amp; artifacts</text>
+    <path class="lineDashed" d="M1510 1188 C1660 1188 1660 1280 1500 1280"/><text class="body" x="1525" y="1265">outcomes &amp; audit</text>
+  </g>
+
+  <!-- Footer -->
+  <rect x="0" y="1390" width="1800" height="160" fill="#102a43"/>
+  <text class="eyebrow" x="90" y="1431">THE DESIGN PRINCIPLE</text>
+  <text x="90" y="1470" style="font:700 24px Arial,sans-serif;fill:#fff;">The agent can move quickly without making trust optional.</text>
+  <text x="90" y="1500" style="font:400 14px Arial,sans-serif;fill:#d8e6f3;">Control plane authority · independent evidence · reversible delivery · measurable outcomes</text>
+  <text x="1710" y="1500" text-anchor="end" style="font:400 12px Arial,sans-serif;fill:#8dd2ff;">UX edition · maintain source with the ADX specification</text>
+</svg>

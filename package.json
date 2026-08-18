@@ -1,0 +1,19 @@
+{
+  "name": "autodev-studio",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20.15.0 <21"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "verify:stage0": "node scripts/verify-stage0.mjs",
+    "verify:feature-import": "node scripts/verify-feature-import.mjs",
+    "typecheck:domain": "apps/health-authorization-demo/node_modules/.bin/tsc -p packages/domain/tsconfig.json",
+    "typecheck": "npm run verify:stage0 && npm run verify:feature-import && npm run typecheck:domain && npm --prefix apps/health-authorization-demo run typecheck",
+    "build": "npm run typecheck && npm --prefix apps/health-authorization-demo run build"
+  }
+}
