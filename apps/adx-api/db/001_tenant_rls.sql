@@ -36,3 +36,14 @@ CREATE TABLE IF NOT EXISTS adx_web_session (
   revoked_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS adx_workspace_membership (
+  organization_id uuid NOT NULL,
+  workspace_id uuid NOT NULL,
+  principal_id text NOT NULL,
+  roles text[] NOT NULL,
+  version integer NOT NULL DEFAULT 1,
+  expires_at timestamptz,
+  revoked_at timestamptz,
+  PRIMARY KEY (workspace_id, principal_id)
+);

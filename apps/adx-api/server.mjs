@@ -2,6 +2,8 @@ import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { authorize, createAuthorizationSnapshot, InMemorySessionStore, TenantResourceStore } from '../../packages/identity/src/index.mjs'
 import { createOidcVerifier } from './oidc.mjs'
+import { createPkceTransaction, exchangeGoogleCode, googleAuthorizationUrl } from './oauth.mjs'
+import { PostgresTenantRepository } from './postgres.mjs'
 
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
@@ -14,9 +16,11 @@ const resources = new TenantResourceStore([
 ])
 const auditEvents = []
 const verifyOidc = createOidcVerifier()
+const postgres = process.env.DATABASE_URL ? new PostgresTenantRepository(process.env.DATABASE_URL) : null
+const oauthTransactions = new Map()
 
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
-function bearer(request) { const value = request.headers.authorization; return value?.startsWith('Bearer ') ? value.slice(7) : null }
+function bearer(request) { const value = request.headers.authorization; if (value?.startsWith('Bearer ')) return value.slice(7); return request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null }
 async function sessionFor(request) {
   const token = bearer(request); const local = sessions.resolve(token)
   if (local || !verifyOidc || !token) return local
@@ -40,6 +44,24 @@ const server = createServer(async (request, response) => {
   const url = new URL(request.url, 'http://adx.local')
   if (url.pathname === '/healthz') return write(response, 200, { status: 'ok', service: 'adx-api' }, traceId)
   if (url.pathname === '/readyz') return write(response, 200, { status: 'ready', dependencies: ['postgres', 'object-store', 'identity-provider'] }, traceId)
+  if (request.method === 'GET' && url.pathname === '/auth/login') {
+    if (!process.env.ADX_OIDC_AUDIENCE || !process.env.ADX_OIDC_REDIRECT_URI) return write(response, 503, { code: 'OIDC_NOT_CONFIGURED' }, traceId)
+    const transaction = createPkceTransaction(); oauthTransactions.set(transaction.state, { ...transaction, expiresAt: Date.now() + 10 * 60_000 })
+    response.statusCode = 302; response.setHeader('location', googleAuthorizationUrl({ clientId: process.env.ADX_OIDC_AUDIENCE, redirectUri: process.env.ADX_OIDC_REDIRECT_URI, transaction })); return response.end()
+  }
+  if (request.method === 'GET' && url.pathname === '/auth/callback') {
+    const state = url.searchParams.get('state'); const code = url.searchParams.get('code'); const transaction = oauthTransactions.get(state)
+    oauthTransactions.delete(state)
+    if (!state || !code || !transaction || transaction.expiresAt < Date.now()) return write(response, 400, { code: 'OIDC_STATE_REJECTED' }, traceId)
+    try {
+      const tokens = await exchangeGoogleCode({ code, verifier: transaction.verifier, clientId: process.env.ADX_OIDC_AUDIENCE, clientSecret: process.env.ADX_OIDC_CLIENT_SECRET, redirectUri: process.env.ADX_OIDC_REDIRECT_URI })
+      const principal = verifyOidc ? await verifyOidc(tokens.id_token) : null
+      if (!principal) return write(response, 401, { code: 'OIDC_TOKEN_REJECTED' }, traceId)
+      const knownMemberships = principal.id === alice.id ? memberships.alice : principal.id === bob.id ? memberships.bob : []
+      const token = sessions.create(principal, knownMemberships); audit({ type: 'session.login', principalId: principal.id, provider: 'google' })
+      response.statusCode = 302; response.setHeader('set-cookie', `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`); response.setHeader('location', '/v1/me'); return response.end()
+    } catch { return write(response, 401, { code: 'OIDC_CALLBACK_REJECTED' }, traceId) }
+  }
   if (process.env.ADX_TEST_AUTH === '1' && url.pathname === '/__test/session') {
     const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'bob' ? bob : null
     if (!principal) return write(response, 400, { code: 'UNKNOWN_TEST_PRINCIPAL' }, traceId)
@@ -56,7 +78,8 @@ const server = createServer(async (request, response) => {
     if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
     const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action: 'workspace.read' })
     if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    return write(response, 200, { resources: resources.listScoped(membership).map(publicResource) }, traceId)
+    const scopedResources = postgres ? await postgres.listResources(membership) : resources.listScoped(membership).map(publicResource)
+    return write(response, 200, { resources: scopedResources }, traceId)
   }
   const resourceMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/resources\/([0-9a-f-]+)$/i)
   if (resourceMatch) {
