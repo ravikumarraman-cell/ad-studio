@@ -15,7 +15,9 @@ jobs:
       - run: npm run canary:smoke
       - run: npm run api:smoke
       - run: npm run verify:stage1
+      # The API's authorization gate is also a Playwright browser test. Install
+      # the lockfile-pinned Chromium before either workspace invokes it.
+      - run: npx playwright install --with-deps chromium
       - run: npm --workspace=@adx/api run test:browser
       - run: npm --workspace=adx-health-authorization-demo run build
-      - run: npx playwright install --with-deps chromium
       - run: npm --workspace=adx-health-authorization-demo run test:browser
