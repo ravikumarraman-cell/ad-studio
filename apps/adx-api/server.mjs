@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { authorize, createAuthorizationSnapshot, InMemorySessionStore, TenantResourceStore } from '../../packages/identity/src/index.mjs'
+import { createOidcVerifier } from './oidc.mjs'
 
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
@@ -12,10 +13,15 @@ const resources = new TenantResourceStore([
   { id: ids.resourceB, organizationId: ids.orgB, workspaceId: ids.workspaceB, type: 'demo-record', ownerId: bob.id, riskTier: 'R2', version: 1, label: 'Workspace B confidential record' },
 ])
 const auditEvents = []
+const verifyOidc = createOidcVerifier()
 
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
 function bearer(request) { const value = request.headers.authorization; return value?.startsWith('Bearer ') ? value.slice(7) : null }
-function sessionFor(request) { return sessions.resolve(bearer(request)) }
+async function sessionFor(request) {
+  const token = bearer(request); const local = sessions.resolve(token)
+  if (local || !verifyOidc || !token) return local
+  try { return { principal: await verifyOidc(token), memberships: [] } } catch { return null }
+}
 function audit(event) { auditEvents.push(Object.freeze({ id: randomUUID(), at: new Date().toISOString(), ...event })) }
 function workspaceResource(workspaceId, organizationId) { return { id: workspaceId, workspaceId, organizationId, type: 'workspace', version: 1, riskTier: 'R0' } }
 function publicResource(resource) { return { id: resource.id, workspaceId: resource.workspaceId, type: resource.type, riskTier: resource.riskTier, version: resource.version, label: resource.label } }
@@ -40,7 +46,7 @@ const server = createServer(async (request, response) => {
     const token = sessions.create(principal, memberships[actor]); audit({ type: 'session.login', principalId: principal.id, testOnly: true })
     return write(response, 201, { token, principal: { id: principal.id, type: principal.type } }, traceId)
   }
-  const session = sessionFor(request)
+  const session = await sessionFor(request)
   if (!session) return write(response, 401, { code: 'AUTHENTICATION_REQUIRED', message: 'A valid OIDC-backed session is required.' }, traceId)
   if (request.method === 'GET' && url.pathname === '/v1/me') return write(response, 200, { principal: session.principal, memberships: session.memberships.map(({ organizationId, workspaceId, roles }) => ({ organizationId, workspaceId, roles })) }, traceId)
 
