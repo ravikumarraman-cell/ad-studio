@@ -3,4 +3,7 @@ dist/
 *.tsbuildinfo
 .DS_Store
 .vite/
+.vinxi/
+.output/
+app.config.timestamp_*.js
 coverage/
