@@ -1,0 +1,14 @@
+import { readFile } from 'node:fs/promises'
+
+/** Loads an ignored local env file only for variables not already supplied by CI. */
+export async function loadLocalEnv(file = '.env.local') {
+  try {
+    const contents = await readFile(file, 'utf8')
+    for (const line of contents.split(/\r?\n/)) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/)
+      if (!match || process.env[match[1]] !== undefined) continue
+      const value = match[2].replace(/^(['"])(.*)\1$/, '$2')
+      process.env[match[1]] = value
+    }
+  } catch (error) { if (error?.code !== 'ENOENT') throw error }
+}

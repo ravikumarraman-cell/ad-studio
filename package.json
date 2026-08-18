@@ -33,6 +33,10 @@
   "scripts": {
     "verify:stage0": "node scripts/verify-stage0.mjs",
     "verify:stage1": "node scripts/verify-stage1.mjs",
+    "verify:stage2": "node scripts/verify-stage2.mjs",
+    "migrate:stage2": "node scripts/migrate-stage2.mjs",
+    "verify:stage2:postgres": "node scripts/verify-stage2-postgres.mjs",
+    "verify:stage2:api": "node scripts/verify-stage2-api.mjs",
     "verify:feature-import": "node scripts/verify-feature-import.mjs",
     "bootstrap:stage0": "bash scripts/bootstrap-stage0.sh",
     "api:dev": "npm --workspace=@adx/api run dev",

@@ -4,6 +4,7 @@ dist/
 .DS_Store
 .env.local
 **/.env.local
+*.pem
 .vite/
 .vinxi/
 .output/
