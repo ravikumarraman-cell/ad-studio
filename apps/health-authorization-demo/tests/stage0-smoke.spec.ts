@@ -4,6 +4,7 @@ test('a user can select a feature and take the first governed action', async ({ 
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: 'Choose a feature. ADX guides the rest.' })).toBeVisible()
+  await expect(page.locator('input[type="file"]')).toHaveAttribute('accept', '.csv,text/csv')
   await expect(page.getByRole('button', { name: 'Create Change Case' })).toBeVisible()
 
   await page.getByRole('button', { name: /HI-1002.*Evidence packet and human review/ }).click()

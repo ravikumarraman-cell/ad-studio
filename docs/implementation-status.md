@@ -2,14 +2,14 @@
 
 - **Last updated:** 2026-08-18
 - **Source of truth:** [ADX implementation specification](../ADX_TanStack_Implementation_Specification_10_10.md)
-- **Current delivery position:** Stage 0 is **complete**. The feature-delivery UI is a verified local vertical-slice demonstration; it is not evidence of a completed ADX control plane.
+- **Current delivery position:** Stages 0 and 1 are **complete**. The feature-delivery UI is a verified local vertical-slice demonstration; it is not evidence of a completed ADX control plane.
 
 ## Stage dashboard
 
 | Stage | Status | What is available | Exit condition still required |
 | --- | --- | --- | --- |
 | 0 — Architecture lock and harness | `COMPLETE` | Workspace structure, strict domain vocabulary, import contract, ADRs, Node 22.19/TanStack Start client–SSR–server runtime canary, health/readiness API, trace-correlation smoke, healthy PostgreSQL/MinIO emulators, passing Chromium user-path smoke, and a green hosted CI gate. | — |
-| 1 — Identity, tenancy, authorization | `IN_PROGRESS` | Google OIDC/JWKS + PKCE adapter, HttpOnly sessions, PostgreSQL membership/resource schema with RLS, deny-by-default RBAC+ABAC, tenant-scoped API boundary, cross-tenant attack suite, and unauthenticated-route browser test. | One successful real Google login/callback evidence and a green hosted CI run. |
+| 1 — Identity, tenancy, authorization | `COMPLETE` | Google OIDC/JWKS + PKCE adapter, HttpOnly sessions, PostgreSQL membership/resource schema with RLS, deny-by-default RBAC+ABAC, tenant-scoped API boundary, cross-tenant attack suite, unauthenticated-route browser test, green hosted CI, and a successful live Google callback. An unprovisioned identity receives no workspace memberships. | — |
 | 2 — Change Case and event ledger | `NOT_STARTED` | UI-only Change Case demonstration. | Durable Change Case service, event/outbox/inbox, replay and reconciliation proof. |
 | 3 — Intake, risk, and stories | `NOT_STARTED` | CSV feature-backlog demo and risk-tier fields. | Durable validated imports, source retention, classification and approval gates. |
 | 4 — Design and security gates | `NOT_STARTED` | — | Policy-backed design/security reviews. |
@@ -36,6 +36,8 @@ It deliberately does **not** claim to authorize an agent, make a health-insuranc
 ## UX acceptance bar
 
 “Best UX” must be demonstrated, not asserted. The UI will be accepted only when it satisfies all of these measures:
+
+The active interaction, accessibility, measurement, and staged-delivery standard is the [ADX UX operating model](adx-ux-operating-model.md). It is deliberately a delivery gate: a visually polished screen is not sufficient without task-completion, comprehension, accessibility, and trust-calibration evidence.
 
 | Measure | Target | Evidence |
 | --- | --- | --- |
