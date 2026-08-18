@@ -9,7 +9,7 @@
 | Stage | Status | What is available | Exit condition still required |
 | --- | --- | --- | --- |
 | 0 — Architecture lock and harness | `COMPLETE` | Workspace structure, strict domain vocabulary, import contract, ADRs, Node 22.19/TanStack Start client–SSR–server runtime canary, health/readiness API, trace-correlation smoke, healthy PostgreSQL/MinIO emulators, passing Chromium user-path smoke, and a green hosted CI gate. | — |
-| 1 — Identity, tenancy, authorization | `IN_PROGRESS` | Provider-neutral identity contract, deny-by-default RBAC+ABAC policy engine, tenant-scoped API reference boundary, authorization snapshots, and cross-tenant negative-path suite. | Full Stage 1 suite, unauthorized-route browser coverage, and hosted CI run. |
+| 1 — Identity, tenancy, authorization | `IN_PROGRESS` | Verified reference boundary: provider-neutral identity contract, deny-by-default RBAC+ABAC policy engine, tenant-scoped API isolation, authorization snapshots, cross-tenant negative-path suite, and unauthenticated-route browser test. | Real OIDC/JWKS validation, PostgreSQL tenant storage + RLS, durable audit/session records, permission-aware authenticated UI, and green hosted CI. |
 | 2 — Change Case and event ledger | `NOT_STARTED` | UI-only Change Case demonstration. | Durable Change Case service, event/outbox/inbox, replay and reconciliation proof. |
 | 3 — Intake, risk, and stories | `NOT_STARTED` | CSV feature-backlog demo and risk-tier fields. | Durable validated imports, source retention, classification and approval gates. |
 | 4 — Design and security gates | `NOT_STARTED` | — | Policy-backed design/security reviews. |
