@@ -19,11 +19,19 @@ assert.throws(() => mapVerifiedOidcClaims({ iss: 'wrong', aud: 'adx-api', sub: '
 const cache = new AuthorizationDecisionCache(); cache.set({ principal: alice, resource: resourceA, action: 'resource.read', membershipVersion: 1 }, { outcome: 'ALLOW' }); assert.ok(cache.get({ principal: alice, resource: resourceA, action: 'resource.read', membershipVersion: 1 })); cache.invalidateWorkspace(ids.workspaceA); assert.equal(cache.get({ principal: alice, resource: resourceA, action: 'resource.read', membershipVersion: 1 }), null)
 
 const port = 3103
-const api = spawn(process.execPath, [resolve('apps/adx-api/server.mjs')], { env: { ...process.env, PORT: String(port), ADX_TEST_AUTH: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
+// Stage 1 proves the authorization boundary using its deterministic in-memory
+// tenant fixture. CI also supplies DATABASE_URL for later Stage 2 ledger
+// checks, but Stage 1 runs before migrations and must not try to query an
+// uninitialized database.
+const stage1Env = { ...process.env, PORT: String(port), ADX_TEST_AUTH: '1' }
+delete stage1Env.DATABASE_URL
+const api = spawn(process.execPath, [resolve('apps/adx-api/server.mjs')], { env: stage1Env, stdio: ['ignore', 'pipe', 'pipe'] })
 let output = ''; api.stdout.on('data', (data) => { output += data }); api.stderr.on('data', (data) => { output += data })
 try {
   await Promise.race([once(api.stdout, 'data'), once(api, 'exit').then(([code]) => Promise.reject(new Error(`API exited early (${code}): ${output}`)))])
   const base = `http://127.0.0.1:${port}`
+  const health = await fetch(`${base}/healthz`)
+  assert.equal(health.status, 200, `API health check failed: ${await health.text()}`)
   const session = await (await fetch(`${base}/__test/session?as=alice`)).json()
   const headers = { authorization: `Bearer ${session.token}`, 'content-type': 'application/json' }
   const ownList = await fetch(`${base}/v1/workspaces/${ids.workspaceA}/resources`, { headers }); assert.equal(ownList.status, 200); assert.equal((await ownList.json()).resources[0].id, ids.resourceA)

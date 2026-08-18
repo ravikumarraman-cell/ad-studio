@@ -35,10 +35,10 @@ jobs:
       - run: npm run verify:stage2
       - run: npm run verify:stage2:postgres
       - run: npm run verify:stage2:api
-      - run: npm --workspace=@adx/api run test:browser:stage2
-      # The API's authorization gate is also a Playwright browser test. Install
-      # the lockfile-pinned Chromium before either workspace invokes it.
+      # The API's authorization and Stage 2 gates are Playwright browser tests.
+      # Install the lockfile-pinned Chromium before either one runs.
       - run: npx playwright install --with-deps chromium
+      - run: npm --workspace=@adx/api run test:browser:stage2
       - run: npm --workspace=@adx/api run test:browser
       - run: npm --workspace=adx-health-authorization-demo run build
       - run: npm --workspace=adx-health-authorization-demo run test:browser
