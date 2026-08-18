@@ -2,6 +2,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 .DS_Store
+.env.local
+**/.env.local
 .vite/
 .vinxi/
 .output/
