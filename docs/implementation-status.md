@@ -2,13 +2,13 @@
 
 - **Last updated:** 2026-08-18
 - **Source of truth:** [ADX implementation specification](../ADX_TanStack_Implementation_Specification_10_10.md)
-- **Current delivery position:** Stage 0 is **in progress**. The feature-delivery UI is a verified local vertical-slice demonstration; it is not evidence of a completed ADX control plane.
+- **Current delivery position:** Stage 0 is **complete**. The feature-delivery UI is a verified local vertical-slice demonstration; it is not evidence of a completed ADX control plane.
 
 ## Stage dashboard
 
 | Stage | Status | What is available | Exit condition still required |
 | --- | --- | --- | --- |
-| 0 — Architecture lock and harness | `IN_PROGRESS` | Workspace structure, strict domain vocabulary, import contract, ADRs, Node 22.19/TanStack Start client–SSR–server runtime canary, health/readiness API, trace-correlation smoke, healthy PostgreSQL/MinIO emulators, and passing Chromium user-path smoke. | A CI-hosted run. |
+| 0 — Architecture lock and harness | `COMPLETE` | Workspace structure, strict domain vocabulary, import contract, ADRs, Node 22.19/TanStack Start client–SSR–server runtime canary, health/readiness API, trace-correlation smoke, healthy PostgreSQL/MinIO emulators, passing Chromium user-path smoke, and a green hosted CI gate. | — |
 | 1 — Identity, tenancy, authorization | `NOT_STARTED` | — | Authenticated users, tenant isolation, RBAC/ABAC verification. |
 | 2 — Change Case and event ledger | `NOT_STARTED` | UI-only Change Case demonstration. | Durable Change Case service, event/outbox/inbox, replay and reconciliation proof. |
 | 3 — Intake, risk, and stories | `NOT_STARTED` | CSV feature-backlog demo and risk-tier fields. | Durable validated imports, source retention, classification and approval gates. |
