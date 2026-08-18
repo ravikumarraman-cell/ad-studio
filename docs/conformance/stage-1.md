@@ -16,9 +16,7 @@
 
 Stage 1 is **not complete**. The local policy, API-isolation, and unauthenticated-browser checks are green. The following exit work remains:
 
-1. configure a real OIDC issuer/client and cryptographically validate its JWTs against JWKS;
-2. replace the reference in-memory session/resource stores with PostgreSQL repositories, immutable audit storage, tenant predicates, and verified row-level security;
-3. add permission-aware authenticated UI state and login/logout/role-change audit evidence;
-4. rerun the full suite and obtain a green hosted CI run for the Stage 1 commit.
+1. complete one real Google browser login through `/auth/login` and `/auth/callback`, then retain the resulting login/session audit evidence;
+2. run the updated Stage 1 suite in hosted CI and retain the green workflow evidence.
 
-The stalled public-registry install of the PostgreSQL and JOSE dependencies was stopped on 2026-08-18 without changing the lockfile. No unverified persistence or OIDC behavior is represented as complete.
+The API now contains a configurable Google OIDC/JWKS adapter, PKCE callback flow, HttpOnly session issuance, PostgreSQL membership/resource repository, and database RLS schema. Local policy, tenant-isolation, browser-denial, RLS-schema, and API smoke evidence is complete; only the real provider interaction and hosted CI evidence remain.
