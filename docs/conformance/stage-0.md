@@ -12,7 +12,7 @@
 | STG0-001 | Workspace separates applications from reusable packages. | Root `package.json` workspace declaration; `npm run verify:stage0`. | Verified |
 | STG0-002 | Domain vocabulary is provider-neutral and strict. | `packages/domain/src/change-case.ts`; `npm run typecheck:domain`. | Verified |
 | STG0-003 | Commands are closed, typed, risk-classified, and idempotent. | `change-case.create.schema.json`; `npm run verify:stage0`. | Verified |
-| STG0-004 | Dependency retrieval uses the corporate registry with TLS validation. | `.npmrc`; `npm run verify:stage0`. | Verified |
+| STG0-004 | Dependency retrieval uses the public npm registry with TLS validation and lockfile integrity hashes. | `.npmrc`; `npm run verify:stage0`. | Verified |
 | STG0-005 | Framework choice is explicitly governed and the no-RSC framework canary builds client, SSR, and server routers. | [ADR-002](../adr/ADR-002-framework-adoption.md); `npm --workspace=@adx/tanstack-start-canary run build` and `npm run canary:smoke` with Node 22.19.0. | Verified |
 | STG0-006 | Event/reconciliation and execution-boundary decisions are documented before implementation. | [ADR-004](../adr/ADR-004-event-reconciliation.md), [ADR-006](../adr/ADR-006-execution-substrate.md). | Verified |
 | STG0-007 | CI-ready typecheck, build, and structural verification commands exist. | `npm run typecheck`, `npm run build`, `npm run verify:stage0`. | Verified |
