@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0 <23"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -11,6 +14,8 @@
   },
   "dependencies": {
     "@tanstack/react-query": "5.66.8",
+    "@tanstack/react-router": "1.120.0",
+    "@tanstack/react-start": "1.120.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },

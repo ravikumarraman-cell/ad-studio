@@ -11,6 +11,8 @@ const requiredFiles = [
   'docs/adr/ADR-002-framework-adoption.md',
   'docs/adr/ADR-004-event-reconciliation.md',
   'docs/adr/ADR-006-execution-substrate.md',
+  'apps/tanstack-start-canary/app.config.ts',
+  'apps/tanstack-start-canary/app/routes/index.tsx',
 ]
 
 for (const file of requiredFiles) {
@@ -21,7 +23,7 @@ const rootPackage = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8
 if (!Array.isArray(rootPackage.workspaces) || !rootPackage.workspaces.includes('apps/*') || !rootPackage.workspaces.includes('packages/*')) {
   throw new Error('STG0-WORKSPACE: root package must declare apps/* and packages/* workspaces')
 }
-if (rootPackage.engines?.node !== '>=20.15.0 <21') throw new Error('STG0-NODE: Node engine must be explicitly pinned')
+if (rootPackage.engines?.node !== '>=22.19.0 <23') throw new Error('STG0-NODE: Node engine must be explicitly pinned')
 
 const registry = readFileSync(resolve(root, '.npmrc'), 'utf8')
 if (!registry.includes('tenant-compass-npm-vir') || !registry.includes('strict-ssl=true')) {

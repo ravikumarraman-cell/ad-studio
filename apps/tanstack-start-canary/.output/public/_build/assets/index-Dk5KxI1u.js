@@ -1,0 +1,1 @@
+import{R as e,j as t}from"./client-CY6_K_mR.js";const r=function(){const a=e.useLoaderData();return t.jsxs("main",{children:[t.jsx("h1",{children:"ADX TanStack Start compatibility canary"}),t.jsx("p",{"data-testid":"readiness",children:a.readiness}),t.jsx("p",{"data-testid":"trace-id",children:a.traceId})]})};export{r as component};

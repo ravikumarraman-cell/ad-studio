@@ -3,15 +3,40 @@
   "private": true,
   "version": "0.1.0",
   "engines": {
-    "node": ">=20.15.0 <21"
+    "node": ">=22.19.0 <23"
   },
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "@tanstack/react-start-client": "1.120.0",
+    "@tanstack/react-start-config": "1.120.0",
+    "@tanstack/react-start-server": "1.120.0",
+    "@tanstack/start-api-routes": "1.119.0",
+    "@tanstack/react-start-router-manifest": "1.119.0",
+    "@tanstack/start-server-functions-client": "1.119.2",
+    "@tanstack/start-server-functions-server": "1.119.2",
+    "@tanstack/start-server-functions-ssr": "1.119.2",
+    "@tanstack/start-server-functions-handler": "1.119.0",
+    "@tanstack/react-router": "1.120.0",
+    "@tanstack/router-core": "1.119.0",
+    "@tanstack/history": "1.115.0",
+    "@tanstack/start-client-core": "1.119.0",
+    "@tanstack/start-server-core": "1.119.0",
+    "@tanstack/router-plugin": "1.120.0",
+    "@tanstack/router-generator": "1.120.0",
+    "@tanstack/react-start-plugin": "1.115.0",
+    "@tanstack/server-functions-plugin": "1.119.2",
+    "@tanstack/start-server-functions-fetcher": "1.119.0"
+  },
   "scripts": {
     "verify:stage0": "node scripts/verify-stage0.mjs",
     "verify:feature-import": "node scripts/verify-feature-import.mjs",
+    "bootstrap:stage0": "bash scripts/bootstrap-stage0.sh",
+    "api:dev": "npm --workspace=@adx/api run dev",
+    "api:smoke": "npm --workspace=@adx/api run smoke",
+    "canary:smoke": "node scripts/verify-canary-smoke.mjs",
     "typecheck:domain": "apps/health-authorization-demo/node_modules/.bin/tsc -p packages/domain/tsconfig.json",
     "typecheck": "npm run verify:stage0 && npm run verify:feature-import && npm run typecheck:domain && npm --prefix apps/health-authorization-demo run typecheck",
     "build": "npm run typecheck && npm --prefix apps/health-authorization-demo run build"
