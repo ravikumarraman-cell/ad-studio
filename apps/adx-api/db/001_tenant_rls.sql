@@ -27,3 +27,12 @@ CREATE TABLE IF NOT EXISTS adx_auth_audit_event (
   decision jsonb NOT NULL,
   occurred_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS adx_web_session (
+  id uuid PRIMARY KEY,
+  token_digest text NOT NULL UNIQUE,
+  principal_id text NOT NULL,
+  expires_at timestamptz NOT NULL,
+  revoked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
