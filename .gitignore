@@ -7,3 +7,5 @@ dist/
 .output/
 app.config.timestamp_*.js
 coverage/
+playwright-report/
+test-results/

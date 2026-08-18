@@ -15,3 +15,5 @@ jobs:
       - run: npm run canary:smoke
       - run: npm run api:smoke
       - run: npm --workspace=adx-health-authorization-demo run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm --workspace=adx-health-authorization-demo run test:browser

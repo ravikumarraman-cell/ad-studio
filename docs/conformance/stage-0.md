@@ -18,7 +18,7 @@
 | STG0-007 | CI-ready typecheck, build, and structural verification commands exist. | `npm run typecheck`, `npm run build`, `npm run verify:stage0`. | Verified |
 | STG0-008 | Backend health/readiness and request trace correlation are available. | Self-contained `npm run api:smoke` verifies `/healthz`, `/readyz`, and `x-trace-id` propagation. | Verified |
 | STG0-009 | Local PostgreSQL and object-store emulator definitions are reproducible. | `compose.yaml`; `docker compose up -d postgres minio`; both container health checks reported `healthy` on 2026-08-18. | Verified |
-| STG0-010 | CI executes the deterministic Stage 0 checks. | `.github/workflows/stage0.yml`. | Defined; remote run pending |
+| STG0-010 | CI executes the deterministic Stage 0 checks, including a Chromium-rendered user-path smoke. | `.github/workflows/stage0.yml`; local `npm --workspace=adx-health-authorization-demo run test:browser` passed on Chromium 139 / 2026-08-18. | Locally verified; remote run pending |
 
 ## Commands and evidence
 
@@ -34,4 +34,4 @@ Successful command output is the evidence artifact for STG0-001, STG0-002, STG0-
 
 ## Exit decision
 
-**Do not exit Stage 0 yet.** The framework canary and backend health/trace smoke are verified. Browser smoke coverage, emulator runtime health evidence, and a CI-hosted run are still required. This record will be updated only when each missing proof exists and is reproducible from a clean checkout.
+**Do not exit Stage 0 yet.** The framework canary, backend health/trace smoke, emulator runtime health, and local Chromium browser smoke are verified. The CI workflow needs its first hosted run. This record will be updated only when each missing proof exists and is reproducible from a clean checkout.

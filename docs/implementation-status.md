@@ -8,7 +8,7 @@
 
 | Stage | Status | What is available | Exit condition still required |
 | --- | --- | --- | --- |
-| 0 — Architecture lock and harness | `IN_PROGRESS` | Workspace structure, strict domain vocabulary, import contract, ADRs, Node 22.19/TanStack Start client–SSR–server runtime canary, health/readiness API, trace-correlation smoke, and healthy PostgreSQL/MinIO emulators. | Browser smoke suite and a CI-hosted run. |
+| 0 — Architecture lock and harness | `IN_PROGRESS` | Workspace structure, strict domain vocabulary, import contract, ADRs, Node 22.19/TanStack Start client–SSR–server runtime canary, health/readiness API, trace-correlation smoke, healthy PostgreSQL/MinIO emulators, and passing Chromium user-path smoke. | A CI-hosted run. |
 | 1 — Identity, tenancy, authorization | `NOT_STARTED` | — | Authenticated users, tenant isolation, RBAC/ABAC verification. |
 | 2 — Change Case and event ledger | `NOT_STARTED` | UI-only Change Case demonstration. | Durable Change Case service, event/outbox/inbox, replay and reconciliation proof. |
 | 3 — Intake, risk, and stories | `NOT_STARTED` | CSV feature-backlog demo and risk-tier fields. | Durable validated imports, source retention, classification and approval gates. |
