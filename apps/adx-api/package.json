@@ -1,1 +1,1 @@
-{"name":"@adx/api","private":true,"type":"module","scripts":{"dev":"node server.mjs","smoke":"node ../../scripts/verify-api-smoke.mjs"}}
+{"name":"@adx/api","private":true,"type":"module","scripts":{"dev":"node server.mjs","smoke":"node ../../scripts/verify-api-smoke.mjs","test:browser":"playwright test -c playwright.config.mjs"}}

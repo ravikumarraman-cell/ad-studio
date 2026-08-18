@@ -14,6 +14,8 @@ jobs:
       - run: npm --workspace=@adx/tanstack-start-canary run build
       - run: npm run canary:smoke
       - run: npm run api:smoke
+      - run: npm run verify:stage1
+      - run: npm --workspace=@adx/api run test:browser
       - run: npm --workspace=adx-health-authorization-demo run build
       - run: npx playwright install --with-deps chromium
       - run: npm --workspace=adx-health-authorization-demo run test:browser

@@ -1,10 +1,74 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
-const server = createServer((request, response) => {
+import { authorize, createAuthorizationSnapshot, InMemorySessionStore, TenantResourceStore } from '../../packages/identity/src/index.mjs'
+
+const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
+const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
+const bob = Object.freeze({ id: 'oidc:https://issuer.example:bob', type: 'human', issuer: 'https://issuer.example' })
+const memberships = Object.freeze({ alice: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], bob: [{ organizationId: ids.orgB, workspaceId: ids.workspaceB, roles: ['contributor'], version: 1 }] })
+const sessions = new InMemorySessionStore()
+const resources = new TenantResourceStore([
+  { id: ids.resourceA, organizationId: ids.orgA, workspaceId: ids.workspaceA, type: 'demo-record', ownerId: alice.id, riskTier: 'R2', version: 1, label: 'Workspace A confidential record' },
+  { id: ids.resourceB, organizationId: ids.orgB, workspaceId: ids.workspaceB, type: 'demo-record', ownerId: bob.id, riskTier: 'R2', version: 1, label: 'Workspace B confidential record' },
+])
+const auditEvents = []
+
+function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
+function bearer(request) { const value = request.headers.authorization; return value?.startsWith('Bearer ') ? value.slice(7) : null }
+function sessionFor(request) { return sessions.resolve(bearer(request)) }
+function audit(event) { auditEvents.push(Object.freeze({ id: randomUUID(), at: new Date().toISOString(), ...event })) }
+function workspaceResource(workspaceId, organizationId) { return { id: workspaceId, workspaceId, organizationId, type: 'workspace', version: 1, riskTier: 'R0' } }
+function publicResource(resource) { return { id: resource.id, workspaceId: resource.workspaceId, type: resource.type, riskTier: resource.riskTier, version: resource.version, label: resource.label } }
+function readJson(request) { return new Promise((resolve) => { let data = ''; request.on('data', (chunk) => { data += chunk }); request.on('end', () => { try { resolve(data ? JSON.parse(data) : {}) } catch { resolve(null) } }) }) }
+
+function decisionFor({ session, resource, action }) {
+  const decision = authorize({ principal: session.principal, memberships: session.memberships, resource, action })
+  const membership = decision.membership ?? session.memberships.find((item) => item.workspaceId === resource.workspaceId && item.organizationId === resource.organizationId)
+  const snapshot = createAuthorizationSnapshot({ principal: session.principal, membership, resource, action, decision })
+  audit({ type: 'authorization.decision', snapshot })
+  return decision
+}
+
+const server = createServer(async (request, response) => {
   const traceId = request.headers['x-trace-id'] || randomUUID()
-  response.setHeader('content-type', 'application/json'); response.setHeader('x-trace-id', traceId)
-  if (request.url === '/healthz') { response.end(JSON.stringify({ status: 'ok', service: 'adx-api', traceId })); return }
-  if (request.url === '/readyz') { response.end(JSON.stringify({ status: 'ready', dependencies: ['postgres', 'object-store'], traceId })); return }
-  response.statusCode = 404; response.end(JSON.stringify({ code: 'NOT_FOUND', traceId }))
+  const url = new URL(request.url, 'http://adx.local')
+  if (url.pathname === '/healthz') return write(response, 200, { status: 'ok', service: 'adx-api' }, traceId)
+  if (url.pathname === '/readyz') return write(response, 200, { status: 'ready', dependencies: ['postgres', 'object-store', 'identity-provider'] }, traceId)
+  if (process.env.ADX_TEST_AUTH === '1' && url.pathname === '/__test/session') {
+    const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'bob' ? bob : null
+    if (!principal) return write(response, 400, { code: 'UNKNOWN_TEST_PRINCIPAL' }, traceId)
+    const token = sessions.create(principal, memberships[actor]); audit({ type: 'session.login', principalId: principal.id, testOnly: true })
+    return write(response, 201, { token, principal: { id: principal.id, type: principal.type } }, traceId)
+  }
+  const session = sessionFor(request)
+  if (!session) return write(response, 401, { code: 'AUTHENTICATION_REQUIRED', message: 'A valid OIDC-backed session is required.' }, traceId)
+  if (request.method === 'GET' && url.pathname === '/v1/me') return write(response, 200, { principal: session.principal, memberships: session.memberships.map(({ organizationId, workspaceId, roles }) => ({ organizationId, workspaceId, roles })) }, traceId)
+
+  const listMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/resources$/i)
+  if (request.method === 'GET' && listMatch) {
+    const workspaceId = listMatch[1]; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
+    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action: 'workspace.read' })
+    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    return write(response, 200, { resources: resources.listScoped(membership).map(publicResource) }, traceId)
+  }
+  const resourceMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/resources\/([0-9a-f-]+)$/i)
+  if (resourceMatch) {
+    const [, workspaceId, resourceId] = resourceMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
+    const resource = resources.getScoped(resourceId, membership)
+    if (!resource) return write(response, 404, { code: 'RESOURCE_NOT_FOUND' }, traceId)
+    const action = request.method === 'GET' ? 'resource.read' : request.method === 'PATCH' ? 'resource.write' : null
+    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
+    const decision = decisionFor({ session, resource, action })
+    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    if (action === 'resource.read') return write(response, 200, { resource: publicResource(resource) }, traceId)
+    const body = await readJson(request); if (typeof body?.label !== 'string' || !body.label.trim()) return write(response, 400, { code: 'LABEL_REQUIRED' }, traceId)
+    const updated = { ...resource, label: body.label.trim(), version: resource.version + 1 }; resources.put(updated)
+    audit({ type: 'resource.updated', resourceId: resource.id, authorization: createAuthorizationSnapshot({ principal: session.principal, membership: decision.membership, resource: updated, action, decision }) })
+    return write(response, 200, { resource: publicResource(updated) }, traceId)
+  }
+  return write(response, 404, { code: 'NOT_FOUND' }, traceId)
 })
+
 server.listen(process.env.PORT || 3100, '127.0.0.1', () => console.log(JSON.stringify({ service: 'adx-api', event: 'listening', traceId: randomUUID() })))
