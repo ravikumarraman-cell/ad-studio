@@ -7,7 +7,45 @@ import { PostgresPreviewCiRepository } from '../apps/adx-api/ci-review-repositor
 import { PostgresPreviewDeliveryRepository } from '../apps/adx-api/git-delivery-repository.mjs'
 import { createPreviewDeliveryPlan, createPreviewGitProvider } from '../apps/adx-api/git-delivery-preview.mjs'
 
-await loadLocalEnv(); if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL_REQUIRED_FOR_STAGE7_PROVIDER_VERIFICATION')
-const organization = '11111111-1111-4111-8111-111111111111'; const workspace = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; const scope = { organizationId: organization, workspaceId: workspace }; const caseId = randomUUID(); const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 }); await pool.query('INSERT INTO adx_change_case (id,organization_id,workspace_id,title,state,risk_tier,projection_version,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [caseId, organization, workspace, 'CI provider ingestion proof', 'READY_FOR_DELIVERY', 'R2', 1, 'fixture:stage7'])
-const deliveryRepository = new PostgresPreviewDeliveryRepository({ connectionString: process.env.DATABASE_URL }); const ciRepository = new PostgresPreviewCiRepository({ connectionString: process.env.DATABASE_URL })
-try { const provider = createPreviewGitProvider({ providerId: 'github-preview', repositories: [{ repositoryId: 'adx-studio', canonicalRemote: 'https://github.com/ravikumarraman-cell/ad-studio.git', defaultBaseRef: 'refs/heads/main' }] }); const plan = createPreviewDeliveryPlan({ provider, changeCaseId: caseId, repositoryId: 'adx-studio', candidateDigest: 'sha256:candidate', evidenceDigest: 'sha256:evidence', changes: [{ path: 'src/safe.mjs', digest: 'sha256:content' }], title: 'CI preview' }); const stored = await deliveryRepository.retain({ scope, principal: { id: 'service:delivery-preview', type: 'service' }, plan }); const ciAdapter = createPreviewCiAdapter({ providerId: 'github-actions-preview', version: '1' }); const trigger = createCiTriggerPreview({ adapter: ciAdapter, previewPlan: plan, checks: ['unit', 'security'] }); assert.equal(trigger.commitDigest, plan.commitDigest); assert.equal(ciAdapter.capabilities.merge, false); const queued = { commitDigest: plan.commitDigest, status: 'QUEUED', externalRunId: 'run-1', deliveryId: 'delivery-queued' }; assert.equal((await ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: queued })).deduplicated, false); assert.equal((await ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: queued })).deduplicated, true); await ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: { ...queued, status: 'PASSED', deliveryId: 'delivery-passed' } }); const finding = { ruleId: 'CODEQL-1', severity: 'WARNING', message: 'Preview finding' }; assert.equal((await ciRepository.receiveFinding({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, deliveryId: 'finding-1', commitDigest: plan.commitDigest, finding })).deduplicated, false); assert.equal((await ciRepository.receiveFinding({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, deliveryId: 'finding-1', commitDigest: plan.commitDigest, finding })).deduplicated, true); await assert.rejects(() => ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: { ...queued, deliveryId: 'stale', commitDigest: 'sha256:stale' } })); const view = await ciRepository.view(scope, stored.previewPlanId); assert.equal(view.ciRuns[0].status, 'PASSED'); assert.equal(view.findings[0].finding.ruleId, 'CODEQL-1'); assert.equal((await ciRepository.reconcile(scope, stored.previewPlanId, ciAdapter.providerId, 'run-1')).status, 'PASSED'); assert.equal((await deliveryRepository.decide({ scope, principal: { id: 'human:reviewer', type: 'human' }, previewPlanId: stored.previewPlanId, commitDigest: plan.commitDigest, decision: 'APPROVED', rationale: 'CI and findings reviewed.' })).decision, 'APPROVED'); const revised = createPreviewDeliveryPlan({ provider, changeCaseId: caseId, repositoryId: 'adx-studio', candidateDigest: 'sha256:candidate-v2', evidenceDigest: 'sha256:evidence-v2', changes: [{ path: 'src/safe.mjs', digest: 'sha256:content-v2' }], title: 'CI preview revised' }); await deliveryRepository.retain({ scope, principal: { id: 'service:delivery-preview', type: 'service' }, plan: revised }); assert.equal((await deliveryRepository.approvals(scope, stored.previewPlanId))[0].status, 'INVALIDATED'); console.log('Stage 7 CI preview trigger, exact-commit status/finding ingestion, reconciliation, commit-bound approval invalidation, and stale-commit denial verification passed.') } finally { await deliveryRepository.close(); await ciRepository.close(); await pool.end() }
+await loadLocalEnv()
+if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL_REQUIRED_FOR_STAGE7_PROVIDER_VERIFICATION')
+
+const organization = '11111111-1111-4111-8111-111111111111'
+const workspace = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const scope = { organizationId: organization, workspaceId: workspace }
+const caseId = randomUUID()
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 })
+await pool.query('INSERT INTO adx_change_case (id,organization_id,workspace_id,title,state,risk_tier,projection_version,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [caseId, organization, workspace, 'CI provider ingestion proof', 'READY_FOR_DELIVERY', 'R2', 1, 'fixture:stage7'])
+
+const deliveryRepository = new PostgresPreviewDeliveryRepository({ connectionString: process.env.DATABASE_URL })
+const ciRepository = new PostgresPreviewCiRepository({ connectionString: process.env.DATABASE_URL })
+try {
+  const provider = createPreviewGitProvider({ providerId: 'github-preview', repositories: [{ repositoryId: 'adx-studio', canonicalRemote: 'https://github.com/ravikumarraman-cell/ad-studio.git', defaultBaseRef: 'refs/heads/main' }] })
+  const plan = createPreviewDeliveryPlan({ provider, changeCaseId: caseId, repositoryId: 'adx-studio', candidateDigest: 'sha256:candidate', evidenceDigest: 'sha256:evidence', changes: [{ path: 'src/safe.mjs', digest: 'sha256:content' }], title: 'CI preview' })
+  const stored = await deliveryRepository.retain({ scope, principal: { id: 'service:delivery-preview', type: 'service' }, plan })
+  const ciAdapter = createPreviewCiAdapter({ providerId: `github-actions-preview-${caseId}`, version: '1' })
+  const trigger = createCiTriggerPreview({ adapter: ciAdapter, previewPlan: plan, checks: ['unit', 'security'] })
+  assert.equal(trigger.commitDigest, plan.commitDigest)
+  assert.equal(ciAdapter.capabilities.merge, false)
+  const queued = { commitDigest: plan.commitDigest, status: 'QUEUED', externalRunId: 'run-1', deliveryId: 'delivery-queued' }
+  assert.equal((await ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: queued })).deduplicated, false)
+  assert.equal((await ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: queued })).deduplicated, true)
+  await ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: { ...queued, status: 'PASSED', deliveryId: 'delivery-passed' } })
+  const finding = { ruleId: 'CODEQL-1', severity: 'WARNING', message: 'Preview finding' }
+  assert.equal((await ciRepository.receiveFinding({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, deliveryId: 'finding-1', commitDigest: plan.commitDigest, finding })).deduplicated, false)
+  assert.equal((await ciRepository.receiveFinding({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, deliveryId: 'finding-1', commitDigest: plan.commitDigest, finding })).deduplicated, true)
+  await assert.rejects(() => ciRepository.receiveCiStatus({ scope, providerId: ciAdapter.providerId, previewPlanId: stored.previewPlanId, observation: { ...queued, deliveryId: 'stale', commitDigest: 'sha256:stale' } }))
+  const view = await ciRepository.view(scope, stored.previewPlanId)
+  assert.equal(view.ciRuns[0].status, 'PASSED')
+  assert.equal(view.findings[0].finding.ruleId, 'CODEQL-1')
+  assert.equal((await ciRepository.reconcile(scope, stored.previewPlanId, ciAdapter.providerId, 'run-1')).status, 'PASSED')
+  assert.equal((await deliveryRepository.decide({ scope, principal: { id: 'human:reviewer', type: 'human' }, previewPlanId: stored.previewPlanId, commitDigest: plan.commitDigest, decision: 'APPROVED', rationale: 'CI and findings reviewed.' })).decision, 'APPROVED')
+  const revised = createPreviewDeliveryPlan({ provider, changeCaseId: caseId, repositoryId: 'adx-studio', candidateDigest: 'sha256:candidate-v2', evidenceDigest: 'sha256:evidence-v2', changes: [{ path: 'src/safe.mjs', digest: 'sha256:content-v2' }], title: 'CI preview revised' })
+  await deliveryRepository.retain({ scope, principal: { id: 'service:delivery-preview', type: 'service' }, plan: revised })
+  assert.equal((await deliveryRepository.approvals(scope, stored.previewPlanId))[0].status, 'INVALIDATED')
+  console.log('Stage 7 CI preview trigger, exact-commit status/finding ingestion, reconciliation, commit-bound approval invalidation, and stale-commit denial verification passed.')
+} finally {
+  await deliveryRepository.close()
+  await ciRepository.close()
+  await pool.end()
+}
