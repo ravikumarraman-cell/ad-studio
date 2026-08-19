@@ -43,7 +43,12 @@ export async function provisionDockerSandbox({ lease, resolvePublicKey, worktree
   const sourceMounts = await canonicalMounts(lease.repositories, worktrees)
   const mountInputDigest = sha256({ repositories: sourceMounts.map(({ repositoryId, root, writeRoots }) => ({ repositoryId, root, writeRoots })) })
   const mounts = await materializeCopyOnWriteMounts(sourceMounts)
-  return Object.freeze({ enforcement: 'DOCKER_HARDENED_CONTAINER', leaseId: lease.leaseId, runtimeImageDigest, mountInputDigest, mounts, image, command: [...command], maxOutputBytes: lease.limits.maxOutputBytes, timeoutMs: executionTimeoutMs(lease, now), scratchRoot: mounts[0]?.scratchRoot, dockerArgs: buildDockerArgs({ mounts, limits: lease.limits, image, command }) })
+  // The input checkout is not charged to the lease: the quota covers bytes
+  // introduced into its writable scope by this execution.  This lets a small
+  // bounded change run against an existing repository without treating the
+  // repository itself as agent-produced output.
+  const workspaceBaseline = await snapshotWritableBytes(mounts)
+  return Object.freeze({ enforcement: 'DOCKER_HARDENED_CONTAINER', leaseId: lease.leaseId, runtimeImageDigest, mountInputDigest, mounts, image, command: [...command], maxOutputBytes: lease.limits.maxOutputBytes, maxWorkspaceBytes: lease.limits.maxWorkspaceBytes, workspaceBaseline, timeoutMs: executionTimeoutMs(lease, now), scratchRoot: mounts[0]?.scratchRoot, dockerArgs: buildDockerArgs({ mounts, limits: lease.limits, image, command }) })
 }
 
 export function buildDockerArgs({ mounts, limits, image, command }) {
@@ -63,10 +68,21 @@ export async function executeDockerSandbox(plan, { onOutput, signal } = {}) {
   if (plan?.enforcement !== 'DOCKER_HARDENED_CONTAINER') throw new ChangeCaseError('SANDBOX_SUBSTRATE_UNAVAILABLE', 'A hardened Docker sandbox plan is required.', { severity: 'error' })
   return new Promise((resolvePromise, reject) => {
     const child = spawn('docker', plan.dockerArgs, { env: { PATH: process.env.PATH }, stdio: ['ignore', 'pipe', 'pipe'], shell: false })
-    let outputBytes = 0; let quotaExceeded = false; let timedOut = false; let cancelled = false; const stop = () => child.kill('SIGTERM'); const timeout = setTimeout(() => { timedOut = true; stop() }, plan.timeoutMs); const abort = () => { cancelled = true; stop() }; signal?.addEventListener('abort', abort, { once: true }); const output = (chunk) => { const remaining = Math.max(0, plan.maxOutputBytes - outputBytes); outputBytes += chunk.length; if (remaining > 0) onOutput?.(chunk.subarray(0, remaining)); if (outputBytes > plan.maxOutputBytes && !quotaExceeded) { quotaExceeded = true; stop() } }
+    let outputBytes = 0; let quotaExceeded = false; let workspaceQuotaExceeded = false; let workspaceBytes = 0; let timedOut = false; let cancelled = false; let checkingWorkspace = false; const stop = () => child.kill('SIGTERM'); const timeout = setTimeout(() => { timedOut = true; stop() }, plan.timeoutMs); const abort = () => { cancelled = true; stop() }; signal?.addEventListener('abort', abort, { once: true }); const output = (chunk) => { const remaining = Math.max(0, plan.maxOutputBytes - outputBytes); outputBytes += chunk.length; if (remaining > 0) onOutput?.(chunk.subarray(0, remaining)); if (outputBytes > plan.maxOutputBytes && !quotaExceeded) { quotaExceeded = true; stop() } }
+    // Docker bind mounts cannot carry a portable project quota.  The trusted
+    // substrate watches only the disposable COW mount and kills the container
+    // as soon as aggregate new/expanded writable bytes exceed the signed cap.
+    const workspaceMonitor = setInterval(async () => {
+      if (checkingWorkspace || workspaceQuotaExceeded) return
+      checkingWorkspace = true
+      try {
+        workspaceBytes = await workspaceDeltaBytes(plan.mounts, plan.workspaceBaseline)
+        if (workspaceBytes > plan.maxWorkspaceBytes) { workspaceQuotaExceeded = true; quotaExceeded = true; stop() }
+      } finally { checkingWorkspace = false }
+    }, 10)
     child.stdout.on('data', output); child.stderr.on('data', output)
-    child.once('error', async (error) => { clearTimeout(timeout); signal?.removeEventListener('abort', abort); await cleanupSandbox(plan); reject(new ChangeCaseError('SANDBOX_EXECUTION_FAILED', 'Hardened Docker sandbox process could not start.', { severity: 'error', details: { cause: error.message } })) })
-    child.once('close', async (code, closeSignal) => { clearTimeout(timeout); signal?.removeEventListener('abort', abort); const artifacts = await collectArtifacts(plan.mounts); await cleanupSandbox(plan); resolvePromise(Object.freeze({ code, signal: closeSignal, outputBytes: Math.min(outputBytes, plan.maxOutputBytes), quotaExceeded, timedOut, cancelled, artifacts })) })
+    child.once('error', async (error) => { clearTimeout(timeout); clearInterval(workspaceMonitor); signal?.removeEventListener('abort', abort); await cleanupSandbox(plan); reject(new ChangeCaseError('SANDBOX_EXECUTION_FAILED', 'Hardened Docker sandbox process could not start.', { severity: 'error', details: { cause: error.message } })) })
+    child.once('close', async (code, closeSignal) => { clearTimeout(timeout); clearInterval(workspaceMonitor); signal?.removeEventListener('abort', abort); workspaceBytes = await workspaceDeltaBytes(plan.mounts, plan.workspaceBaseline); if (workspaceBytes > plan.maxWorkspaceBytes) { workspaceQuotaExceeded = true; quotaExceeded = true } const artifacts = await collectArtifacts(plan.mounts); await cleanupSandbox(plan); resolvePromise(Object.freeze({ code, signal: closeSignal, outputBytes: Math.min(outputBytes, plan.maxOutputBytes), quotaExceeded, workspaceQuotaExceeded, workspaceBytes, timedOut, cancelled, artifacts })) })
   })
 }
 
@@ -114,6 +130,20 @@ async function collectArtifacts(mounts) {
   const artifacts = []
   for (const mount of mounts) for (const writeRoot of mount.writeRoots) await collectFiles(writeRoot, writeRoot, artifacts)
   return Object.freeze(artifacts.sort((left, right) => left.path.localeCompare(right.path)))
+}
+async function snapshotWritableBytes(mounts) {
+  const snapshot = new Map()
+  for (const mount of mounts) for (const writeRoot of mount.writeRoots) await recordFileBytes(writeRoot, writeRoot, snapshot)
+  return snapshot
+}
+async function workspaceDeltaBytes(mounts, baseline = new Map()) {
+  const current = new Map(); for (const mount of mounts) for (const writeRoot of mount.writeRoots) await recordFileBytes(writeRoot, writeRoot, current)
+  let bytes = 0; for (const [path, size] of current) bytes += Math.max(0, size - (baseline.get(path) ?? 0))
+  return bytes
+}
+async function recordFileBytes(root, current, files) {
+  const entries = await readdir(current, { withFileTypes: true }).catch(() => [])
+  for (const entry of entries) { const fullPath = join(current, entry.name); if (entry.isDirectory()) await recordFileBytes(root, fullPath, files); else if (entry.isFile()) files.set(fullPath, (await lstat(fullPath)).size) }
 }
 async function collectFiles(root, current, artifacts) {
   const entries = await readdir(current, { withFileTypes: true }).catch(() => [])

@@ -1,7 +1,7 @@
 # Stage 5 conformance record — Execution lease and sandbox
 
-- **Status:** `IN_PROGRESS`
-- **Last updated:** 2026-08-19
+- **Status:** `COMPLETE`
+- **Last updated:** 2026-08-20
 - **Requirements in scope:** `STG-006`, `SEC-002`
 
 ## Delivery order
@@ -18,5 +18,5 @@
 | --- | --- | --- | --- |
 | STG5-001 | Adapter capabilities are explicit and unsupported capabilities are not simulated. | Adapter contract test. | Verified locally |
 | STG5-002 | Execution authority is signed, scope-bound, capability-intersected, and expiring. | Signed lease contract test. | Verified locally |
-| STG5-003 | Runtime, gateway, secret, egress, quota, and revocation controls are substrate-enforced. | Adversarial sandbox and gateway suite. | Verified locally: lease-aware gateway quotas/revocation; exact egress allowlists with DNS-rebinding and private IPv6 denial; gateway-only secret grants; active lease revocation that stops a running Docker dispatch; signed output-byte limits; and Docker file-descriptor/PID/memory/CPU limits. Docker dispatch now uses a disposable copy-on-write worktree: only manifest-digested artifacts are retained and the source worktree stays unchanged. The adversarial suite permits only scoped writes and rejects policy writes, symlink/hard-link/mount/archive traversal, metadata/proxy/socket egress, Git and lifecycle hooks, host-secret access, output flooding, PID burst, and wall-clock overrun. Runtime disk-quota enforcement for the disposable worktree and hosted-CI evidence remain pending. |
+| STG5-003 | Runtime, gateway, secret, egress, quota, and revocation controls are substrate-enforced. | Adversarial sandbox and gateway suite. | Verified locally: lease-aware gateway quotas/revocation; exact egress allowlists with DNS-rebinding and private IPv6 denial; gateway-only secret grants; active lease revocation that stops a running Docker dispatch; signed output-byte limits; and Docker file-descriptor/PID/memory/CPU limits. Docker dispatch uses a disposable copy-on-write worktree: only manifest-digested artifacts are retained and the source worktree stays unchanged. The trusted runtime monitors aggregate new or expanded bytes in writable scope and terminates a container once its signed workspace cap is exceeded. The adversarial suite permits only scoped writes and rejects policy writes, symlink/hard-link/mount/archive traversal, metadata/proxy/socket egress, Git and lifecycle hooks, host-secret access, aggregate workspace-disk growth, output flooding, PID burst, and wall-clock overrun. Hosted CI passed in [GitHub Actions job 95934288996](https://github.com/ravikumarraman-cell/ad-studio/actions/runs/32207797649/job/95934288996). |
 | STG5-004 | Each capability-bearing action has a receipt and retained run evidence. | PostgreSQL/API test for lease, run, append-only events, gateway decisions, revocation, immutable receipt storage, and gateway-to-runtime dispatch. | Verified locally, including actual hardened-Docker dispatch receipt. |
