@@ -9,6 +9,7 @@ import { createPkceTransaction, exchangeGoogleCode, googleAuthorizationUrl } fro
 import { PostgresTenantRepository } from './postgres.mjs'
 import { ChangeCaseError } from './change-case-ledger.mjs'
 import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
+import { PostgresExecutionRepository } from './execution-repository.mjs'
 
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
@@ -28,6 +29,7 @@ const verifyOidc = createOidcVerifier()
 const postgres = process.env.DATABASE_URL ? new PostgresTenantRepository(process.env.DATABASE_URL) : null
 const ledgerSigner = createLedgerSigner(process.env)
 const changeCases = process.env.DATABASE_URL && ledgerSigner ? new PostgresChangeCaseRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
+const executions = process.env.DATABASE_URL && ledgerSigner ? new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
 const oauthTransactions = new Map()
 
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
@@ -127,6 +129,24 @@ const server = createServer(async (request, response) => {
     const body = await readJson(request); const idempotencyKey = request.headers['idempotency-key']
     if (typeof body?.title !== 'string' || !body.title.trim() || !['R0','R1','R2','R3','R4'].includes(body.riskTier)) return write(response, 400, { error: { code: 'CHANGE_CASE_CREATE_INVALID', message: 'title and riskTier are required.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
     try { const result = await changeCases.create({ scope, principal: session.principal, title: body.title.trim(), riskTier: body.riskTier, idempotencyKey, correlationId: traceId }); return write(response, result.deduplicated ? 200 : 201, result, traceId) } catch (error) { return commandError(response, error, traceId) }
+  }
+
+  const executionMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?)?$/i)
+  if (executionMatch) {
+    const [, workspaceId, changeCaseId, collection, leaseId, command] = executionMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
+    if (!changeCases || !executions) return write(response, 503, { code: 'EXECUTION_GOVERNANCE_NOT_CONFIGURED' }, traceId)
+    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }; const current = await changeCases.get(scope, changeCaseId)
+    if (!current) return write(response, 404, { code: 'CHANGE_CASE_NOT_FOUND' }, traceId)
+    const action = request.method === 'GET' ? 'resource.read' : 'resource.write'; const decision = decisionFor({ session, resource: changeCaseResource(current, scope), action })
+    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    if (request.method === 'GET' && !collection) return write(response, 200, await executions.view(scope, changeCaseId), traceId)
+    const body = await readJson(request)
+    try {
+      if (request.method === 'POST' && collection === 'leases' && !leaseId) return write(response, 201, await executions.issueLease({ scope, principal: session.principal, changeCaseId, request: body }), traceId)
+      if (request.method === 'POST' && collection === 'leases' && leaseId && command === 'revoke') return write(response, 200, await executions.revokeLease({ scope, principal: session.principal, leaseId, reason: body?.reason }), traceId)
+      return write(response, 400, { error: { code: 'EXECUTION_COMMAND_INVALID', message: 'The execution governance command is invalid.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
+    } catch (error) { return commandError(response, error, traceId) }
   }
 
   const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-decision|governance|story-review|design|design-review|design-exception|design-decision))?$/i)
