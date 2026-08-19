@@ -1,6 +1,7 @@
 import { createHash, randomUUID, sign, verify } from 'node:crypto'
+import workflowContract from '../../packages/domain/src/change-case-workflow.json' with { type: 'json' }
 
-export const changeCaseStates = Object.freeze(['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW', 'READY_FOR_EXECUTION', 'AWAITING_VERIFICATION', 'READY_FOR_DELIVERY', 'OUTCOME_RECORDED', 'PAUSED', 'CANCELLED'])
+export const changeCaseStates = Object.freeze([...workflowContract.states])
 const transitionTargets = Object.freeze({
   DRAFT: new Set(['INTAKE', 'CANCELLED']),
   INTAKE: new Set(['AWAITING_CLARIFICATION', 'RISK_REVIEW', 'PAUSED', 'CANCELLED']),

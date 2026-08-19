@@ -31,7 +31,7 @@ The local UI is available from `apps/health-authorization-demo` with `npm run de
 It currently lets an authenticated user:
 
 1. select an authorized workspace and load its durable Change Cases from the API;
-2. create a durable Change Case manually or import a validated CSV feature file for review and creation;
+2. create a durable Change Case manually or import a validated CSV feature file through one server-side, retry-safe `PARTIAL_SUCCESS_RESUMABLE` command;
 3. see the Gate A, A.5, B–F workflow map and the single current review link for each Change Case;
 4. confirm intake and risk classification, then manually draft and curate multiple BDD stories in the authoritative Story Generation & Curation step;
 5. optionally request server-side AI story previews when the server has been configured, select and edit them before submission; and

@@ -6,6 +6,7 @@ const requiredFiles = [
   'package.json',
   '.npmrc',
   'packages/domain/src/change-case.ts',
+  'packages/domain/src/change-case-workflow.json',
   'packages/contracts/schemas/change-case.create.schema.json',
   'docs/conformance/stage-0.md',
   'docs/adr/ADR-002-framework-adoption.md',
@@ -37,6 +38,19 @@ if (schema.additionalProperties !== false || expected.some((field) => !schema.re
 }
 if (schema.properties?.riskTier?.enum?.join(',') !== 'R0,R1,R2,R3,R4') {
   throw new Error('STG0-CONTRACT: risk tiers must be exactly R0 through R4')
+}
+
+const workflow = JSON.parse(readFileSync(resolve(root, 'packages/domain/src/change-case-workflow.json'), 'utf8'))
+const requiredStates = ['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW', 'READY_FOR_EXECUTION', 'AWAITING_VERIFICATION', 'READY_FOR_DELIVERY', 'OUTCOME_RECORDED', 'PAUSED', 'CANCELLED']
+const requiredGateIds = ['A', 'A.5', 'B', 'C', 'D', 'E', 'F']
+if (workflow.states?.join(',') !== requiredStates.join(',') || new Set(workflow.states).size !== requiredStates.length) {
+  throw new Error('STG0-WORKFLOW: canonical Change Case states must be complete and unique')
+}
+if (workflow.gates?.map((gate) => gate.id).join(',') !== requiredGateIds.join(',') || workflow.gates.some((gate) => !gate.name || !gate.purpose || !gate.review)) {
+  throw new Error('STG0-WORKFLOW: canonical gates must be complete and presentation-ready')
+}
+if (Object.keys(workflow.statePositions ?? {}).length !== requiredStates.length) {
+  throw new Error('STG0-WORKFLOW: every canonical state must have exactly one workflow position')
 }
 
 console.log('Stage 0 structural contract verification passed.')

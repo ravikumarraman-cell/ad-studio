@@ -68,6 +68,7 @@
     "verify:stage10:postgres": "node scripts/verify-stage10-postgres.mjs",
     "verify:coding-agent-adapters": "node scripts/verify-coding-agent-adapters.mjs",
     "verify:feature-import": "node scripts/verify-feature-import.mjs",
+    "verify:maintainability": "node scripts/verify-maintainability.mjs",
     "bootstrap:stage0": "bash scripts/bootstrap-stage0.sh",
     "api:dev": "npm --workspace=@adx/api run dev",
     "provision:local-user": "node scripts/provision-local-user.mjs",

@@ -7,7 +7,7 @@ import { authorize, createAuthorizationSnapshot, InMemorySessionStore, TenantRes
 import { createOidcVerifier } from './oidc.mjs'
 import { createPkceTransaction, exchangeGoogleCode, googleAuthorizationUrl } from './oauth.mjs'
 import { PostgresTenantRepository } from './postgres.mjs'
-import { ChangeCaseError } from './change-case-ledger.mjs'
+import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
 import { PostgresExecutionRepository } from './execution-repository.mjs'
 import { PostgresEvidenceRepository } from './evidence-repository.mjs'
@@ -15,6 +15,9 @@ import { PostgresPreviewDeliveryRepository } from './git-delivery-repository.mjs
 import { PostgresPreviewCiRepository } from './ci-review-repository.mjs'
 import { PostgresOutcomeRepository } from './outcome-repository.mjs'
 import { createStorySuggestionService } from './story-suggestions.mjs'
+import workflowContract from '../../packages/domain/src/change-case-workflow.json' with { type: 'json' }
+import { escapeHtml, htmlScriptConfig } from './review-page-utils.mjs'
+import { authorizationAction, matchChangeCaseRoute } from './change-case-routes.mjs'
 
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
@@ -44,7 +47,6 @@ const oauthTransactions = new Map()
 
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
 function writeHtml(response, status, html, traceId) { response.statusCode = status; response.setHeader('content-type', 'text/html; charset=utf-8'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(html) }
-const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
 function storyReviewPage(changeCase, governance) {
   const factors = governance.assessment?.explanation?.factors ?? []; const stories = governance.stories?.stories ?? []; const approvals = governance.approvals ?? []
   const nextAction = changeCase.state === 'AWAITING_STORY_APPROVAL' ? 'Review this exact story contract and record an independent decision.' : changeCase.state === 'DESIGN_REVIEW' ? 'Story contract approved. The next governed gate is design review.' : 'Complete the prior intake or risk-classification step before review.'
@@ -58,7 +60,7 @@ function storyReviewPageV2(changeCase, governance, { canReview, isStoryAuthor, d
   const nextAction = awaitingDecision
     ? isStoryAuthor ? 'You authored this story. Ask an independent decision maker to review it.' : canReview ? 'Choose one decision after reviewing the story contract below.' : 'This story is awaiting an independent decision maker with permission to advance the workflow.'
     : changeCase.state === 'DESIGN_REVIEW' ? 'Story approved. Continue with the design review.' : 'Complete the prior intake, risk, or story-generation step before review.'
-  const config = JSON.stringify({ decisionEndpoint, storyDigest: governance.stories?.storyDigest, expectedVersion: changeCase.projectionVersion, designReviewUrl }).replace(/</g, '\\u003c')
+  const config = htmlScriptConfig({ decisionEndpoint, storyDigest: governance.stories?.storyDigest, expectedVersion: changeCase.projectionVersion, designReviewUrl })
   const storyMarkup = stories.map((story) => `<article class="story"><h3>${escapeHtml(story.key)} — ${escapeHtml(story.title)}</h3><p>${escapeHtml(story.narrative)}</p>${(story.scenarios ?? []).map((scenario) => `<div class="scenario"><strong>Given</strong> ${escapeHtml(scenario.given)}<br><strong>When</strong> ${escapeHtml(scenario.when)}<br><strong>Then</strong> ${escapeHtml(scenario.then)}</div>`).join('')}</article>`).join('') || '<p>No story revision is ready for review.</p>'
   const decisionPanel = !awaitingDecision
     ? changeCase.state === 'DESIGN_REVIEW' ? `<section class="card success"><p class="eyebrow">GATE B COMPLETE</p><h2>Story contract approved</h2><p>The recorded decision has moved this Change Case forward. Continue with the next gate when you are ready.</p><a class="button" href="${escapeHtml(designReviewUrl)}">Open design review</a></section>` : ''
@@ -69,7 +71,7 @@ function storyReviewPageV2(changeCase, governance, { canReview, isStoryAuthor, d
 }
 function storyWorkshopPage(changeCase, governance, { canAuthor, storiesEndpoint, storySuggestionsEndpoint, storyReviewUrl, aiStatus }) {
   const isReady = ['RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW'].includes(changeCase.state)
-  const config = JSON.stringify({ storiesEndpoint, storySuggestionsEndpoint, expectedVersion: changeCase.projectionVersion, storyReviewUrl, aiEnabled: aiStatus.configured, aiProvider: aiStatus.provider, aiModel: aiStatus.model }).replace(/</g, '\\u003c')
+  const config = htmlScriptConfig({ storiesEndpoint, storySuggestionsEndpoint, expectedVersion: changeCase.projectionVersion, storyReviewUrl, aiEnabled: aiStatus.configured, aiProvider: aiStatus.provider, aiModel: aiStatus.model })
   const aiPanel = aiStatus.configured ? `<section class="ai-panel"><p class="eyebrow">AI-ASSISTED DRAFTING · ${escapeHtml(aiStatus.model)}</p><h3>Start with suggested story slices</h3><p>ADX sends only the feature title, retained intent, risk tier, repository, and asset classifications to the configured model. Suggestions are not saved, approved, or sent to a coding agent.</p><button class="secondary" type="button" id="suggest-stories">Generate AI suggestions</button><p id="suggestion-status" class="status" role="status" aria-live="polite"></p><div id="suggestion-list"></div><button class="button" type="button" id="accept-suggestions" hidden>Accept selected suggestions</button></section>` : `<section class="ai-panel unavailable"><p class="eyebrow">AI-ASSISTED DRAFTING</p><h3>AI suggestions are not configured</h3><p>Manual story authoring remains available. An administrator can enable model-backed suggestions with server-side configuration; no browser key is used.</p></section>`
   const guidance = `<section class="card guidance"><p class="eyebrow">HOW TO SPLIT WELL</p><ol><li>Start with the user journey, not technical layers.</li><li>Make each slice independently valuable and small enough to plan.</li><li>Use observable Given / When / Then acceptance examples.</li><li>Keep cross-cutting security, accessibility, and operational needs visible in the relevant story.</li></ol></section>`
   const editor = !isReady ? `<section class="card notice"><h2>Story shaping opens after risk classification</h2><p>Complete intake and risk classification first. That ensures the stories carry the right risk context into review.</p></section>` : !canAuthor ? `<section class="card notice"><h2>You can view the breakdown, but cannot submit it</h2><p>An authorized contributor must submit a story revision for independent review.</p></section>` : `<section class="card editor"><p class="eyebrow">STEP 2 · DRAFT THE STORY SET</p><h2>Break this feature into user-value slices</h2><p>One feature can become several stories. Do not split by database, API, or UI layer—each story should describe a useful user outcome.</p>${aiPanel}<form id="story-workshop-form"><div id="story-list"></div><template id="story-template"><article class="story-card"><div class="story-head"><strong class="story-number"></strong><button type="button" class="remove">Remove</button></div><label>Story title<input name="title" required placeholder="e.g. Submit a complete authorization request"></label><label>User need<textarea name="narrative" required placeholder="As a …, I want …, so that …"></textarea></label><p class="bdd-title">Acceptance example</p><label>Given<textarea name="given" required></textarea></label><label>When<textarea name="when" required></textarea></label><label>Then<textarea name="then" required></textarea></label></article></template><button class="secondary" type="button" id="add-story">Add another story</button><p id="workshop-status" class="status" role="status" aria-live="polite"></p><button class="button" type="submit">Submit stories for independent review</button></form></section>`
@@ -78,7 +80,7 @@ function storyWorkshopPage(changeCase, governance, { canAuthor, storiesEndpoint,
 function intakeGatePage(changeCase, governance, { canWrite, classifyEndpoint, storyWorkshopUrl }) {
   const ready = changeCase.state === 'RISK_REVIEW'
   const action = ready ? `<a class="button" href="${escapeHtml(storyWorkshopUrl)}">Continue to Generate & curate stories</a>` : changeCase.state === 'INTAKE' && canWrite ? `<button class="button" id="classify">Confirm intake and classify risk</button><p id="status" role="status" aria-live="polite"></p>` : `<p>This Change Case must have complete retained intake before ADX can classify risk and open story generation.</p>`
-  const config = JSON.stringify({ classifyEndpoint, expectedVersion: changeCase.projectionVersion, storyWorkshopUrl }).replace(/</g, '\\u003c')
+  const config = htmlScriptConfig({ classifyEndpoint, expectedVersion: changeCase.projectionVersion, storyWorkshopUrl })
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Intake & Risk</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.5 system-ui,sans-serif}main{max-width:760px;margin:auto;padding:32px 20px}section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.button{border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}#status{font-weight:650}.error{color:#a92e2e}</style></head><body><main><section><p class="eyebrow">GATE A · DEFINE THE WORK</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} declared risk</p></section><section class="next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${ready ? 'Risk classification is complete.' : 'Confirm the retained intake before generating stories.'}</h2><p>Story generation starts only after this check, so every suggested or manual story carries the right risk context.</p>${action}</section><section><p class="eyebrow">RETAINED FEATURE INTENT</p><p><strong>Outcome:</strong> ${escapeHtml(governance.intent?.outcome ?? 'Not captured')}</p><p><strong>Owner:</strong> ${escapeHtml(governance.intent?.owner ?? 'Not captured')}</p><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? 'Not captured')}</p></section></main><script>const config=${config};document.getElementById('classify')?.addEventListener('click',async()=>{const button=document.getElementById('classify');const status=document.getElementById('status');button.disabled=true;button.textContent='Classifying…';try{const response=await fetch(config.classifyEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to classify risk.');status.textContent='Risk classified. Opening story generation…';window.setTimeout(()=>window.location.href=config.storyWorkshopUrl,400)}catch(error){status.textContent=error.message;status.className='error';button.disabled=false;button.textContent='Confirm intake and classify risk'}})</script></body></html>`
 }
 function designReviewPage(changeCase, view) {
@@ -105,24 +107,9 @@ function controlPlanePage(principal, workspaces) {
   const gateGuide = workflowGates.map((gate) => `<article class="gate-guide"><span class="gate-number">${escapeHtml(gate.id)}</span><div><h2>${escapeHtml(gate.name)}</h2><p>${escapeHtml(gate.purpose)}</p></div></article>`).join('')
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Control Plane</title><style>:root{color:#18243a;background:#f5f7fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:1160px;margin:auto;padding:34px 20px 56px}header,.panel,.case{background:#fff;border:1px solid #dce3ee;border-radius:16px;box-shadow:0 2px 10px #1720330a}header{padding:28px}.panel{padding:22px;margin-top:18px}.case{padding:24px;margin-top:18px}.eyebrow{font-size:.74rem;font-weight:750;letter-spacing:.12em;color:#50627a;margin:0 0 5px}h1{font-size:2rem;line-height:1.2;margin:.15rem 0 .55rem}h2,h3{font-size:1.05rem;margin:0}p{margin:.35rem 0;color:#455870}.lede{max-width:760px}.gate-guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-top:14px}.gate-guide{display:flex;gap:12px;border:1px solid #dce3ee;border-radius:12px;padding:14px;background:#fbfcfe}.gate-guide p{font-size:.9rem}.gate-number{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:50%;background:#e9f4ff;color:#11519b;font-size:.75rem;font-weight:800}.case-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.case-head h2{font-size:1.3rem}.risk{display:inline-block;border-radius:999px;padding:4px 9px;background:#fff2d9;color:#794500;font-size:.8rem;font-weight:750;white-space:nowrap}.case-id{font-size:.82rem;color:#50627a}.workflow{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:8px;margin:20px 0 14px;overflow-x:auto;padding-bottom:2px}.gate{min-width:130px;border:1px solid #dce3ee;border-radius:12px;padding:12px;background:#fff}.gate.complete{border-color:#94d4ad;background:#f1fbf4}.gate.current{border:2px solid #2d74c4;background:#edf6ff}.gate.blocked{background:#fafbfc;color:#66758b}.gate-top{display:flex;justify-content:space-between;align-items:center;gap:6px}.gate-title{font-weight:750;font-size:.9rem;color:#18243a}.status{font-size:.72rem;font-weight:800;letter-spacing:.04em}.complete .status{color:#14733e}.current .status{color:#0c5ca8}.blocked .status{color:#66758b}.gate p{font-size:.79rem;line-height:1.35;margin-top:8px}.agent-picker{border:1px solid #bfd8f4;background:#f7fbff;border-radius:12px;padding:16px;margin:0 0 14px}.agent-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin-top:12px}.agent-option{display:flex;gap:9px;align-items:flex-start;border:1px solid #cddbeb;border-radius:10px;padding:11px;background:#fff;cursor:pointer}.agent-option:has(input:checked){border:2px solid #2d74c4;background:#edf6ff}.agent-option input{margin-top:4px}.agent-option strong,.agent-option small{display:block}.agent-option small,.agent-note{font-size:.82rem;color:#50627a}.agent-note{margin-top:12px}.next{display:flex;align-items:center;justify-content:space-between;gap:16px;border-radius:12px;background:#edf6ff;padding:15px 16px}.next p{margin:0}.next strong{display:block;color:#18243a}.review-link{display:inline-block;background:#11519b;color:white;padding:9px 12px;border-radius:9px;text-decoration:none;font-weight:700;white-space:nowrap}.review-link:hover{background:#0d427e}.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.86rem;color:#50627a}.legend b{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}.done-dot{background:#2c9b59}.current-dot{background:#2d74c4}.waiting-dot{background:#94a1b2}code{overflow-wrap:anywhere}@media(max-width:650px){main{padding:18px 14px 40px}header,.panel,.case{padding:19px}.case-head,.next{align-items:stretch;flex-direction:column}.review-link{text-align:center}.workflow{grid-template-columns:repeat(6,145px)}h1{font-size:1.65rem}}</style></head><body><main><header><p class="eyebrow">AUTHENTICATED ADX CONTROL PLANE</p><h1>Move work through clear gates.</h1><p class="lede">Signed in as ${escapeHtml(principal.displayName ?? principal.id)}. Each gate answers one question before ADX allows the next step. A gate is complete only when its retained evidence says so.</p></header><section class="panel"><p class="eyebrow">THE ADX WORKFLOW</p><div class="gate-guide-grid">${gateGuide}</div><p class="legend"><span><b class="done-dot"></b>Complete</span><span><b class="current-dot"></b>Needs attention now</span><span><b class="waiting-dot"></b>Not reached yet</span></p></section><section class="panel"><p class="eyebrow">YOUR CHANGE CASES</p>${rows.join('') || '<p>No Change Cases are available in your workspaces yet.</p>'}</section></main></body></html>`
 }
-const workflowGates = Object.freeze([
-  Object.freeze({ id: 'A', name: 'Define the work', purpose: 'Capture the problem, owner, scope, and risk so ADX knows exactly what is being changed.', review: 'intake-workshop' }),
-  Object.freeze({ id: 'A.5', name: 'Generate & curate stories', purpose: 'Use AI or manual drafting, then select small user-value slices with observable acceptance examples.', review: 'story-workshop' }),
-  Object.freeze({ id: 'B', name: 'Approve the story', purpose: 'An independent reviewer confirms the expected behavior before design or implementation begins.', review: 'story-review' }),
-  Object.freeze({ id: 'C', name: 'Review the design', purpose: 'Check architecture, security, risk, and exceptions before any implementation is allowed.', review: 'design-review' }),
-  Object.freeze({ id: 'D', name: 'Verify the change', purpose: 'A fresh independent verifier proves the exact candidate meets the required checks.', review: 'evidence-review' }),
-  Object.freeze({ id: 'E', name: 'Review delivery', purpose: 'Review the exact preview, CI results, and findings before a delivery decision.', review: 'delivery-review' }),
-  Object.freeze({ id: 'F', name: 'Record the outcome', purpose: 'Retain what really happened so future work can learn from a factual result.', review: 'outcome-review' })
-])
+const workflowGates = Object.freeze(workflowContract.gates.map((gate) => Object.freeze({ ...gate })))
 function workflowPosition(state) {
-  if (['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'PAUSED', 'CANCELLED'].includes(state)) return 0
-  if (state === 'RISK_REVIEW') return 1
-  if (state === 'AWAITING_STORY_APPROVAL') return 2
-  if (state === 'DESIGN_REVIEW') return 3
-  if (['READY_FOR_EXECUTION', 'AWAITING_VERIFICATION'].includes(state)) return 4
-  if (state === 'READY_FOR_DELIVERY') return 5
-  if (state === 'OUTCOME_RECORDED') return 7
-  return 0
+  return workflowContract.statePositions[state] ?? 0
 }
 function gateStatus(index, position) { return position === 7 || index < position ? 'complete' : index === position ? 'current' : 'blocked' }
 function gateLabel(status) { return status === 'complete' ? 'COMPLETE' : status === 'current' ? 'NOW' : 'WAITING' }
@@ -164,6 +151,44 @@ function changeCaseResource(changeCase, scope) { return { id: changeCase.id, org
 function commandError(response, error, traceId) {
   if (error instanceof ChangeCaseError) return write(response, error.code === 'CHANGE_CASE_NOT_FOUND' ? 404 : error.code === 'VERSION_CONFLICT' || error.code === 'IDEMPOTENCY_KEY_REUSED' ? 409 : 400, { error: { code: error.code, message: error.message, retryable: error.retryable, severity: error.severity, correlationId: traceId, details: error.details } }, traceId)
   return write(response, 500, { error: { code: 'CHANGE_CASE_COMMAND_FAILED', message: 'The Change Case command could not be completed.', retryable: true, severity: 'error', correlationId: traceId, ...(process.env.ADX_TEST_AUTH === '1' ? { details: { cause: error instanceof Error ? error.message : String(error) } } : {}) } }, traceId)
+}
+
+function importFeatureKey(importId, featureId, operation) {
+  return `feature-import:${sha256({ importId, featureId, operation }).slice(7, 55)}`
+}
+
+function validatedImportedFeature(feature) {
+  if (!feature || typeof feature !== 'object') throw new ChangeCaseError('FEATURE_IMPORT_ROW_INVALID', 'Each imported feature must be an object.')
+  const required = ['featureId', 'title', 'description', 'owner', 'targetRepository', 'acceptanceCriteria', 'riskTier', 'raw']
+  if (required.some((key) => typeof feature[key] !== 'string' || !feature[key].trim())) throw new ChangeCaseError('FEATURE_IMPORT_ROW_INVALID', 'Each imported feature needs retained identity, intent, ownership, repository, acceptance criteria, risk tier, and source content.')
+  if (!['R0', 'R1', 'R2', 'R3', 'R4'].includes(feature.riskTier)) throw new ChangeCaseError('FEATURE_IMPORT_ROW_INVALID', 'Imported feature risk tier must be R0 through R4.')
+  return { featureId: feature.featureId.trim(), title: feature.title.trim(), description: feature.description.trim(), owner: feature.owner.trim(), targetRepository: feature.targetRepository.trim(), acceptanceCriteria: feature.acceptanceCriteria.trim(), riskTier: feature.riskTier, sourceUrl: typeof feature.sourceUrl === 'string' ? feature.sourceUrl.trim() : '', raw: feature.raw }
+}
+
+async function importFeatureBatch({ scope, principal, importId, features, correlationId }) {
+  if (typeof importId !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(importId)) throw new ChangeCaseError('FEATURE_IMPORT_ID_INVALID', 'A UUID-like import identifier is required.')
+  if (!Array.isArray(features) || !features.length || features.length > 100) throw new ChangeCaseError('FEATURE_IMPORT_BATCH_INVALID', 'An import must contain between 1 and 100 features.')
+  const seen = new Set(); const results = []
+  for (const rawFeature of features) {
+    let feature
+    try {
+      feature = validatedImportedFeature(rawFeature)
+      if (seen.has(feature.featureId)) throw new ChangeCaseError('FEATURE_IMPORT_DUPLICATE_ID', `Feature ${feature.featureId} appears more than once in this import.`)
+      seen.add(feature.featureId)
+      const created = await changeCases.create({ scope, principal, title: feature.title, riskTier: feature.riskTier, idempotencyKey: importFeatureKey(importId, feature.featureId, 'create'), correlationId })
+      const transitioned = await changeCases.transition({ scope, principal, changeCaseId: created.changeCaseId, toState: 'INTAKE', expectedVersion: created.projectionVersion, idempotencyKey: importFeatureKey(importId, feature.featureId, 'intake-transition'), correlationId })
+      const intake = await changeCases.captureIntent({ scope, principal, changeCaseId: created.changeCaseId, expectedVersion: transitioned.projectionVersion, idempotencyKey: importFeatureKey(importId, feature.featureId, 'capture-intent'), correlationId, intent: { outcome: feature.description, owner: feature.owner, acceptanceCriteria: feature.acceptanceCriteria, targetRepository: feature.targetRepository, assets: [], sourceName: feature.sourceUrl || feature.featureId, sourceContent: feature.raw } })
+      if (intake.ambiguityCount) {
+        results.push({ featureId: feature.featureId, title: feature.title, changeCaseId: created.changeCaseId, status: 'REQUIRES_CLARIFICATION', message: 'Intake retained open ambiguities; resolve them before story breakdown.' })
+        continue
+      }
+      await changeCases.classifyIntake({ scope, principal, changeCaseId: created.changeCaseId, expectedVersion: intake.projectionVersion, idempotencyKey: importFeatureKey(importId, feature.featureId, 'classify-risk'), correlationId })
+      results.push({ featureId: feature.featureId, title: feature.title, changeCaseId: created.changeCaseId, status: 'IMPORTED' })
+    } catch (error) {
+      results.push({ featureId: feature?.featureId ?? 'unknown', title: feature?.title ?? 'Invalid feature', status: 'FAILED', message: error instanceof ChangeCaseError ? error.message : 'The feature could not be imported.' })
+    }
+  }
+  return { importId, policy: 'PARTIAL_SUCCESS_RESUMABLE', results }
 }
 
 function decisionFor({ session, resource, action }) {
@@ -224,6 +249,21 @@ const server = createServer(async (request, response) => {
     try { const result = await changeCases.create({ scope, principal: session.principal, title: body.title.trim(), riskTier: body.riskTier, idempotencyKey, correlationId: traceId }); return write(response, result.deduplicated ? 200 : 201, result, traceId) } catch (error) { return commandError(response, error, traceId) }
   }
 
+  const featureImportMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/feature-imports$/i)
+  if (featureImportMatch) {
+    const workspaceId = featureImportMatch[1]; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
+    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
+    if (request.method !== 'POST') return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
+    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
+    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action: 'workspace.manage' })
+    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    try {
+      const body = await readJson(request)
+      return write(response, 200, await importFeatureBatch({ scope, principal: session.principal, importId: body?.importId, features: body?.features, correlationId: traceId }), traceId)
+    } catch (error) { return commandError(response, error, traceId) }
+  }
+
   const executionMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?)?$/i)
   if (executionMatch) {
     const [, workspaceId, changeCaseId, collection, leaseId, command] = executionMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
@@ -242,7 +282,7 @@ const server = createServer(async (request, response) => {
     } catch (error) { return commandError(response, error, traceId) }
   }
 
-  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-suggestions|story-decision|governance|intake-workshop|story-workshop|story-review|design|design-review|design-exception|design-decision|evidence|evidence-review|verification-decision|delivery-preview|delivery-review|delivery-decision|outcomes|outcome-review|outcome-completion))?$/i)
+  const changeCaseMatch = matchChangeCaseRoute(url.pathname)
   if (changeCaseMatch) {
     const [, workspaceId, changeCaseId, operation] = changeCaseMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
     if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
@@ -250,7 +290,7 @@ const server = createServer(async (request, response) => {
     const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
     const current = await changeCases.get(scope, changeCaseId)
     if (!current) return write(response, 404, { code: 'CHANGE_CASE_NOT_FOUND' }, traceId)
-    const action = request.method === 'GET' ? 'resource.read' : ['design-decision', 'verification-decision', 'delivery-decision', 'outcome-completion'].includes(operation) ? 'resource.review' : 'resource.write'
+    const action = authorizationAction(request.method, operation)
     const decision = decisionFor({ session, resource: changeCaseResource(current, scope), action })
     if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
     if (request.method === 'GET' && !operation) return write(response, 200, { changeCase: current }, traceId)

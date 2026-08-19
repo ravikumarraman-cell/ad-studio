@@ -1,0 +1,74 @@
+{
+  "states": [
+    "DRAFT",
+    "INTAKE",
+    "AWAITING_CLARIFICATION",
+    "RISK_REVIEW",
+    "AWAITING_STORY_APPROVAL",
+    "DESIGN_REVIEW",
+    "READY_FOR_EXECUTION",
+    "AWAITING_VERIFICATION",
+    "READY_FOR_DELIVERY",
+    "OUTCOME_RECORDED",
+    "PAUSED",
+    "CANCELLED"
+  ],
+  "statePositions": {
+    "DRAFT": 0,
+    "INTAKE": 0,
+    "AWAITING_CLARIFICATION": 0,
+    "PAUSED": 0,
+    "CANCELLED": 0,
+    "RISK_REVIEW": 1,
+    "AWAITING_STORY_APPROVAL": 2,
+    "DESIGN_REVIEW": 3,
+    "READY_FOR_EXECUTION": 4,
+    "AWAITING_VERIFICATION": 4,
+    "READY_FOR_DELIVERY": 5,
+    "OUTCOME_RECORDED": 7
+  },
+  "gates": [
+    {
+      "id": "A",
+      "name": "Define the work",
+      "purpose": "Capture the problem, owner, scope, and risk so ADX knows exactly what is being changed.",
+      "review": "intake-workshop"
+    },
+    {
+      "id": "A.5",
+      "name": "Generate & curate stories",
+      "purpose": "Use AI or manual drafting, then select small user-value slices with observable acceptance examples.",
+      "review": "story-workshop"
+    },
+    {
+      "id": "B",
+      "name": "Approve the story",
+      "purpose": "An independent reviewer confirms the expected behavior before design or implementation begins.",
+      "review": "story-review"
+    },
+    {
+      "id": "C",
+      "name": "Review the design",
+      "purpose": "Check architecture, security, risk, and exceptions before any implementation is allowed.",
+      "review": "design-review"
+    },
+    {
+      "id": "D",
+      "name": "Verify the change",
+      "purpose": "A fresh independent verifier proves the exact candidate meets the required checks.",
+      "review": "evidence-review"
+    },
+    {
+      "id": "E",
+      "name": "Review delivery",
+      "purpose": "Review the exact preview, CI results, and findings before a delivery decision.",
+      "review": "delivery-review"
+    },
+    {
+      "id": "F",
+      "name": "Record the outcome",
+      "purpose": "Retain what really happened so future work can learn from a factual result.",
+      "review": "outcome-review"
+    }
+  ]
+}
