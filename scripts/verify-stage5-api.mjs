@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { createPrivateKey, createPublicKey, randomUUID } from 'node:crypto'
+import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto'
 import { access, chmod, mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { readFileSync as readFileSyncSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,13 +16,14 @@ if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL_REQUIRED_FOR_STAGE5
 const organization = '11111111-1111-4111-8111-111111111111'; const workspace = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'; const id = randomUUID(); const port = 3112
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 })
 await pool.query('INSERT INTO adx_change_case (id,organization_id,workspace_id,title,state,risk_tier,projection_version,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [id, organization, workspace, 'Execution lease persistence proof', 'READY_FOR_EXECUTION', 'R2', 1, 'fixture:stage5'])
-const api = spawn(process.execPath, [resolve('apps/adx-api/server.mjs')], { env: { ...process.env, PORT: String(port), ADX_TEST_AUTH: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
+const keyFile = (file) => readFileSyncSync(isAbsolute(file) ? file : resolve(file), 'utf8'); const configuredPrivatePem = process.env.ADX_LEDGER_SIGNING_PRIVATE_KEY_PEM ?? (process.env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE ? keyFile(process.env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE) : null); const signer = configuredPrivatePem ? { keyId: process.env.ADX_LEDGER_SIGNING_KEY_ID ?? 'adx-ledger-default', privateKey: createPrivateKey(configuredPrivatePem) } : { keyId: 'stage5-ci-ephemeral-ed25519', ...generateKeyPairSync('ed25519') }; signer.publicKey = createPublicKey(signer.privateKey); const signerPem = signer.privateKey.export({ type: 'pkcs8', format: 'pem' })
+const api = spawn(process.execPath, [resolve('apps/adx-api/server.mjs')], { env: { ...process.env, PORT: String(port), ADX_TEST_AUTH: '1', ADX_LEDGER_SIGNING_KEY_ID: signer.keyId, ADX_LEDGER_SIGNING_PRIVATE_KEY_PEM: signerPem }, stdio: ['ignore', 'pipe', 'pipe'] })
 let output = ''; api.stdout.on('data', (data) => { output += data }); api.stderr.on('data', (data) => { output += data })
 const read = async (response) => ({ status: response.status, body: await response.json() })
 const delay = (milliseconds) => new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
 const adapter = { adapterId: 'stage5-test-adapter', version: '1.0.0', tier: 'GOVERNED_EXECUTION', capabilities: { shell: true, gitRead: true, gitWrite: true, network: false, secrets: false }, supportsCancellation: true, supportsArtifactCollection: true, supportsToolReceipts: true, supportsIdempotency: true, supportsReconciliation: true }
 const request = { agentPrincipal: { id: 'agent:implementer' }, repositories: [{ repositoryId: 'repo-1', ref: 'refs/heads/adx/stage5', writePaths: ['src/**'] }], requestedCapabilities: { shell: true, gitRead: true, gitWrite: true }, adapter, policyCapabilities: { shell: true, gitRead: true, gitWrite: true, network: false, secrets: false }, limits: { maxDurationSeconds: 300, maxToolCalls: 5, maxCostUsd: 1, maxNetworkBytes: 0, maxOutputBytes: 65536 }, policyVersion: 'adx-execution-v1', durationSeconds: 300 }
-const keyFile = (file) => readFileSyncSync(isAbsolute(file) ? file : resolve(file), 'utf8'); const privatePem = process.env.ADX_LEDGER_SIGNING_PRIVATE_KEY_PEM ?? keyFile(process.env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE); const signer = { keyId: process.env.ADX_LEDGER_SIGNING_KEY_ID ?? 'adx-ledger-default', privateKey: createPrivateKey(privatePem) }; signer.publicKey = createPublicKey(signer.privateKey); const executionRepository = new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer }); const dispatcher = new ExecutionDispatcher({ repository: executionRepository, image: 'alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc' }); const dispatchRoot = await mkdtemp(join(tmpdir(), 'adx-stage5-dispatch-'))
+const executionRepository = new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer }); const dispatcher = new ExecutionDispatcher({ repository: executionRepository, image: 'alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc' }); const dispatchRoot = await mkdtemp(join(tmpdir(), 'adx-stage5-dispatch-'))
 try {
   await Promise.race([once(api.stdout, 'data'), once(api, 'exit').then(([code]) => Promise.reject(new Error(`API exited early (${code}): ${output}`)))])
   const base = `http://127.0.0.1:${port}`; const session = await read(await fetch(`${base}/__test/session?as=alice`)); const headers = { authorization: `Bearer ${session.body.token}`, 'content-type': 'application/json' }
