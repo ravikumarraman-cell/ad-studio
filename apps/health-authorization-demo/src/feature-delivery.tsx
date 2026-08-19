@@ -37,7 +37,7 @@ function parseCsv(text: string): Feature[] {
   })
 }
 
-export function FeatureDelivery({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
+export function FeatureDelivery() {
   const [features, setFeatures] = useState(seedFeatures)
   const [selectedId, setSelectedId] = useState(seedFeatures[0].id)
   const [notice, setNotice] = useState('Three fictional health-insurance features are ready for governed delivery.')
@@ -65,7 +65,7 @@ export function FeatureDelivery({ onOpenWorkbench }: { onOpenWorkbench: () => vo
   return <main className="feature-shell">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">A</span><div><strong>ADX</strong><small>Feature delivery</small></div></div>
-      <nav aria-label="ADX views"><button type="button" className="active" aria-current="page">Your features</button><button type="button" onClick={onOpenWorkbench}>Authorization demo</button></nav>
+      <nav aria-label="ADX views"><button type="button" className="active" aria-current="page">Your features</button></nav>
       <div className="sidebar-note"><span>●</span> Demonstration mode<br/><small>Fictional features only. Coding agents never receive authority without an approved lease.</small></div>
     </aside>
     <section className="shell">

@@ -63,7 +63,7 @@ function App() {
   const openCases = cases.filter((item) => !['APPROVED', 'DENIED'].includes(item.state)).length
   const completed = cases.filter((item) => ['APPROVED', 'DENIED'].includes(item.state)).length
 
-  if (view === 'features') return <FeatureDelivery onOpenWorkbench={() => setView('authorization')} />
+  if (view === 'features') return <FeatureDelivery />
 
   const mutateCase = (next: CaseState, label: string, actor = 'Licensed reviewer') => {
     if (!selected) return

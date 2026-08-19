@@ -2,6 +2,7 @@
 
 - **Last updated:** 2026-08-18
 - **Source of truth:** [ADX implementation specification](../ADX_TanStack_Implementation_Specification_10_10.md)
+- **Workflow guide:** [ADX main flow](adx-main-flow.md)
 - **Current delivery position:** Stages 0, 1, 2, and 3 are **complete**. The feature-delivery UI is a verified local vertical-slice demonstration; it is not evidence of a completed ADX control plane.
 
 ## Stage dashboard
@@ -21,6 +22,8 @@
 | 10 — Context graph and specialist agents | `IN_PROGRESS` | Tenant-scoped, provenance-labelled untrusted context graph with freshness assessment; no-authority specialist role contracts; and measured role-value selection gates. | Durable context/evaluation persistence and independent review surface. |
 
 ## Available UI
+
+The authenticated backend control-plane index is available at `/control-plane` after `/auth/login`. It lists authorized Change Cases and links directly to the Story, Design, Evidence, Delivery, and Outcome review surfaces.
 
 The local UI is available from `apps/health-authorization-demo` with `npm run dev`.
 
