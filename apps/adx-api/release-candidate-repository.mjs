@@ -1,0 +1,58 @@
+import { randomUUID } from 'node:crypto'
+import pg from 'pg'
+import { ChangeCaseError } from './change-case-ledger.mjs'
+import { releaseApprovalDigest } from './release-candidate.mjs'
+
+export class PostgresReleaseCandidateRepository {
+  constructor({ connectionString }) { if (!connectionString) throw new Error('RELEASE_CANDIDATE_REPOSITORY_CONFIGURATION_REQUIRED'); this.pool = new pg.Pool({ connectionString, max: 10, idleTimeoutMillis: 10_000 }) }
+  async scoped(scope, work) { const client = await this.pool.connect(); try { await client.query('BEGIN'); await client.query("SELECT set_config('adx.organization_id',$1,true),set_config('adx.workspace_id',$2,true)", [scope.organizationId, scope.workspaceId]); const value = await work(client); await client.query('COMMIT'); return value } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() } }
+  async retain({ scope, principal, candidate }) {
+    if (principal?.type !== 'service' || !principal.id) throw new ChangeCaseError('RELEASE_CANDIDATE_WRITER_REQUIRED', 'Only the release controller service can retain a release candidate.')
+    validateCandidate(candidate)
+    return this.scoped(scope, async (client) => {
+      const current = await client.query('SELECT state FROM adx_change_case WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [candidate.changeCaseId, scope.organizationId, scope.workspaceId])
+      if (!current.rowCount) throw new ChangeCaseError('CHANGE_CASE_NOT_FOUND', 'Change Case was not found.')
+      if (current.rows[0].state !== 'READY_FOR_DELIVERY') throw new ChangeCaseError('RELEASE_NOT_READY', 'Release candidates require a Change Case that is ready for delivery.')
+      const preview = await client.query('SELECT id,change_case_id AS "changeCaseId",candidate_digest AS "candidateDigest",evidence_digest AS "evidenceDigest",commit_digest AS "commitDigest" FROM adx_git_preview_plan WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [candidate.previewPlanId, scope.organizationId, scope.workspaceId])
+      if (!preview.rowCount || preview.rows[0].changeCaseId !== candidate.changeCaseId || preview.rows[0].candidateDigest !== candidate.provenance.candidateDigest || preview.rows[0].evidenceDigest !== candidate.provenance.evidenceDigest || preview.rows[0].commitDigest !== candidate.provenance.commitDigest) throw new ChangeCaseError('RELEASE_PROVENANCE_PREVIEW_MISMATCH', 'Release provenance must match the retained preview plan exactly.')
+      const evidence = await client.query("SELECT 1 FROM adx_evidence_bundle WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='PASS' AND candidate_digest=$4 AND evidence_digest=$5", [candidate.changeCaseId, scope.organizationId, scope.workspaceId, candidate.provenance.candidateDigest, candidate.provenance.evidenceDigest])
+      if (!evidence.rowCount) throw new ChangeCaseError('RELEASE_PROVENANCE_EVIDENCE_MISMATCH', 'Release provenance requires passing evidence for the exact candidate.')
+      const approvals = await client.query("SELECT preview_plan_id AS \"previewPlanId\",commit_digest AS \"commitDigest\",decision,rationale,reviewed_by AS \"reviewedBy\",status FROM adx_git_preview_approval WHERE preview_plan_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='ACTIVE' AND decision='APPROVED'", [candidate.previewPlanId, scope.organizationId, scope.workspaceId])
+      if (!approvals.rows.some((approval) => approval.commitDigest === candidate.provenance.commitDigest && releaseApprovalDigest(approval) === candidate.provenance.approvalDigest)) throw new ChangeCaseError('RELEASE_PROVENANCE_APPROVAL_MISMATCH', 'Release provenance requires an active approval for the exact preview commit.')
+      const id = randomUUID()
+      const result = await client.query("INSERT INTO adx_release_candidate (id,organization_id,workspace_id,change_case_id,preview_plan_id,candidate,provenance_digest,artifact_digest,candidate_digest,evidence_digest,commit_digest,approval_digest,policy_version,status,recorded_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'CANDIDATE',$14) ON CONFLICT (change_case_id,provenance_digest) DO NOTHING RETURNING id", [id, scope.organizationId, scope.workspaceId, candidate.changeCaseId, candidate.previewPlanId, candidate, candidate.provenanceDigest, candidate.provenance.artifactDigest, candidate.provenance.candidateDigest, candidate.provenance.evidenceDigest, candidate.provenance.commitDigest, candidate.provenance.approvalDigest, candidate.provenance.policyVersion, principal.id])
+      if (!result.rowCount) { const existing = await client.query('SELECT id FROM adx_release_candidate WHERE change_case_id=$1 AND provenance_digest=$2', [candidate.changeCaseId, candidate.provenanceDigest]); return { accepted: true, deduplicated: true, releaseCandidateId: existing.rows[0].id, provenanceDigest: candidate.provenanceDigest } }
+      return { accepted: true, deduplicated: false, releaseCandidateId: id, provenanceDigest: candidate.provenanceDigest }
+    })
+  }
+  async decide({ scope, principal, releaseCandidateId, provenanceDigest, decision, rationale }) {
+    if (principal?.type !== 'human' || !principal.id || !['APPROVED','REJECTED'].includes(decision) || typeof rationale !== 'string' || !rationale.trim()) throw new ChangeCaseError('RELEASE_DECISION_INVALID', 'An authenticated human decision and rationale are required.')
+    return this.scoped(scope, async (client) => {
+      const candidate = await client.query('SELECT id,provenance_digest AS "provenanceDigest",recorded_by AS "recordedBy" FROM adx_release_candidate WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [releaseCandidateId, scope.organizationId, scope.workspaceId])
+      if (!candidate.rowCount) throw new ChangeCaseError('RELEASE_CANDIDATE_NOT_FOUND', 'Release candidate was not found.')
+      if (candidate.rows[0].provenanceDigest !== provenanceDigest) throw new ChangeCaseError('RELEASE_DECISION_PROVENANCE_MISMATCH', 'The decision must bind to the retained release provenance.')
+      if (candidate.rows[0].recordedBy === principal.id) throw new ChangeCaseError('RELEASE_DECISION_INDEPENDENCE_REQUIRED', 'The release-candidate author may not record its human release decision.')
+      const result = await client.query('INSERT INTO adx_release_decision (id,organization_id,workspace_id,release_candidate_id,provenance_digest,decision,rationale,reviewed_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (release_candidate_id,reviewed_by,provenance_digest) DO NOTHING RETURNING id', [randomUUID(), scope.organizationId, scope.workspaceId, releaseCandidateId, provenanceDigest, decision, rationale.trim(), principal.id])
+      return { accepted: true, deduplicated: !result.rowCount, decision }
+    })
+  }
+  async authorize({ scope, principal, releaseCandidateId, provenanceDigest }) {
+    if (principal?.type !== 'service' || !principal.id) throw new ChangeCaseError('RELEASE_AUTHORIZATION_WRITER_REQUIRED', 'Only the release controller service may request Gate E authorization.')
+    return this.scoped(scope, async (client) => {
+      const candidate = await client.query('SELECT change_case_id AS "changeCaseId",preview_plan_id AS "previewPlanId",provenance_digest AS "provenanceDigest",candidate_digest AS "candidateDigest",evidence_digest AS "evidenceDigest",commit_digest AS "commitDigest",approval_digest AS "approvalDigest",artifact_digest AS "artifactDigest",policy_version AS "policyVersion" FROM adx_release_candidate WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [releaseCandidateId, scope.organizationId, scope.workspaceId])
+      if (!candidate.rowCount) throw new ChangeCaseError('RELEASE_CANDIDATE_NOT_FOUND', 'Release candidate was not found.')
+      const row = candidate.rows[0]
+      if (row.provenanceDigest !== provenanceDigest) throw new ChangeCaseError('RELEASE_DECISION_PROVENANCE_MISMATCH', 'Authorization must bind to the retained release provenance.')
+      const caseState = await client.query('SELECT state FROM adx_change_case WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [row.changeCaseId, scope.organizationId, scope.workspaceId])
+      const preview = await client.query('SELECT candidate_digest AS "candidateDigest",evidence_digest AS "evidenceDigest",commit_digest AS "commitDigest" FROM adx_git_preview_plan WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [row.previewPlanId, scope.organizationId, scope.workspaceId])
+      const evidence = await client.query("SELECT 1 FROM adx_evidence_bundle WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='PASS' AND candidate_digest=$4 AND evidence_digest=$5", [row.changeCaseId, scope.organizationId, scope.workspaceId, row.candidateDigest, row.evidenceDigest])
+      const approvals = await client.query("SELECT preview_plan_id AS \"previewPlanId\",commit_digest AS \"commitDigest\",decision,rationale,reviewed_by AS \"reviewedBy\",status FROM adx_git_preview_approval WHERE preview_plan_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='ACTIVE' AND decision='APPROVED'", [row.previewPlanId, scope.organizationId, scope.workspaceId])
+      const releaseDecision = await client.query("SELECT 1 FROM adx_release_decision WHERE release_candidate_id=$1 AND organization_id=$2 AND workspace_id=$3 AND provenance_digest=$4 AND decision='APPROVED'", [releaseCandidateId, scope.organizationId, scope.workspaceId, provenanceDigest])
+      if (!caseState.rowCount || caseState.rows[0].state !== 'READY_FOR_DELIVERY' || !preview.rowCount || preview.rows[0].candidateDigest !== row.candidateDigest || preview.rows[0].evidenceDigest !== row.evidenceDigest || preview.rows[0].commitDigest !== row.commitDigest || !evidence.rowCount || !approvals.rows.some((approval) => approval.commitDigest === row.commitDigest && releaseApprovalDigest(approval) === row.approvalDigest) || !releaseDecision.rowCount) throw new ChangeCaseError('RELEASE_GATE_E_DENIED', 'Gate E requires current preview, evidence, approval, and independent release-decision provenance.')
+      return Object.freeze({ authorized: true, mode: 'SIMULATION_ONLY', releaseCandidateId, provenanceDigest, artifactDigest: row.artifactDigest, policyVersion: row.policyVersion, capabilities: Object.freeze({ deploy: false }) })
+    })
+  }
+  async list(scope, changeCaseId) { return this.scoped(scope, async (client) => (await client.query('SELECT id,preview_plan_id AS "previewPlanId",provenance_digest AS "provenanceDigest",artifact_digest AS "artifactDigest",candidate_digest AS "candidateDigest",evidence_digest AS "evidenceDigest",commit_digest AS "commitDigest",approval_digest AS "approvalDigest",policy_version AS "policyVersion",status,created_at AS "createdAt" FROM adx_release_candidate WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 ORDER BY created_at DESC', [changeCaseId, scope.organizationId, scope.workspaceId])).rows) }
+  async close() { await this.pool.end() }
+}
+function validateCandidate(candidate) { if (candidate?.mode !== 'CONTROL_PLANE_ONLY' || candidate.status !== 'CANDIDATE' || !candidate.changeCaseId || !candidate.previewPlanId || !candidate.provenanceDigest || !candidate.provenance?.artifactDigest?.startsWith('sha256:') || !candidate.provenance?.candidateDigest?.startsWith('sha256:') || !candidate.provenance?.evidenceDigest?.startsWith('sha256:') || !candidate.provenance?.commitDigest?.startsWith('sha256:') || !candidate.provenance?.approvalDigest?.startsWith('sha256:') || !candidate.provenance?.policyVersion) throw new ChangeCaseError('RELEASE_CANDIDATE_INVALID', 'A complete control-plane-only release candidate is required.') }

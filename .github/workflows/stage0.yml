@@ -47,6 +47,16 @@ jobs:
       - run: npm run verify:stage7
       - run: npm run verify:stage7:api
       - run: npm run verify:stage7:providers
+      - run: npm run verify:stage8
+      - run: npm run verify:stage8:postgres
+      - run: npm run verify:stage8:adapters
+      - run: npm run verify:stage8:reconciliation
+      - run: npm run verify:stage8:game-day
+      - run: npm run verify:stage8:integration-config
+      - run: npm run verify:stage9
+      - run: npm run verify:stage9:postgres
+      - run: npm run verify:stage9:evaluation
+      - run: npm run verify:stage9:coupling
       # The API's authorization and Stage 2 gates are Playwright browser tests.
       # Install the lockfile-pinned Chromium before either one runs.
       - run: npx playwright install --with-deps chromium
