@@ -267,6 +267,42 @@ No stage may be marked complete merely because a demo succeeds. The following pr
 | Recoverability | A game day exercises lease revocation, workflow replay, provider reconciliation, release pause, and rollback. |
 | Usability | A qualified reviewer can determine the change, evidence, residual risk, and safe next action without reading raw transcripts. |
 
+### 0.4 Current implementation baseline (2026-08-19)
+
+This section is an implementation supplement to the target architecture in this specification. It records what the repository currently provides and, equally importantly, what remains deliberately unavailable. It does not weaken the proof obligations in §0.3 or convert a local/demo capability into production authorization.
+
+#### 0.4.1 Implemented user path
+
+The authenticated ADX path currently follows this sequence:
+
+`Feature intake or CSV import → Gate A: define and classify → Gate A.5: generate and curate stories → Gate B: independent story approval → Gate C: design/security review → bounded-execution planning → Gate D: independent verification → Gate E: preview/delivery review → Gate F: outcome review`.
+
+Gate A retains the feature intent and applies risk classification before stories can be drafted. Gate A.5 is an explicit workflow step, rather than an implicit part of Story Review: an authorized contributor can author one or more small, user-value stories with BDD-style Given/When/Then acceptance examples. Submission produces a versioned story set for Gate B. The person who authored the current story revision cannot approve that same revision; the approval is bound to its digest and a return-for-revision decision requires a rationale.
+
+The authenticated control-plane routes are authoritative for these review decisions. The React client provides an API-backed workspace shell, a persistent workflow map, a Real-mode entry point, and a Guided-demo entry point. The Guided demo is intentionally local and non-writing: it illustrates the nine user steps but is not evidence that a Change Case, approval, agent run, or delivery action happened.
+
+#### 0.4.2 Feature-file intake contract
+
+The current UI accepts a reviewed CSV feature file and creates one durable Change Case per accepted feature. The standard template is [adx-feature-import-template.csv](./apps/health-authorization-demo/public/samples/adx-feature-import-template.csv); the three-feature example is [adx-health-insurance-features.csv](./apps/health-authorization-demo/public/samples/adx-health-insurance-features.csv).
+
+Required columns are `feature_id`, `title`, `priority`, `owner`, `target_repository`, `acceptance_criteria`, and `risk_tier`; `description` is strongly recommended in the standard template. The importer rejects duplicate feature IDs, requires `P0`–`P2` priority and `R0`–`R4` risk tiers, and requires acceptance criteria to describe an observable outcome. Optional context such as source URL, dependencies, non-functional requirements, user type, user goal, business value, out-of-scope items, and success metrics remains available to the author during review. File acceptance does not bypass Gate A, risk classification, story curation, or independent approval.
+
+#### 0.4.3 AI-assisted story curation boundary
+
+AI suggestions are optional and appear only in Gate A.5. When configured, the current implementation uses the server-side OpenAI Responses API with `store: false`; the browser never receives an AI API key. The request is limited to retained feature metadata needed to propose stories (title, desired outcome, acceptance criteria, target repository, risk tier, and asset classification) and does not send repository source code or a provider credential.
+
+Suggestions are previews, not ADX records, approvals, evidence, or agent actions. A contributor must explicitly select one or more suggestions, may edit every field, and must submit the resulting stories through the existing versioned Story API before they enter independent review. When the provider is not configured, the UI clearly says so and preserves the complete manual-authoring path. Configuration is server-only via `ADX_STORY_AI_API_KEY` and `ADX_STORY_AI_MODEL`; credentials must never be placed in browser code, CSV files, Change Cases, prompts retained as evidence, or checked-in configuration.
+
+#### 0.4.4 Provider and release truthfulness
+
+The UI can show Codex, Claude Code, and GitHub Copilot as implementation-provider choices for planning. Their adapters are declaration-only launch previews and fail closed: no currently exposed UI route starts an external coding agent or exposes a provider credential. A real provider executor still requires a brokered run-scoped credential, signed lease, disposable worktree, constrained gateway/egress policy, cancellation/revocation handling, and non-production operational proof.
+
+Likewise, Git/CI delivery is preview-only and release integration is simulation-only. No exposed UI capability creates a remote branch or pull request, merges code, changes a feature flag, deploys software, or declares a production release. Such actions remain subject to the relevant Stage 5–8 proof obligations, provider configuration, and explicit operational authorization.
+
+#### 0.4.5 Delivery references
+
+The implementation dashboard in [docs/implementation-status.md](./docs/implementation-status.md) is the concise status record. The user-facing workflow is documented in [docs/adx-main-flow.md](./docs/adx-main-flow.md), and the coding-agent boundary and operational roadmap are in [docs/coding-agent-integration.md](./docs/coding-agent-integration.md). When those documents and this specification differ about a currently enabled integration, the concrete API behavior and its verification evidence govern; the difference must be corrected rather than assumed away.
+
 ---
 
 # 1. Architecture at a glance
