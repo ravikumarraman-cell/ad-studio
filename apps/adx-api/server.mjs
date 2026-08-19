@@ -14,7 +14,8 @@ const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: 
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
 const bob = Object.freeze({ id: 'oidc:https://issuer.example:bob', type: 'human', issuer: 'https://issuer.example' })
 const approver = Object.freeze({ id: 'oidc:https://issuer.example:approver', type: 'human', issuer: 'https://issuer.example' })
-const memberships = Object.freeze({ alice: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], approver: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], bob: [{ organizationId: ids.orgB, workspaceId: ids.workspaceB, roles: ['contributor'], version: 1 }] })
+const designReviewer = Object.freeze({ id: 'oidc:https://issuer.example:design-reviewer', type: 'human', issuer: 'https://issuer.example' })
+const memberships = Object.freeze({ alice: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], approver: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], designReviewer: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['reviewer'], version: 1 }], bob: [{ organizationId: ids.orgB, workspaceId: ids.workspaceB, roles: ['contributor'], version: 1 }] })
 const sessions = new InMemorySessionStore()
 const resources = new TenantResourceStore([
   { id: ids.resourceA, organizationId: ids.orgA, workspaceId: ids.workspaceA, type: 'demo-record', ownerId: alice.id, riskTier: 'R2', version: 1, label: 'Workspace A confidential record' },
@@ -95,7 +96,7 @@ const server = createServer(async (request, response) => {
     } catch { return write(response, 401, { code: 'OIDC_CALLBACK_REJECTED' }, traceId) }
   }
   if (process.env.ADX_TEST_AUTH === '1' && url.pathname === '/__test/session') {
-    const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'approver' ? approver : actor === 'bob' ? bob : null
+    const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'approver' ? approver : actor === 'designReviewer' ? designReviewer : actor === 'bob' ? bob : null
     if (!principal) return write(response, 400, { code: 'UNKNOWN_TEST_PRINCIPAL' }, traceId)
     const token = sessions.create(principal, memberships[actor]); audit({ type: 'session.login', principalId: principal.id, testOnly: true })
     return write(response, 201, { token, principal: { id: principal.id, type: principal.type } }, traceId)
@@ -120,7 +121,7 @@ const server = createServer(async (request, response) => {
     try { const result = await changeCases.create({ scope, principal: session.principal, title: body.title.trim(), riskTier: body.riskTier, idempotencyKey, correlationId: traceId }); return write(response, result.deduplicated ? 200 : 201, result, traceId) } catch (error) { return commandError(response, error, traceId) }
   }
 
-  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-decision|governance|story-review))?$/i)
+  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-decision|governance|story-review|design|design-decision))?$/i)
   if (changeCaseMatch) {
     const [, workspaceId, changeCaseId, operation] = changeCaseMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
     if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
@@ -128,12 +129,13 @@ const server = createServer(async (request, response) => {
     const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
     const current = await changeCases.get(scope, changeCaseId)
     if (!current) return write(response, 404, { code: 'CHANGE_CASE_NOT_FOUND' }, traceId)
-    const action = request.method === 'GET' ? 'resource.read' : 'resource.write'
+    const action = request.method === 'GET' ? 'resource.read' : operation === 'design-decision' ? 'resource.review' : 'resource.write'
     const decision = decisionFor({ session, resource: changeCaseResource(current, scope), action })
     if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
     if (request.method === 'GET' && !operation) return write(response, 200, { changeCase: current }, traceId)
     if (request.method === 'GET' && operation === 'timeline') return write(response, 200, { events: await changeCases.timeline(scope, changeCaseId) }, traceId)
     if (request.method === 'GET' && operation === 'governance') return write(response, 200, await changeCases.intakeView(scope, changeCaseId), traceId)
+    if (request.method === 'GET' && operation === 'design') return write(response, 200, await changeCases.designView(scope, changeCaseId), traceId)
     if (request.method === 'GET' && operation === 'story-review') return writeHtml(response, 200, storyReviewPage(current, await changeCases.intakeView(scope, changeCaseId)), traceId)
     const body = await readJson(request); const idempotencyKey = request.headers['idempotency-key']
     try {
@@ -143,6 +145,8 @@ const server = createServer(async (request, response) => {
       if (request.method === 'POST' && operation === 'classify') return write(response, 200, await changeCases.classifyIntake({ scope, principal: session.principal, changeCaseId, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
       if (request.method === 'POST' && operation === 'stories') return write(response, 200, await changeCases.generateStories({ scope, principal: session.principal, changeCaseId, stories: body?.stories, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
       if (request.method === 'POST' && operation === 'story-decision') return write(response, 200, await changeCases.decideStories({ scope, principal: session.principal, changeCaseId, storyDigest: body?.storyDigest, decision: body?.decision, rationale: body?.rationale, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
+      if (request.method === 'POST' && operation === 'design') return write(response, 200, await changeCases.captureDesign({ scope, principal: session.principal, changeCaseId, design: body?.design, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
+      if (request.method === 'POST' && operation === 'design-decision') return write(response, 200, await changeCases.decideDesign({ scope, principal: session.principal, changeCaseId, designDigest: body?.designDigest, decision: body?.decision, rationale: body?.rationale, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
       return write(response, 400, { error: { code: 'CHANGE_CASE_COMMAND_INVALID', message: 'The Change Case command is invalid.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
     } catch (error) { return commandError(response, error, traceId) }
   }

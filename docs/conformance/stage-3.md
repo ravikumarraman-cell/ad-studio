@@ -1,6 +1,6 @@
 # Stage 3 conformance record — Intake, risk classification, and stories
 
-- **Status:** `IN_PROGRESS`
+- **Status:** `COMPLETE`
 - **Last updated:** 2026-08-18
 - **Requirements in scope:** `STG-004`, `POL-001`, `EVD-002`, `GOV-002`
 
@@ -17,18 +17,18 @@
 
 | ID | Requirement | Required proof | Status |
 | --- | --- | --- | --- |
-| STG3-001 | Intent requires outcome, accountable owner, acceptance criteria, target repository, retained source, and declared assets. | `npm run verify:stage3` and `npm run verify:stage3:api`. | Verified locally |
-| STG3-002 | Missing mandatory ownership stops the request; ambiguity prevents classification until resolved. | Typed `INTENT_INCOMPLETE` and `CLARIFICATION_REQUIRED` command errors; a corrected retained-intent command supersedes open ambiguities. | Verified locally |
-| STG3-003 | Asset classification raises, but never silently lowers, the effective risk tier and provides a reasoned factor list. | `npm run verify:stage3:api` classifies an R1 request containing a restricted asset as R4. | Verified locally |
-| STG3-004 | Stories are stored as a versioned graph with at least one Given/When/Then scenario per story. | `npm run verify:stage3` and `npm run verify:stage3:api`. | Verified locally |
-| STG3-005 | Approval is digest-bound and has separation of duty from the story author. | Self-approval rejection and independent approver acceptance in `npm run verify:stage3:api`. | Verified locally |
-| STG3-006 | A revision invalidates active approvals for the prior digest and returns the case to story review. | `npm run verify:stage3:api`. | Verified locally |
-| STG3-007 | Intake, classification explanation, story graph, and approval history are tenant-scoped authoritative read projections. | `GET .../governance` API route, direct cross-tenant object-reference attack, tenant predicates, and RLS. | Verified locally |
-| STG3-008 | A reviewer can safely review the semantic contract without raw transcript archaeology. | Authenticated server-backed Story Review page, single-safe-next-action framing, retained-source metadata/digest, risk factor explanation, BDD contract, approval history, and deep-link reload browser test. | Verified locally |
+| STG3-001 | Intent requires outcome, accountable owner, acceptance criteria, target repository, retained source, and declared assets. | `npm run verify:stage3` and `npm run verify:stage3:api`. | Verified locally and in hosted CI |
+| STG3-002 | Missing mandatory ownership stops the request; ambiguity prevents classification until resolved. | Typed `INTENT_INCOMPLETE` and `CLARIFICATION_REQUIRED` command errors; a corrected retained-intent command supersedes open ambiguities. | Verified locally and in hosted CI |
+| STG3-003 | Asset classification raises, but never silently lowers, the effective risk tier and provides a reasoned factor list. | `npm run verify:stage3:api` classifies an R1 request containing a restricted asset as R4. | Verified locally and in hosted CI |
+| STG3-004 | Stories are stored as a versioned graph with at least one Given/When/Then scenario per story. | `npm run verify:stage3` and `npm run verify:stage3:api`. | Verified locally and in hosted CI |
+| STG3-005 | Approval is digest-bound and has separation of duty from the story author. | Self-approval rejection and independent approver acceptance in `npm run verify:stage3:api`. | Verified locally and in hosted CI |
+| STG3-006 | A revision invalidates active approvals for the prior digest and returns the case to story review. | `npm run verify:stage3:api`. | Verified locally and in hosted CI |
+| STG3-007 | Intake, classification explanation, story graph, and approval history are tenant-scoped authoritative read projections. | `GET .../governance` API route, direct cross-tenant object-reference attack, tenant predicates, and RLS. | Verified locally and in hosted CI |
+| STG3-008 | A reviewer can safely review the semantic contract without raw transcript archaeology. | Authenticated server-backed Story Review page, single-safe-next-action framing, retained-source metadata/digest, risk factor explanation, BDD contract, approval history, and deep-link reload browser test. | Verified locally and in hosted CI |
 
-## Remaining completion gates
+## Completion evidence
 
-1. Run the newly added Stage 3 suite successfully in hosted CI.
+The complete Stage 3 suite, including schema migration, governance API, and authenticated browser review checks, passed in [GitHub Actions job 95913507852](https://github.com/ravikumarraman-cell/ad-studio/actions/runs/32200635020/job/95913507852) on 2026-08-18.
 
 ## Completion rule
 

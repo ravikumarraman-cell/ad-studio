@@ -1,13 +1,13 @@
 import { createHash, randomUUID, sign, verify } from 'node:crypto'
 
-export const changeCaseStates = Object.freeze(['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW', 'PAUSED', 'CANCELLED'])
+export const changeCaseStates = Object.freeze(['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW', 'READY_FOR_EXECUTION', 'PAUSED', 'CANCELLED'])
 const transitionTargets = Object.freeze({
   DRAFT: new Set(['INTAKE', 'CANCELLED']),
   INTAKE: new Set(['AWAITING_CLARIFICATION', 'RISK_REVIEW', 'PAUSED', 'CANCELLED']),
   AWAITING_CLARIFICATION: new Set(['INTAKE', 'PAUSED', 'CANCELLED']),
   RISK_REVIEW: new Set(['AWAITING_STORY_APPROVAL', 'INTAKE', 'PAUSED', 'CANCELLED']),
   AWAITING_STORY_APPROVAL: new Set(['RISK_REVIEW', 'DESIGN_REVIEW', 'PAUSED', 'CANCELLED']),
-  DESIGN_REVIEW: new Set(['PAUSED', 'CANCELLED']),
+  DESIGN_REVIEW: new Set(['READY_FOR_EXECUTION', 'PAUSED', 'CANCELLED']),
   PAUSED: new Set(['INTAKE', 'RISK_REVIEW', 'DESIGN_REVIEW', 'CANCELLED']),
   CANCELLED: new Set(),
 })
@@ -63,6 +63,7 @@ export function applyChangeCaseEvent(projection, event) {
   if (event.eventType === 'ChangeCaseStateChanged.v1') return Object.freeze({ ...projection, state: event.payload.toState, projectionVersion: event.sequence, updatedAt: event.occurredAt })
   if (event.eventType === 'ChangeCaseRiskClassified.v1') return Object.freeze({ ...projection, riskTier: event.payload.riskTier, state: event.payload.toState, projectionVersion: event.sequence, updatedAt: event.occurredAt })
   if (['ChangeCaseIntakeCaptured.v1', 'ChangeCaseStoriesGenerated.v1', 'ChangeCaseStoryApproved.v1', 'ChangeCaseStoryRejected.v1'].includes(event.eventType)) return Object.freeze({ ...projection, state: event.payload.toState ?? projection.state, projectionVersion: event.sequence, updatedAt: event.occurredAt })
+  if (['ChangeCaseDesignCaptured.v1', 'ChangeCaseDesignApproved.v1', 'ChangeCaseDesignRejected.v1'].includes(event.eventType)) return Object.freeze({ ...projection, state: event.payload.toState ?? projection.state, projectionVersion: event.sequence, updatedAt: event.occurredAt })
   throw new ChangeCaseError('EVENT_TYPE_UNKNOWN', `Unsupported Change Case event type: ${event.eventType}.`, { severity: 'error' })
 }
 
