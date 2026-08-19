@@ -9,4 +9,4 @@
 | STG10-001 | Context is tenant-scoped, provenance-labelled, untrusted by default, and freshness-assessed. | Context graph poisoning/freshness suite. | Verified locally |
 | STG10-002 | Specialist roles declare no decision, approval, execution, or deployment authority. | Role contract suite. | Verified locally |
 | STG10-003 | Role selection requires measured value without safety, reproducibility, or approval-clarity regression. | Role value-evaluation suite. | Verified locally |
-| STG10-004 | Context graph and role evaluations are durably retained and independently reviewable. | PostgreSQL/API suite. | Planned |
+| STG10-004 | Context graph and accepted role evaluations are durably retained and tenant-scoped. | PostgreSQL suite. | Verified locally |
