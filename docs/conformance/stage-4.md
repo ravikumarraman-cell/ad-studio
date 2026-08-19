@@ -31,4 +31,4 @@
 - `npm run verify:stage4:api`
 - `npm --workspace=@adx/api run test:browser:stage4`
 
-Hosted-CI evidence remains required before the stage can be marked complete.
+Hosted CI is configured to execute these same three Stage 4 checks in the `ADX conformance gates` workflow. A successful run containing those steps is required before the stage can be marked complete.
