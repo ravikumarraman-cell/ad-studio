@@ -13,7 +13,8 @@ import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
 const bob = Object.freeze({ id: 'oidc:https://issuer.example:bob', type: 'human', issuer: 'https://issuer.example' })
-const memberships = Object.freeze({ alice: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], bob: [{ organizationId: ids.orgB, workspaceId: ids.workspaceB, roles: ['contributor'], version: 1 }] })
+const approver = Object.freeze({ id: 'oidc:https://issuer.example:approver', type: 'human', issuer: 'https://issuer.example' })
+const memberships = Object.freeze({ alice: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], approver: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], bob: [{ organizationId: ids.orgB, workspaceId: ids.workspaceB, roles: ['contributor'], version: 1 }] })
 const sessions = new InMemorySessionStore()
 const resources = new TenantResourceStore([
   { id: ids.resourceA, organizationId: ids.orgA, workspaceId: ids.workspaceA, type: 'demo-record', ownerId: alice.id, riskTier: 'R2', version: 1, label: 'Workspace A confidential record' },
@@ -28,6 +29,13 @@ const changeCases = process.env.DATABASE_URL && ledgerSigner ? new PostgresChang
 const oauthTransactions = new Map()
 
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
+function writeHtml(response, status, html, traceId) { response.statusCode = status; response.setHeader('content-type', 'text/html; charset=utf-8'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(html) }
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
+function storyReviewPage(changeCase, governance) {
+  const factors = governance.assessment?.explanation?.factors ?? []; const stories = governance.stories?.stories ?? []; const approvals = governance.approvals ?? []
+  const nextAction = changeCase.state === 'AWAITING_STORY_APPROVAL' ? 'Review this exact story contract and record an independent decision.' : changeCase.state === 'DESIGN_REVIEW' ? 'Story contract approved. The next governed gate is design review.' : 'Complete the prior intake or risk-classification step before review.'
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Review — ${escapeHtml(changeCase.title)}</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:#52657f}h1{margin:.2rem 0;font-size:2rem}.risk{display:inline-block;background:#fff2d9;color:#7b4600;font-weight:700;padding:5px 10px;border-radius:999px}h2{font-size:1.15rem;margin-top:0}dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}dt{font-weight:700;color:#52657f}ul,ol{padding-left:20px}.scenario{border-left:3px solid #3274c7;padding-left:12px;margin:12px 0}.next{background:#e9f4ff;border-color:#9dcef8}.muted{color:#52657f}code{font-size:.85em;overflow-wrap:anywhere}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span> <span class="muted">State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</span></p></header><section class="card next" aria-labelledby="next-action"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2 id="next-action">${escapeHtml(nextAction)}</h2><p>This screen shows retained facts and the exact story digest under review; it does not infer approval from a visual interaction.</p></section><section class="card"><p class="eyebrow">RETAINED INTENT</p><h2>What is being changed</h2><dl><dt>Outcome</dt><dd>${escapeHtml(governance.intent?.outcome ?? 'Not captured')}</dd><dt>Owner</dt><dd>${escapeHtml(governance.intent?.owner ?? 'Not captured')}</dd><dt>Acceptance criteria</dt><dd>${escapeHtml(governance.intent?.acceptanceCriteria ?? 'Not captured')}</dd><dt>Repository</dt><dd>${escapeHtml(governance.intent?.targetRepository ?? 'Not captured')}</dd><dt>Source</dt><dd>${governance.sources.map((source) => `${escapeHtml(source.sourceName)} <code>${escapeHtml(source.sourceDigest)}</code>`).join('<br>') || 'None retained'}</dd></dl></section><section class="card"><p class="eyebrow">RISK EXPLANATION</p><h2>${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} effective risk</h2><p>${escapeHtml(governance.assessment?.explanation?.rationale ?? 'Classification is pending.')}</p><ul>${factors.map((factor) => `<li>${escapeHtml(factor.asset)} — ${escapeHtml(factor.classification)} (minimum risk weight ${escapeHtml(factor.weight)})</li>`).join('')}</ul></section><section class="card"><p class="eyebrow">BDD STORY CONTRACT · ${escapeHtml(governance.stories?.storyDigest ?? 'not generated')}</p><h2>Reviewable stories</h2>${stories.map((story) => `<article><h3>${escapeHtml(story.key)} — ${escapeHtml(story.title)}</h3><p>${escapeHtml(story.narrative)}</p>${story.scenarios.map((scenario) => `<div class="scenario"><strong>Given</strong> ${escapeHtml(scenario.given)}<br><strong>When</strong> ${escapeHtml(scenario.when)}<br><strong>Then</strong> ${escapeHtml(scenario.then)}</div>`).join('')}</article>`).join('') || '<p>No story revision is ready for review.</p>'}</section><section class="card"><p class="eyebrow">APPROVAL HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((approval) => `<li><strong>${escapeHtml(approval.decision)}</strong> · ${escapeHtml(approval.status)} · <code>${escapeHtml(approval.storyDigest)}</code><br>${escapeHtml(approval.rationale)}</li>`).join('') || '<li>No decision has been recorded.</li>'}</ul></section></main></body></html>`
+}
 function bearer(request) { const value = request.headers.authorization; if (value?.startsWith('Bearer ')) return value.slice(7); return request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null }
 async function sessionFor(request) {
   const token = bearer(request); const local = sessions.resolve(token)
@@ -52,7 +60,7 @@ function createLedgerSigner(env) {
 function changeCaseResource(changeCase, scope) { return { id: changeCase.id, organizationId: scope.organizationId, workspaceId: scope.workspaceId, type: 'change-case', version: changeCase.projectionVersion, riskTier: changeCase.riskTier } }
 function commandError(response, error, traceId) {
   if (error instanceof ChangeCaseError) return write(response, error.code === 'CHANGE_CASE_NOT_FOUND' ? 404 : error.code === 'VERSION_CONFLICT' || error.code === 'IDEMPOTENCY_KEY_REUSED' ? 409 : 400, { error: { code: error.code, message: error.message, retryable: error.retryable, severity: error.severity, correlationId: traceId, details: error.details } }, traceId)
-  return write(response, 500, { error: { code: 'CHANGE_CASE_COMMAND_FAILED', message: 'The Change Case command could not be completed.', retryable: true, severity: 'error', correlationId: traceId } }, traceId)
+  return write(response, 500, { error: { code: 'CHANGE_CASE_COMMAND_FAILED', message: 'The Change Case command could not be completed.', retryable: true, severity: 'error', correlationId: traceId, ...(process.env.ADX_TEST_AUTH === '1' ? { details: { cause: error instanceof Error ? error.message : String(error) } } : {}) } }, traceId)
 }
 
 function decisionFor({ session, resource, action }) {
@@ -87,7 +95,7 @@ const server = createServer(async (request, response) => {
     } catch { return write(response, 401, { code: 'OIDC_CALLBACK_REJECTED' }, traceId) }
   }
   if (process.env.ADX_TEST_AUTH === '1' && url.pathname === '/__test/session') {
-    const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'bob' ? bob : null
+    const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'approver' ? approver : actor === 'bob' ? bob : null
     if (!principal) return write(response, 400, { code: 'UNKNOWN_TEST_PRINCIPAL' }, traceId)
     const token = sessions.create(principal, memberships[actor]); audit({ type: 'session.login', principalId: principal.id, testOnly: true })
     return write(response, 201, { token, principal: { id: principal.id, type: principal.type } }, traceId)
@@ -112,7 +120,7 @@ const server = createServer(async (request, response) => {
     try { const result = await changeCases.create({ scope, principal: session.principal, title: body.title.trim(), riskTier: body.riskTier, idempotencyKey, correlationId: traceId }); return write(response, result.deduplicated ? 200 : 201, result, traceId) } catch (error) { return commandError(response, error, traceId) }
   }
 
-  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions))?$/i)
+  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-decision|governance|story-review))?$/i)
   if (changeCaseMatch) {
     const [, workspaceId, changeCaseId, operation] = changeCaseMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
     if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
@@ -125,10 +133,16 @@ const server = createServer(async (request, response) => {
     if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
     if (request.method === 'GET' && !operation) return write(response, 200, { changeCase: current }, traceId)
     if (request.method === 'GET' && operation === 'timeline') return write(response, 200, { events: await changeCases.timeline(scope, changeCaseId) }, traceId)
+    if (request.method === 'GET' && operation === 'governance') return write(response, 200, await changeCases.intakeView(scope, changeCaseId), traceId)
+    if (request.method === 'GET' && operation === 'story-review') return writeHtml(response, 200, storyReviewPage(current, await changeCases.intakeView(scope, changeCaseId)), traceId)
     const body = await readJson(request); const idempotencyKey = request.headers['idempotency-key']
     try {
       if (request.method === 'POST' && operation === 'draft' && typeof body?.title === 'string') return write(response, 200, await changeCases.editDraft({ scope, principal: session.principal, changeCaseId, title: body.title.trim(), expectedVersion: body.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
       if (request.method === 'POST' && operation === 'transitions' && typeof body?.toState === 'string') return write(response, 200, await changeCases.transition({ scope, principal: session.principal, changeCaseId, toState: body.toState, expectedVersion: body.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
+      if (request.method === 'POST' && operation === 'intake') return write(response, 200, await changeCases.captureIntent({ scope, principal: session.principal, changeCaseId, intent: body?.intent, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
+      if (request.method === 'POST' && operation === 'classify') return write(response, 200, await changeCases.classifyIntake({ scope, principal: session.principal, changeCaseId, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
+      if (request.method === 'POST' && operation === 'stories') return write(response, 200, await changeCases.generateStories({ scope, principal: session.principal, changeCaseId, stories: body?.stories, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
+      if (request.method === 'POST' && operation === 'story-decision') return write(response, 200, await changeCases.decideStories({ scope, principal: session.principal, changeCaseId, storyDigest: body?.storyDigest, decision: body?.decision, rationale: body?.rationale, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
       return write(response, 400, { error: { code: 'CHANGE_CASE_COMMAND_INVALID', message: 'The Change Case command is invalid.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
     } catch (error) { return commandError(response, error, traceId) }
   }
