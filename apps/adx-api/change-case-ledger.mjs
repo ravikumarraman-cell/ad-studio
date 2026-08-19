@@ -63,7 +63,7 @@ export function applyChangeCaseEvent(projection, event) {
   if (event.eventType === 'ChangeCaseStateChanged.v1') return Object.freeze({ ...projection, state: event.payload.toState, projectionVersion: event.sequence, updatedAt: event.occurredAt })
   if (event.eventType === 'ChangeCaseRiskClassified.v1') return Object.freeze({ ...projection, riskTier: event.payload.riskTier, state: event.payload.toState, projectionVersion: event.sequence, updatedAt: event.occurredAt })
   if (['ChangeCaseIntakeCaptured.v1', 'ChangeCaseStoriesGenerated.v1', 'ChangeCaseStoryApproved.v1', 'ChangeCaseStoryRejected.v1'].includes(event.eventType)) return Object.freeze({ ...projection, state: event.payload.toState ?? projection.state, projectionVersion: event.sequence, updatedAt: event.occurredAt })
-  if (['ChangeCaseDesignCaptured.v1', 'ChangeCaseDesignApproved.v1', 'ChangeCaseDesignRejected.v1'].includes(event.eventType)) return Object.freeze({ ...projection, state: event.payload.toState ?? projection.state, projectionVersion: event.sequence, updatedAt: event.occurredAt })
+  if (['ChangeCaseDesignCaptured.v1', 'ChangeCaseDesignExceptionRecorded.v1', 'ChangeCaseDesignApproved.v1', 'ChangeCaseDesignRejected.v1'].includes(event.eventType)) return Object.freeze({ ...projection, state: event.payload.toState ?? projection.state, projectionVersion: event.sequence, updatedAt: event.occurredAt })
   throw new ChangeCaseError('EVENT_TYPE_UNKNOWN', `Unsupported Change Case event type: ${event.eventType}.`, { severity: 'error' })
 }
 
