@@ -1,0 +1,26 @@
+import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
+
+export function createContextNode({ nodeId, kind, repositoryId, contentDigest, provenance, observedAt, maxAgeMs, labels = [] }) {
+  if (!text(nodeId) || !['CODE_SYMBOL','OWNER','API','DEPENDENCY','DOCUMENT'].includes(kind) || !text(repositoryId) || !digest(contentDigest) || !object(provenance) || !text(provenance.source) || !Number.isFinite(observedAt) || !Number.isInteger(maxAgeMs) || maxAgeMs < 1 || !Array.isArray(labels)) throw new ChangeCaseError('CONTEXT_NODE_INVALID', 'Context nodes require type, repository, digest, provenance, freshness, and labels.')
+  return Object.freeze({ nodeId, kind, repositoryId, contentDigest, provenance: Object.freeze({ source: provenance.source.trim(), reference: provenance.reference ?? null, trusted: false }), observedAt, maxAgeMs, labels: Object.freeze([...new Set(labels)].sort()), nodeDigest: sha256({ nodeId, kind, repositoryId, contentDigest, provenance: { source: provenance.source.trim(), reference: provenance.reference ?? null }, observedAt, maxAgeMs, labels: [...new Set(labels)].sort() }) })
+}
+
+export function assessContextFreshness(node, now = Date.now()) { if (!node?.nodeDigest) throw new ChangeCaseError('CONTEXT_NODE_INVALID', 'A valid context node is required.'); const ageMs = now - node.observedAt; return Object.freeze({ status: ageMs <= node.maxAgeMs ? 'FRESH' : 'STALE', ageMs, nodeDigest: node.nodeDigest }) }
+
+export class TenantContextGraph {
+  #nodes = new Map()
+  #edges = new Map()
+  addNode(scope, node) { const key = tenant(scope); const nodes = this.#nodes.get(key) ?? new Map(); const existing = nodes.get(node.nodeDigest); if (existing) return Object.freeze({ accepted: true, deduplicated: true, node: existing }); nodes.set(node.nodeDigest, node); this.#nodes.set(key, nodes); return Object.freeze({ accepted: true, deduplicated: false, node }) }
+  link(scope, { fromDigest, toDigest, relation }) { const key = tenant(scope); const nodes = this.#nodes.get(key); if (!nodes?.has(fromDigest) || !nodes.has(toDigest) || !text(relation)) throw new ChangeCaseError('CONTEXT_EDGE_INVALID', 'Edges require two nodes in the same tenant graph and a relation.'); const edge = Object.freeze({ fromDigest, toDigest, relation: relation.trim(), edgeDigest: sha256({ fromDigest, toDigest, relation: relation.trim() }) }); const edges = this.#edges.get(key) ?? new Map(); if (edges.has(edge.edgeDigest)) return Object.freeze({ accepted: true, deduplicated: true, edge: edges.get(edge.edgeDigest) }); edges.set(edge.edgeDigest, edge); this.#edges.set(key, edges); return Object.freeze({ accepted: true, deduplicated: false, edge }) }
+  query(scope, { repositoryId, now = Date.now() }) { const nodes = [...(this.#nodes.get(tenant(scope))?.values() ?? [])].filter((node) => !repositoryId || node.repositoryId === repositoryId).map((node) => ({ ...node, freshness: assessContextFreshness(node, now) })); return Object.freeze({ nodes: Object.freeze(nodes), edges: Object.freeze([...(this.#edges.get(tenant(scope))?.values() ?? [])]) }) }
+}
+export function createSpecialistRole({ roleId, allowedContextKinds, policyVersion }) { if (!text(roleId) || !Array.isArray(allowedContextKinds) || !allowedContextKinds.length || !text(policyVersion)) throw new ChangeCaseError('SPECIALIST_ROLE_INVALID', 'A specialist role requires an ID, context boundary, and policy version.'); return Object.freeze({ roleId: roleId.trim(), policyVersion: policyVersion.trim(), allowedContextKinds: Object.freeze([...new Set(allowedContextKinds)].sort()), capabilities: Object.freeze({ readContext: true, decide: false, approve: false, execute: false, deploy: false }) }) }
+export function evaluateRoleSelection({ baseline, candidate }) { for (const value of [baseline, candidate]) if (!object(value) || !Number.isFinite(value.quality) || !Number.isFinite(value.cost) || !Number.isFinite(value.latency) || !Number.isFinite(value.evidence) || !Number.isFinite(value.safety) || !Number.isFinite(value.reproducibility) || !Number.isFinite(value.approvalClarity)) throw new ChangeCaseError('ROLE_EVALUATION_INVALID', 'Baseline and candidate role scorecards require quality, cost, latency, evidence, safety, reproducibility, and approval clarity.')
+  const improved = candidate.quality > baseline.quality || candidate.cost < baseline.cost || candidate.latency < baseline.latency || candidate.evidence > baseline.evidence
+  const regressed = candidate.safety < baseline.safety || candidate.reproducibility < baseline.reproducibility || candidate.approvalClarity < baseline.approvalClarity
+  return Object.freeze({ accepted: improved && !regressed, improved, regressed, reason: !improved ? 'NO_MEASURED_VALUE' : regressed ? 'SAFETY_OR_CLARITY_REGRESSION' : 'MEASURED_VALUE_WITHOUT_REGRESSION' })
+}
+const text = (value) => typeof value === 'string' && value.trim()
+const digest = (value) => typeof value === 'string' && value.startsWith('sha256:')
+const object = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+const tenant = (scope) => { if (!text(scope?.organizationId) || !text(scope?.workspaceId)) throw new ChangeCaseError('CONTEXT_SCOPE_INVALID', 'A tenant organization and workspace are required.'); return `${scope.organizationId}:${scope.workspaceId}` }
