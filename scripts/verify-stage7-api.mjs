@@ -39,6 +39,12 @@ try {
   const base = `http://127.0.0.1:${port}`
   const adminSession = await (await fetch(`${base}/__test/session?as=alice`)).json()
   const adminHeaders = { authorization: `Bearer ${adminSession.token}` }
+  const controlPlane = await fetch(`${base}/control-plane`, { headers: adminHeaders })
+  const controlPlaneHtml = await controlPlane.text()
+  assert.equal(controlPlane.status, 200)
+  assert.match(controlPlaneHtml, /Gate A · Define the work/)
+  assert.match(controlPlaneHtml, /Gate D · Verify the change/)
+  assert.match(controlPlaneHtml, /Gate F · Record the outcome/)
   const view = await fetch(`${base}/v1/workspaces/${workspace}/change-cases/${id}/delivery-preview`, { headers: adminHeaders })
   const body = await view.json()
   assert.equal(view.status, 200)

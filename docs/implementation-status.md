@@ -1,9 +1,10 @@
 # ADX implementation status
 
-- **Last updated:** 2026-08-18
+- **Last updated:** 2026-08-19
 - **Source of truth:** [ADX implementation specification](../ADX_TanStack_Implementation_Specification_10_10.md)
 - **Workflow guide:** [ADX main flow](adx-main-flow.md)
-- **Current delivery position:** Stages 0, 1, 2, and 3 are **complete**. The feature-delivery UI is a verified local vertical-slice demonstration; it is not evidence of a completed ADX control plane.
+- **Coding-agent integration guide:** [Connecting coding agents to ADX](coding-agent-integration.md)
+- **Current delivery position:** The React client is an authenticated shell for the real ADX API: it loads authorized workspace Change Cases, creates durable Change Cases, renders gate status, and links to authoritative review routes. It does not itself prove agent execution, external Git/CI mutation, or release activity.
 
 ## Stage dashboard
 
@@ -19,22 +20,22 @@
 | 7 — Git/CI and pull requests | `COMPLETE` | Preview-only, provider-neutral Git delivery contract with registered repository/base-ref boundaries; immutable idempotent preview plans; exact-commit CI/review ingestion; convergence reconciliation; a tenant-authorized Delivery Review surface; and commit-bound approval invalidation on newer previews. No remote provider mutation, merge, or release is enabled. | — |
 | 8 — Controlled release | `IN_PROGRESS` | Control-plane-only release candidate contract with exact preview, evidence, approval, artifact, and policy provenance binding; immutable tenant-scoped candidate and release-decision persistence; simulation-only environment/flag/rollout/metrics adapters; Gate E authorization; pause/resume/rollback plus webhook reconciliation controls; a twelve-scenario game-day suite; and a deny-by-default, non-production integration profile/runbook. | Durable rollout/provider-event persistence, approved real non-production provider configuration, environment-specific game-day evidence, and explicit authorization to enable a provider executor. |
 | 9 — Outcome learning | `LOCAL_CONTROL_PLANE_COMPLETE_PENDING_EXTERNAL_EVIDENCE` | Immutable tenant-scoped outcome records with success/failure taxonomy, incident/rollback links, human override labels, redacted versioned evaluation exports, frozen-baseline comparison, signed completion/outcome coupling, and authenticated Outcome Review reporting. | Real provider-backed release outcomes and operational evaluation evidence. |
-| 10 — Context graph and specialist agents | `IN_PROGRESS` | Tenant-scoped, provenance-labelled untrusted context graph with freshness assessment; no-authority specialist role contracts; and measured role-value selection gates. | Durable context/evaluation persistence and independent review surface. |
+| 10 — Context graph and specialist agents | `IN_PROGRESS` | Tenant-scoped, provenance-labelled untrusted context graph with freshness assessment; no-authority specialist role contracts; measured role-value selection gates; and declaration-only Codex CLI, Claude Code, and GitHub Copilot adapters that are lease-bound and fail closed before execution. | Durable context/evaluation persistence, independent review surface, credential-brokered provider executor, and non-production operational evidence. |
 
 ## Available UI
 
 The authenticated backend control-plane index is available at `/control-plane` after `/auth/login`. It lists authorized Change Cases and links directly to the Story, Design, Evidence, Delivery, and Outcome review surfaces.
 
-The local UI is available from `apps/health-authorization-demo` with `npm run dev`.
+The local UI is available from `apps/health-authorization-demo` with `npm run dev`. At startup, the user explicitly chooses **Real mode** (authenticated API-backed ADX data) or **Guided demo** (a local, fictional, non-writing walkthrough). It proxies `/v1`, `/auth`, and `/control-plane` to the local ADX API on port 3100, so start `npm run api:dev` first for Real mode. Set `ADX_UI_ORIGIN=http://127.0.0.1:4173/` in `.env.local` (the local default) so a successful OIDC callback returns to the React UI rather than the API JSON endpoint.
 
-It currently lets a user:
+It currently lets an authenticated user:
 
-1. start with three fictional health-insurance features or import a compatible CSV;
-2. choose one feature and see its owner, repository, acceptance criteria, and risk tier;
-3. move it through the visible demonstration sequence: Change Case → scope → design → execution → verification → release → outcome;
-4. see an in-memory trace entry after each action.
+1. select an authorized workspace and load its durable Change Cases from the API;
+2. create a durable Change Case with a title and risk tier;
+3. see Gate A–F status and the single current review link for each Change Case; and
+4. open the backend’s authoritative Story, Design, Evidence, Delivery, or Outcome review route.
 
-It deliberately does **not** claim to authorize an agent, make a health-insurance determination, persist a record, execute code, create a pull request, or release software.
+It deliberately does **not** claim to authorize an agent, execute code, create a pull request, merge code, or release software unless the underlying authoritative API has retained proof for that action.
 
 ## UX acceptance bar
 

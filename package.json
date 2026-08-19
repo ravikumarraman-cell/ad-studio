@@ -66,6 +66,7 @@
     "verify:stage9:coupling": "node scripts/verify-stage9-coupling.mjs",
     "verify:stage10": "node scripts/verify-stage10.mjs",
     "verify:stage10:postgres": "node scripts/verify-stage10-postgres.mjs",
+    "verify:coding-agent-adapters": "node scripts/verify-coding-agent-adapters.mjs",
     "verify:feature-import": "node scripts/verify-feature-import.mjs",
     "bootstrap:stage0": "bash scripts/bootstrap-stage0.sh",
     "api:dev": "npm --workspace=@adx/api run dev",
