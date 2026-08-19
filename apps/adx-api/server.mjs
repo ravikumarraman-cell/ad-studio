@@ -11,6 +11,7 @@ import { ChangeCaseError } from './change-case-ledger.mjs'
 import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
 import { PostgresExecutionRepository } from './execution-repository.mjs'
 import { PostgresEvidenceRepository } from './evidence-repository.mjs'
+import { PostgresPreviewDeliveryRepository } from './git-delivery-repository.mjs'
 
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
@@ -32,6 +33,7 @@ const ledgerSigner = createLedgerSigner(process.env)
 const changeCases = process.env.DATABASE_URL && ledgerSigner ? new PostgresChangeCaseRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
 const executions = process.env.DATABASE_URL && ledgerSigner ? new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
 const evidenceRepository = process.env.DATABASE_URL && ledgerSigner ? new PostgresEvidenceRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
+const previewDeliveries = process.env.DATABASE_URL ? new PostgresPreviewDeliveryRepository({ connectionString: process.env.DATABASE_URL }) : null
 const oauthTransactions = new Map()
 
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
@@ -103,7 +105,7 @@ const server = createServer(async (request, response) => {
       const tokens = await exchangeGoogleCode({ code, verifier: transaction.verifier, clientId: process.env.ADX_OIDC_AUDIENCE, clientSecret: process.env.ADX_OIDC_CLIENT_SECRET, redirectUri: process.env.ADX_OIDC_REDIRECT_URI })
       const principal = verifyOidc ? await verifyOidc(tokens.id_token) : null
       if (!principal) return write(response, 401, { code: 'OIDC_TOKEN_REJECTED' }, traceId)
-      const knownMemberships = principal.id === alice.id ? memberships.alice : principal.id === bob.id ? memberships.bob : []
+      const knownMemberships = postgres ? await postgres.memberships(principal.id) : principal.id === alice.id ? memberships.alice : principal.id === bob.id ? memberships.bob : []
       const token = sessions.create(principal, knownMemberships); audit({ type: 'session.login', principalId: principal.id, provider: 'google' })
       response.statusCode = 302; response.setHeader('set-cookie', `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`); response.setHeader('location', '/v1/me'); return response.end()
     } catch { return write(response, 401, { code: 'OIDC_CALLBACK_REJECTED' }, traceId) }
@@ -152,7 +154,7 @@ const server = createServer(async (request, response) => {
     } catch (error) { return commandError(response, error, traceId) }
   }
 
-  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-decision|governance|story-review|design|design-review|design-exception|design-decision|evidence|evidence-review|verification-decision))?$/i)
+  const changeCaseMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)(?:\/(timeline|draft|transitions|intake|classify|stories|story-decision|governance|story-review|design|design-review|design-exception|design-decision|evidence|evidence-review|verification-decision|delivery-preview))?$/i)
   if (changeCaseMatch) {
     const [, workspaceId, changeCaseId, operation] = changeCaseMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
     if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
@@ -168,6 +170,7 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && operation === 'governance') return write(response, 200, await changeCases.intakeView(scope, changeCaseId), traceId)
     if (request.method === 'GET' && operation === 'design') return write(response, 200, await changeCases.designView(scope, changeCaseId), traceId)
     if (request.method === 'GET' && operation === 'evidence') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, { evidence: await evidenceRepository.list(scope, changeCaseId) }, traceId) }
+    if (request.method === 'GET' && operation === 'delivery-preview') { if (!previewDeliveries) return write(response, 503, { code: 'GIT_PREVIEW_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, { previewPlans: await previewDeliveries.list(scope, changeCaseId) }, traceId) }
     if (request.method === 'GET' && operation === 'evidence-review') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); return writeHtml(response, 200, evidenceReviewPage(current, await evidenceRepository.list(scope, changeCaseId)), traceId) }
     if (request.method === 'GET' && operation === 'story-review') return writeHtml(response, 200, storyReviewPage(current, await changeCases.intakeView(scope, changeCaseId)), traceId)
     if (request.method === 'GET' && operation === 'design-review') return writeHtml(response, 200, designReviewPage(current, await changeCases.designView(scope, changeCaseId)), traceId)

@@ -44,6 +44,9 @@ jobs:
       - run: npm run verify:stage5:adversarial
       - run: npm run verify:stage6
       - run: npm run verify:stage6:api
+      - run: npm run verify:stage7
+      - run: npm run verify:stage7:api
+      - run: npm run verify:stage7:providers
       # The API's authorization and Stage 2 gates are Playwright browser tests.
       # Install the lockfile-pinned Chromium before either one runs.
       - run: npx playwright install --with-deps chromium
