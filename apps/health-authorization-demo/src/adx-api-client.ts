@@ -6,6 +6,7 @@ export type CommandResult = { changeCaseId: string; projectionVersion: number; n
 export type ImportFeature = { featureId: string; title: string; description: string; priority: string; owner: string; targetRepository: string; acceptanceCriteria: string; riskTier: string; sourceUrl: string; raw: string }
 export type FeatureImportResult = { featureId: string; title: string; status: 'IMPORTED' | 'REQUIRES_CLARIFICATION' | 'FAILED'; changeCaseId?: string; message?: string }
 export type FeatureImportResponse = { importId: string; policy: 'PARTIAL_SUCCESS_RESUMABLE'; results: FeatureImportResult[] }
+export type PublicGitHubMilestone = { number: number; title: string; description: string; openIssues: number; closedIssues: number; dueOn: string | null; htmlUrl: string }
 export type ApiError = Error & { status?: number; code?: string }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -37,4 +38,12 @@ export async function importFeatures(workspaceId: string, importId: string, feat
     headers: { 'idempotency-key': newIdempotencyKey() },
     body: JSON.stringify({ importId, features }),
   })
+}
+
+export async function listPublicGitHubMilestones(workspaceId: string, owner: string, repository: string): Promise<{ milestones: PublicGitHubMilestone[] }> {
+  return api(`/v1/workspaces/${workspaceId}/github-public/milestones?owner=${encodeURIComponent(owner)}&repository=${encodeURIComponent(repository)}`)
+}
+
+export async function importPublicGitHubMilestone(workspaceId: string, input: { owner: string; repository: string; milestone: number; featureOwner: string; targetRepository: string; riskTier: string }): Promise<FeatureImportResponse> {
+  return api(`/v1/workspaces/${workspaceId}/github-public/milestone-import`, { method: 'POST', headers: { 'idempotency-key': newIdempotencyKey() }, body: JSON.stringify({ ...input, importId: crypto.randomUUID() }) })
 }

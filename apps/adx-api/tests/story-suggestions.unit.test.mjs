@@ -44,6 +44,15 @@ test('only server-approved models can be selected for a suggestion request', asy
   await assert.rejects(() => service.suggest({ changeCase, governance, correlationId: 'trace-denied', model: 'an-unapproved-model' }), { message: /not enabled/ })
 })
 
+test('author-selected plain-text guidance is included in the provider prompt and remains bounded', async () => {
+  let captured
+  const service = createStorySuggestionService({ provider: 'ollama', model: 'local-story-model', fetchImpl: async (url, init) => { captured = JSON.parse(init.body); return response({ response: JSON.stringify(result) }) } })
+  await service.suggest({ changeCase, governance, correlationId: 'trace-template', templateGuidance: 'Generate one story for the consent check before the happy path.' })
+  assert.match(captured.system, /Author-selected story template/)
+  assert.match(captured.system, /consent check/)
+  await assert.rejects(() => service.suggest({ changeCase, governance, correlationId: 'trace-template-too-large', templateGuidance: 'x'.repeat(6_001) }), { message: /6,000 characters or fewer/ })
+})
+
 test('an unsupported provider remains disabled with actionable guidance', () => {
   const service = createStorySuggestionService({ provider: 'unknown', apiKey: 'key', model: 'model', fetchImpl: async () => response({}) })
   assert.equal(service.status().configured, false)

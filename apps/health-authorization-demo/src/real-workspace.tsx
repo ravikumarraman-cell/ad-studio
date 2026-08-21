@@ -16,10 +16,11 @@ type Props = {
   onRefresh: () => void
   onCreate: () => void
   onImport: () => void
+  onImportGitHub: () => void
   modal: ReactNode
 }
 
-export function RealWorkspace({ principal, memberships, activeWorkspace, setWorkspaceId, changeCases, loading, error, onRefresh, onCreate, onImport, modal }: Props) {
+export function RealWorkspace({ principal, memberships, activeWorkspace, setWorkspaceId, changeCases, loading, error, onRefresh, onCreate, onImport, onImportGitHub, modal }: Props) {
   const [selectedId, setSelectedId] = useState('')
   const [cancellationMode, setCancellationMode] = useState<'selected' | 'all' | null>(null)
   const activeCases = changeCases.filter((item) => item.state !== 'CANCELLED')
@@ -43,6 +44,7 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
         <label htmlFor="workspace">Workspace</label>
         <select id="workspace" value={activeWorkspace} onChange={(event) => setWorkspaceId(event.target.value)}>{memberships.map((membership) => <option key={membership.workspaceId} value={membership.workspaceId}>{membership.workspaceId}</option>)}</select>
         <button className="adx-secondary" onClick={onImport}>Import CSV</button>
+        <button className="adx-secondary" onClick={onImportGitHub}>Import GitHub milestone</button>
         <button className="adx-danger adx-clear-workspace" disabled={!cancellableCases.length} onClick={() => setCancellationMode('all')}>Clear open cases</button>
         <button className="adx-primary" onClick={onCreate}>New Change Case</button>
       </section>

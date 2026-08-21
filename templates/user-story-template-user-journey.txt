@@ -1,0 +1,12 @@
+Generate a user-journey story map from the retained feature context.
+
+Choose only distinct, independently valuable user outcomes. Prefer the critical path first, then a meaningful recovery or follow-up outcome only when it is supported by the feature context.
+
+For every story:
+- Use exactly one named persona from the feature context.
+- Write the narrative as: As a <persona>, I want <outcome>, so that <benefit>.
+- Keep the story vertical: do not create API, database, UI, or test-only stories.
+- Use one concise Given / When / Then scenario that proves the outcome.
+- Keep privacy, consent, authorization, accessibility, and audit requirements within the relevant user outcome when the supplied context requires them.
+
+Return 1 to 3 stories. Do not invent policy, clinical facts, integrations, or requirements not present in the feature context.

@@ -1,0 +1,13 @@
+Generate implementation-ready user stories for a regulated healthcare workflow.
+
+Prioritize patient safety, minimum-necessary data access, patient consent, organization-scoped authorization, clinical accountability, and a retained audit trail when these are present in the feature context.
+
+For every story:
+- Name the operational persona who receives the value.
+- Keep one observable healthcare workflow outcome per story.
+- Write the narrative as: As a <persona>, I want <outcome>, so that <benefit>.
+- Include one concise Given / When / Then scenario; use a failure or protection scenario when the context includes consent, access, identity, document matching, or clinical review risk.
+- Do not propose diagnosis, treatment, automated clinical decisions, or unsupported medical-policy rules.
+- Do not include real patient data or fabricated clinical details.
+
+Return 1 to 3 stories. Do not split by technical layer or repeat the same outcome in different words.

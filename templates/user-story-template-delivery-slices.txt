@@ -1,0 +1,12 @@
+Generate small, release-oriented user stories from the retained feature context.
+
+Select the smallest independently releasable user outcomes that collectively move the feature forward. Prefer a usable happy-path story, then a necessary validation, recovery, or status-visible story only when it has distinct user value.
+
+For every story:
+- Use one persona, one goal, and one measurable benefit.
+- Write the narrative as: As a <persona>, I want <outcome>, so that <benefit>.
+- Avoid technical task wording such as build an API, create a table, add logging, or write tests.
+- Include exactly one concise Given / When / Then acceptance scenario.
+- Respect the supplied risk tier and do not omit an explicit safety, authorization, accessibility, or audit requirement that is essential to the stated outcome.
+
+Return 1 to 3 non-overlapping stories. Do not invent requirements absent from the feature context.
