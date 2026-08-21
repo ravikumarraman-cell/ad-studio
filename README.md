@@ -32,6 +32,7 @@ flowchart LR
 | Run a complete, small reference application | Build and smoke-test **Health-X**, the fictional TanStack Start delivery slice with three user-facing features. |
 | Develop the real control plane | Start PostgreSQL and MinIO, configure `.env.local`, migrate, then run the API and UI. |
 | Understand the governance model | Read the [ADX main flow](docs/adx-main-flow.md). |
+| Configure and use Gate D locally | Read the [independent verifier guide](docs/independent-verifier.md). |
 | Check the implementation boundary | Read [implementation status](docs/implementation-status.md). |
 
 ### The five-minute demo
@@ -90,6 +91,49 @@ This distinction matters. A passing local build is meaningful implementation evi
 | Implementer activity can be confused with independent proof. | A fresh, read-only verifier produces a separate evidence bundle. |
 | An external webhook can be retried blindly after failure. | Duplicate, delayed, and ambiguous observations are reconciled deliberately. |
 | A release can be remembered as successful without an outcome. | A durable outcome record completes the Change Case. |
+
+## How ADX can shorten feature-to-delivery time
+
+ADX is designed to shorten the elapsed time from a feature requirement to a **release-ready, governed change**. The claim is not that a model makes engineering instant, or that approval and release controls should be removed. The claim is that ADX reduces avoidable queue time, repeated clarification, and late rework while retaining the controls that make a release defensible.
+
+### The causal mechanisms
+
+| Common source of delay | ADX mechanism | Why elapsed time can fall without weakening the gate |
+| --- | --- | --- |
+| Requirements, risk, decisions, and evidence are scattered across tickets, chat, CI, and review tools. | A tenant-scoped Change Case retains intent, source material, risk explanation, story contract, design package, evidence, delivery context, and outcome. | A reviewer can decide from one current record instead of reconstructing context or waiting for status updates from several systems. |
+| Ambiguous requirements are discovered after implementation starts. | Retained intent, explainable risk classification, and editable BDD story contracts are independently approved before design and execution. Optional AI suggestions accelerate drafting but are not saved until a person curates and submits them. | More uncertainty is resolved while revision cost is low; a changed story digest invalidates the old approval rather than letting stale assumptions travel downstream. |
+| Security, migration, dependency, and verification concerns arrive late in review. | The versioned design package requires architecture, interface/schema, migration, threats and residual risk, dependencies/licenses, and test strategy before independent design approval. | The reviewer sees the complete decision frame at one gate, with visible blockers, instead of scheduling a sequence of rediscovery loops. |
+| Coding automation waits for broad access, then produces work that cannot be safely trusted. | Execution is bounded by a signed lease with repository, capability, time, budget, network, and workspace limits. | Delegation can begin from an explicit authorization boundary; it does not require a person to manually supervise every low-level action or accept unbounded agent risk. |
+| “Tests passed” and “ready to release” are inferred from implementer activity. | A fresh, read-only verifier produces candidate-digest-pinned independent evidence; later delivery decisions bind to exact preview and evidence digests. | Failed or stale evidence stops at the responsible gate, reducing late-stage rework and clarification before delivery. |
+| Retries and provider events create ambiguous delivery status. | Idempotency, immutable plans, deduplication, reconciliation, and retained outcome records make status explicit. | Teams spend less time determining whether a change actually happened and can respond to a known state rather than guessing. |
+
+The relevant lead-time model is:
+
+```text
+Feature-to-release-ready time
+  = active discovery + active engineering + active verification
+  + handoff/queue time + rework from late discovery + status-reconciliation time
+```
+
+ADX does not claim to reduce the intrinsic work required to understand a difficult change, implement it, or verify it. It targets the final three terms: unnecessary handoffs, preventable late rework, and ambiguous status. For appropriately scoped work, those terms are often where calendar time accumulates.
+
+### What ADX can and cannot claim today
+
+**Defensible now:** the local control plane can produce a durable, independently reviewable, digest-bound path from feature intent through a release-ready candidate. Its workflow, authorization boundaries, invalidation behavior, verification evidence, and preview-delivery controls are implemented and verified in the repository.
+
+**Not yet defensible as a measured fact:** a percentage reduction in production lead time, deployment frequency, change-failure rate, or mean time to restore. ADX's current Git/CI flow is preview-only, and its controlled-release adapters are simulation-only pending an approved non-production provider integration and environment-specific operational evidence. It must not be described as already accelerating production releases.
+
+### How to prove the claim in an organization
+
+Run a time-bounded baseline and comparison using the same feature classes, risk tiers, repositories, and release policies. Do not compare a simple copy change using ADX with a high-risk migration using the existing process.
+
+1. Define timestamps from retained events: requirement accepted, story approved, design approved, execution started, candidate verified, delivery-ready, authorized release, and production outcome.
+2. Measure median and p90 elapsed time for each transition and for the full requirement-to-release interval. Segment by risk tier, change size, team, and repository.
+3. Measure the mechanisms, not only the outcome: approval wait time, number of requirement/design revisions, time spent awaiting clarification, verification failures, reconciliation events, and rollback or incident rate.
+4. Use a matched pilot, randomized rollout where practical, or a stepped-wedge adoption across comparable teams. Keep the same independent-approval and release-policy requirements in both groups.
+5. Treat an improvement as credible only when lead-time improvement does not come with worse change-failure rate, rollback rate, security findings, policy exceptions, or reviewer-comprehension results.
+
+The success criterion is therefore not “ship faster at any cost.” It is a statistically and operationally supported reduction in elapsed delivery time while safety, reproducibility, approval clarity, and outcome quality remain at least as good as the baseline.
 
 ## Run ADX
 

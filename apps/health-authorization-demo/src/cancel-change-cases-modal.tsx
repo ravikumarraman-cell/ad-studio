@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react'
-import { cancelChangeCase, ChangeCase, Membership } from './adx-api-client'
+import { ApiError, cancelChangeCase, ChangeCase, Membership } from './adx-api-client'
 
 type Mode = 'selected' | 'all'
 type Props = { workspace?: Membership; selected?: ChangeCase; changeCases: ChangeCase[]; mode: Mode; onClose: () => void; onCompleted: () => void }
@@ -25,6 +25,11 @@ export function CancelChangeCasesModal({ workspace, selected, changeCases, mode,
       try {
         await cancelChangeCase(workspace.workspaceId, changeCase)
       } catch (error) {
+        if ((error as ApiError).status === 401) {
+          setSubmitting(false)
+          setMessage('Your session has expired. No Change Cases were cleared. Sign in again to continue.')
+          return
+        }
         failures.push(`${changeCase.title}: ${error instanceof Error ? error.message : 'Could not cancel this Change Case.'}`)
       }
     }
@@ -36,5 +41,7 @@ export function CancelChangeCasesModal({ workspace, selected, changeCases, mode,
     onCompleted()
   }
 
-  return <div className="adx-modal-backdrop"><form className="adx-modal adx-cancel-modal" onSubmit={submit}><div><p className="adx-eyebrow">WORKSPACE CLEANUP</p><h2>{title}</h2><p>{mode === 'all' ? 'This removes all open Change Cases from the active work list.' : 'This removes the selected Change Case from the active work list.'} ADX records a signed cancellation event and retains the original history for audit.</p></div><p className="adx-cancel-summary"><strong>{targets.length}</strong> {targets.length === 1 ? 'Change Case will be cancelled.' : 'Change Cases will be cancelled.'}</p><label>Type <strong>{phrase}</strong> to confirm<input value={confirmation} onChange={(event) => setConfirmation(event.target.value.toUpperCase())} autoComplete="off" autoFocus /></label>{message && <p className="adx-error">{message}</p>}<div className="adx-modal-actions"><button type="button" className="adx-secondary" disabled={submitting} onClick={onClose}>Keep cases</button><button className="adx-danger" disabled={submitting || confirmation !== phrase || !targets.length}>{submitting ? 'Cancelling…' : action}</button></div></form></div>
+  const authenticationRequired = message.startsWith('Your session has expired.')
+
+  return <div className="adx-modal-backdrop"><form className="adx-modal adx-cancel-modal" onSubmit={submit}><div><p className="adx-eyebrow">WORKSPACE CLEANUP</p><h2>{title}</h2><p>{mode === 'all' ? 'This removes all open Change Cases from the active work list.' : 'This removes the selected Change Case from the active work list.'} ADX records a signed cancellation event and retains the original history for audit.</p></div><p className="adx-cancel-summary"><strong>{targets.length}</strong> {targets.length === 1 ? 'Change Case will be cancelled.' : 'Change Cases will be cancelled.'}</p><label>Type <strong>{phrase}</strong> to confirm<input value={confirmation} onChange={(event) => setConfirmation(event.target.value.toUpperCase())} autoComplete="off" autoFocus /></label>{message && <p className="adx-error">{message}</p>}<div className="adx-modal-actions">{authenticationRequired && <a className="adx-primary" href="/auth/login">Sign in again</a>}<button type="button" className="adx-secondary" disabled={submitting} onClick={onClose}>Keep cases</button><button className="adx-danger" disabled={submitting || authenticationRequired || confirmation !== phrase || !targets.length}>{submitting ? 'Cancelling…' : action}</button></div></form></div>
 }

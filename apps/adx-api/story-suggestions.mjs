@@ -120,7 +120,7 @@ function ollamaRequest({ endpoint, model, changeCase, governance, correlationId 
   // A local CPU model can otherwise spend minutes elaborating on a small feature.
   // The response contract only needs a compact set of draft cards; authors retain
   // complete control to edit or add stories after generation.
-  return Object.freeze({ url: `${endpoint}/api/generate`, init: { method: 'POST', headers: { 'content-type': 'application/json', 'x-client-request-id': correlationId }, body: JSON.stringify({ model, system: `${prompt.instructions} For this latency-sensitive local request, generate no more than three stories and one scenario per story. Keep every field concise. Finish the JSON object before stopping.`, prompt: prompt.context, format: storyResponseSchema(), stream: false, keep_alive: '10m', options: { temperature: 0.2, num_ctx: 2048, num_predict: 320 } }) } })
+  return Object.freeze({ url: `${endpoint}/api/generate`, init: { method: 'POST', headers: { 'content-type': 'application/json', 'x-client-request-id': correlationId }, body: JSON.stringify({ model, system: `${prompt.instructions} For this latency-sensitive local request, generate no more than three stories and one scenario per story. Keep every field concise. Finish the JSON object before stopping.`, prompt: prompt.context, format: storyResponseSchema(), stream: false, keep_alive: '10m', options: { temperature: 0.2, num_ctx: 2048, num_predict: 768 } }) } })
 }
 
 function storyResponseSchema() {

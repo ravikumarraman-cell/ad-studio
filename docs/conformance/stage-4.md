@@ -1,7 +1,7 @@
 # Stage 4 conformance record — Design, architecture, and security gates
 
 - **Status:** `COMPLETE`
-- **Last updated:** 2026-08-19
+- **Last updated:** 2026-08-21
 - **Requirements in scope:** `STG-005`, `POL-001`, `EVD-002`, `GOV-002`
 
 ## Delivery order
@@ -10,7 +10,7 @@
 2. Calculate one canonical design digest across all artifacts.
 3. Bind an independent design review decision to that digest and invalidate it when the package changes.
 4. Apply separation of duty and bounded exception expiry before the Change Case can enter the execution-ready state.
-5. Present residual risk, exceptions, and the single safe next action in a reviewer workbench.
+5. Present residual risk, exceptions, review readiness, structured retained artifacts, and a digest-bound approve/request-changes decision in a reviewer workbench.
 6. Retain local and hosted-CI evidence before declaring the gate complete.
 
 ## Acceptance matrix
@@ -22,7 +22,7 @@
 | STG4-003 | Required reviewer role and separation of duty are enforced. | Reviewer-role and author self-approval negative API tests. | Verified locally and in hosted CI |
 | STG4-004 | An expired exception blocks dependent approval/advance actions. | Expiry test with stable `DESIGN_EXCEPTION_EXPIRED` error. | Verified locally and in hosted CI |
 | STG4-005 | Material design changes invalidate approvals bound to the prior digest. | Stale-approval API test after execution-ready revision. | Verified locally and in hosted CI |
-| STG4-006 | Reviewer UX explains the design, residual risk, exceptions, and safe next action. | Authenticated browser deep-link and reload test. | Verified locally and in hosted CI |
+| STG4-006 | Reviewer UX explains the design, residual risk, exceptions, review readiness, and the independent decision workflow. | Authenticated browser flow covering evidence display, digest visibility, rationale entry, approval, and post-decision state. | Verified locally |
 
 ## Local evidence
 

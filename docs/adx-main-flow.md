@@ -107,6 +107,23 @@ For R2 and higher, a Change Case cannot enter `READY_FOR_EXECUTION` without the 
 
 **Exit condition:** current design digest is independently approved and no blocking exception exists.
 
+### How to perform a Design Review
+
+1. Open the Change Case's `/design-review` surface while signed in with a workspace role that can perform `resource.review`. The signed-in identity indicator identifies the current reviewer.
+2. Read the **Decision frame** first. It explains that the decision applies only to the displayed design digest; a later package revision invalidates the approval and must be reviewed again.
+3. Use **Review readiness** to identify blocking conditions before making a decision:
+  - the design package must be captured;
+  - the threat model must contain mitigations and residual-risk entries;
+  - the verification strategy must name at least one test layer;
+  - no exception for the current digest may be expired.
+4. Review the evidence cards for architecture, interface and schema impact, migration plan, dependencies and licenses, verification strategy, and the package author/revision. Review the threat-model table to confirm that each threat has a mitigation and an understood residual risk.
+5. Record one independent decision with a concise rationale:
+  - **Approve design** moves the Change Case to `READY_FOR_EXECUTION` when all policy checks pass.
+  - **Request changes** returns it to `DESIGN_REVIEW`; the rationale should identify the unresolved design, risk, migration, dependency, or verification concern.
+6. Confirm the resulting status. The decision is retained against the exact design digest and approval history records the reviewer and rationale.
+
+The design author cannot approve their own package. A viewer without `resource.review` can inspect the evidence but cannot record a decision. If the page reports a missing package, expired exception, self-approval, insufficient permission, or an existing approval, resolve that condition instead of attempting to bypass the gate.
+
 ## 3. Bounded execution — Gate C
 
 Execution authority is a signed lease, not a prompt. The lease intersects policy, role, tenant, repository, capability, budget, time, and network boundaries. The sandbox and gateway enforce those limits below the agent process.

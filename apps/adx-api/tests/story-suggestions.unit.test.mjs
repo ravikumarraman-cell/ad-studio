@@ -70,7 +70,7 @@ test('Ollama generates structured local story suggestions without an API key', a
   assert.equal(JSON.parse(captured.init.body).stream, false)
   assert.equal(JSON.parse(captured.init.body).keep_alive, '10m')
   assert.equal(JSON.parse(captured.init.body).options.num_ctx, 2048)
-  assert.equal(request.options.num_predict, 320)
+  assert.equal(request.options.num_predict, 768)
   assert.match(request.system, /1 to 3 distinct/)
 })
 
