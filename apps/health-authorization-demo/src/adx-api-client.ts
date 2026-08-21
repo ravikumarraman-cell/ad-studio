@@ -22,6 +22,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function newIdempotencyKey() { return crypto.randomUUID() }
 
+export async function cancelChangeCase(workspaceId: string, changeCase: ChangeCase): Promise<CommandResult> {
+  if (typeof changeCase.projectionVersion !== 'number') throw new Error('The Change Case version is unavailable. Refresh the workspace and try again.')
+  return api<CommandResult>(`/v1/workspaces/${workspaceId}/change-cases/${changeCase.id}/transitions`, {
+    method: 'POST',
+    headers: { 'idempotency-key': newIdempotencyKey() },
+    body: JSON.stringify({ toState: 'CANCELLED', expectedVersion: changeCase.projectionVersion }),
+  })
+}
+
 export async function importFeatures(workspaceId: string, importId: string, features: ImportFeature[]): Promise<FeatureImportResponse> {
   return api<FeatureImportResponse>(`/v1/workspaces/${workspaceId}/feature-imports`, {
     method: 'POST',

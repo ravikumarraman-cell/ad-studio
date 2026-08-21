@@ -44,4 +44,27 @@ The Story Breakdown screen does not call a coding agent or fabricate requirement
 
 ## AI-assisted option
 
-When the API has `ADX_STORY_AI_API_KEY` and `ADX_STORY_AI_MODEL` configured, the Story Breakdown screen can request an AI-generated preview. Only the feature title, retained outcome, acceptance criteria, repository, risk tier, and asset classifications are sent to the model. The user must select one or more suggestions, can edit every accepted story, and must explicitly submit the final set. Suggestions are not persisted, not automatically approved, and never start a coding agent.
+When the API has `ADX_STORY_AI_PROVIDER` and `ADX_STORY_AI_MODEL` configured, the Story Breakdown screen can request an AI-generated preview. Supported providers are `openai` (the default for existing configurations), `gemini`, and `ollama`. OpenAI and Gemini require `ADX_STORY_AI_API_KEY`; local Ollama does not. `ADX_STORY_AI_MODELS` optionally supplies a comma-separated, server-approved model allow-list; the author chooses from those models in the Story Generation screen. The API rejects all other model names. Only the feature title, retained outcome, acceptance criteria, repository, risk tier, and asset classifications are sent to the model. The user must select one or more suggestions, can edit every accepted story, and must explicitly submit the final set. Suggestions are not persisted, not automatically approved, and never start a coding agent.
+
+For Gemini, create a server-side key in Google AI Studio and configure:
+
+```env
+ADX_STORY_AI_PROVIDER=gemini
+ADX_STORY_AI_API_KEY=your_google_ai_studio_key
+ADX_STORY_AI_MODEL=your_preferred_free-tier-enabled_gemini_model
+ADX_STORY_AI_MODELS=your_preferred_free-tier-enabled_gemini_model,another-approved-free-tier-model
+```
+
+Use a model marked Free Tier in Google AI Studio for local experimentation, and keep the API key out of browser variables and source control. Gemini Free Tier inputs and outputs may be used by Google to improve its products; do not send company, customer, or regulated data without approval. See [Google's Gemini pricing and data-use table](https://ai.google.dev/gemini-api/docs/pricing).
+
+For a fully local model, run Ollama on the same machine and configure its loopback endpoint:
+
+```env
+ADX_STORY_AI_PROVIDER=ollama
+ADX_STORY_AI_API_KEY=
+ADX_STORY_AI_MODEL=your-installed-ollama-model
+ADX_STORY_AI_MODELS=your-installed-ollama-model,another-installed-ollama-model
+ADX_STORY_AI_OLLAMA_BASE_URL=http://127.0.0.1:11434
+```
+
+ADX accepts only `http://127.0.0.1`, `http://localhost`, or `http://[::1]` for this provider, so the generated feature context remains local. Ollama's generation API is called with structured JSON output and no streaming. See [Ollama's local API documentation](https://docs.ollama.com/api/generate).

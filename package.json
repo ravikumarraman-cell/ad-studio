@@ -32,6 +32,9 @@
   },
   "scripts": {
     "dev": "npm --workspace=adx-health-authorization-demo run dev",
+    "health-x:dev": "npm --workspace=@adx/health-x run dev",
+    "health-x:build": "npm --workspace=@adx/health-x run build",
+    "verify:health-x": "node scripts/verify-health-x.mjs",
     "verify:stage0": "node scripts/verify-stage0.mjs",
     "verify:stage1": "node scripts/verify-stage1.mjs",
     "verify:stage2": "node scripts/verify-stage2.mjs",

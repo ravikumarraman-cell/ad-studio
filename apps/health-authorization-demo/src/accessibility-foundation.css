@@ -1,0 +1,37 @@
+/* Shared readability baseline for every React ADX surface. */
+:root{
+  --adx-ink:#102b43;
+  --adx-copy:#294b63;
+  --adx-muted:#42647a;
+  --adx-link:#075f91;
+  --adx-focus:#d98a00;
+  --adx-border:#7895a8;
+  --adx-surface:#ffffff;
+  --adx-surface-subtle:#f3f8fc;
+  --adx-success:#126b40;
+  --adx-danger:#912526;
+}
+
+body{color:var(--adx-ink);background:#f4f7fa}
+button,input,select,textarea{color:var(--adx-ink)}
+button:disabled{cursor:not-allowed;opacity:.62}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--adx-focus);outline-offset:3px}
+input,select,textarea{border:2px solid var(--adx-border);background:var(--adx-surface);line-height:1.45}
+input::placeholder,textarea::placeholder{color:var(--adx-muted);opacity:1}
+
+.adx-primary,.primary{background:#075f91;color:#fff}
+.adx-primary:hover,.primary:hover{background:#06496f}
+.adx-secondary,.secondary{background:#e4f0f7;color:#123f5d}
+.adx-eyebrow,.eyebrow{color:#365b74}
+.adx-error{color:var(--adx-danger)!important;background:#fff1f1;border:1px solid #d88787}
+.notice{color:#145f39}
+
+/* Small helper copy must still be readable against a white or pale surface. */
+.adx-focus-question,.adx-next-action p,.adx-demo-copy>p:not(.adx-eyebrow),
+.adx-demo-detail dt,.adx-demo-steps button,.adx-demo-steps small,
+.adx-agent-choices small,.adx-workflow-map li small,.adx-workflow-map p:not(.adx-eyebrow),
+.feature-row small,.feature-hero p:not(.eyebrow),.feature-spec dt{color:var(--adx-muted)}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}
+}

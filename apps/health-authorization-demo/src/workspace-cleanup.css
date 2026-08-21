@@ -1,0 +1,69 @@
+.adx-danger {
+  border: 1px solid #bd4a4a;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+  color: #962828;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.adx-danger:hover {
+  background: #fff1f1;
+}
+
+.adx-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.adx-clear-workspace {
+  margin-left: auto;
+}
+
+.adx-delete-case {
+  margin-top: 18px;
+}
+
+.adx-cancel-modal {
+  max-width: 540px;
+}
+
+.adx-cancel-summary {
+  padding: 13px 15px;
+  border-left: 4px solid #c94f4f;
+  background: #fff6f5;
+  color: #6f2525;
+}
+
+.adx-cancel-summary strong {
+  font-size: 1.15rem;
+}
+
+.adx-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 700px) {
+  .adx-clear-workspace {
+    margin-left: 0;
+  }
+
+  .adx-workspace {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .adx-workspace select {
+    min-width: 0;
+  }
+
+  .adx-modal-actions > * {
+    flex: 1;
+  }
+}
