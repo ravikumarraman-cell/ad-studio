@@ -33,6 +33,7 @@ flowchart LR
 | Develop the real control plane | Start PostgreSQL and MinIO, configure `.env.local`, migrate, then run the API and UI. |
 | Understand the governance model | Read the [ADX main flow](docs/adx-main-flow.md). |
 | Configure and use Gate D locally | Read the [independent verifier guide](docs/independent-verifier.md). |
+| Start a digest-bound local manual preview | Read the [local verified preview runbook](docs/runbooks/local-verified-preview.md). |
 | Check the implementation boundary | Read [implementation status](docs/implementation-status.md). |
 
 ### The five-minute demo

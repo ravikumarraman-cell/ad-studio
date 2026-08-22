@@ -22,7 +22,7 @@ export async function provisionVerificationSandbox({ candidateRoot, image, adapt
   const scratchRoot = await mkdtemp(join(tmpdir(), 'adx-verifier-'))
   try {
     const candidate = join(scratchRoot, 'candidate'); await cp(source, candidate, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (path) => shouldCopyCandidatePath(source, path) })
-    const candidateDigest = await digestTree(candidate)
+    const candidateDigest = await digestCandidateTree(candidate)
     const runtimeImageDigest = `sha256:${image.split('@sha256:')[1]}`
     const configDigest = sha256(config)
     const command = verifiedAdapter.command(config)
@@ -38,7 +38,7 @@ export async function executeVerificationSandbox(plan, { onOutput } = {}) {
     const capture = (chunk) => { const remaining = Math.max(0, plan.maxOutputBytes - outputBytes); outputBytes += chunk.length; if (remaining) { const visible = chunk.subarray(0, remaining); output += visible; onOutput?.(visible) }; if (outputBytes > plan.maxOutputBytes && !quotaExceeded) { quotaExceeded = true; stop() } }
     child.stdout.on('data', capture); child.stderr.on('data', capture)
     child.once('error', async (error) => { clearTimeout(timeout); await cleanupVerification(plan); reject(new ChangeCaseError('VERIFIER_EXECUTION_FAILED', 'Verification sandbox process could not start.', { severity: 'error', details: { cause: error.message } })) })
-    child.once('close', async (code, signal) => { clearTimeout(timeout); const postRunDigest = await digestTree(plan.candidate); const candidateMutated = postRunDigest !== plan.candidateDigest; const result = Object.freeze({ code, signal, output, outputBytes: Math.min(outputBytes, plan.maxOutputBytes), quotaExceeded, timedOut, candidateMutated, outputDigest: sha256(output) }); await cleanupVerification(plan); resolvePromise(result) })
+    child.once('close', async (code, signal) => { clearTimeout(timeout); const postRunDigest = await digestCandidateTree(plan.candidate); const candidateMutated = postRunDigest !== plan.candidateDigest; const result = Object.freeze({ code, signal, output, outputBytes: Math.min(outputBytes, plan.maxOutputBytes), quotaExceeded, timedOut, candidateMutated, outputDigest: sha256(output) }); await cleanupVerification(plan); resolvePromise(result) })
   })
 }
 
@@ -76,8 +76,9 @@ function validateVerifierAdapter(adapter) {
   return Object.freeze({ verifierId: adapter.verifierId.trim(), version: adapter.version.trim(), category: typeof adapter.category === 'string' ? adapter.category : 'CUSTOM', tool, timeoutMs, maxOutputBytes, command: (config) => { const command = adapter.command(config); if (!Array.isArray(command) || !command.length || !command.every((part) => typeof part === 'string' && part.length)) throw new ChangeCaseError('VERIFIER_COMMAND_INVALID', 'Verifier commands must be a non-empty argument vector.'); return Object.freeze([...command]) } })
 }
 function shouldCopyCandidatePath(root, path) { const candidatePath = relative(root, path); if (!candidatePath) return true; const parts = candidatePath.split('/'); return !parts.some((part) => ignoredCandidateDirectories.has(part) || sensitiveCandidateFileNames.has(part) || part.endsWith('.pem') || part.endsWith('.key')) }
-async function digestTree(root) { const files = []; await collectTree(root, root, files); return sha256(files.sort((left, right) => left.path.localeCompare(right.path))) }
+export async function digestCandidateTree(root) { const files = []; await collectCandidateTree(root, root, files); return sha256(files.sort((left, right) => left.path.localeCompare(right.path))) }
 async function hasCandidateFiles(root) { for (const entry of await readdir(root, { withFileTypes: true })) { if (entry.isFile() || entry.isSymbolicLink()) return true; if (entry.isDirectory() && await hasCandidateFiles(join(root, entry.name))) return true } return false }
 async function collectTree(root, current, files) { for (const entry of await readdir(current, { withFileTypes: true })) { const fullPath = join(current, entry.name); const path = relative(root, fullPath); if (entry.isDirectory()) await collectTree(root, fullPath, files); else if (entry.isFile()) { const bytes = await readFile(fullPath); files.push({ path, bytes: bytes.length, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }) } else { const stat = await lstat(fullPath); files.push({ path, type: stat.isSymbolicLink() ? 'symlink' : 'other' }) } } }
+async function collectCandidateTree(root, current, files) { for (const entry of await readdir(current, { withFileTypes: true })) { const fullPath = join(current, entry.name); if (!shouldCopyCandidatePath(root, fullPath)) continue; const path = relative(root, fullPath); if (entry.isDirectory()) await collectCandidateTree(root, fullPath, files); else if (entry.isFile()) { const bytes = await readFile(fullPath); files.push({ path, bytes: bytes.length, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }) } else { const stat = await lstat(fullPath); files.push({ path, type: stat.isSymbolicLink() ? 'symlink' : 'other' }) } } }
 async function cleanupVerification(plan) { await rm(plan.scratchRoot, { recursive: true, force: true }).catch(() => {}) }
 function nonRootUser() { const uid = typeof process.getuid === 'function' ? process.getuid() : 65534; const gid = typeof process.getgid === 'function' ? process.getgid() : 65534; if (uid === 0) throw new ChangeCaseError('VERIFIER_ROOT_IDENTITY_DENIED', 'A verifier cannot run as root.'); return `${uid}:${gid}` }

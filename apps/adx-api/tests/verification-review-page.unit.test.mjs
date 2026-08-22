@@ -25,3 +25,10 @@ test('verification page identifies an empty server candidate before a run is sub
   assert.match(page, /VERIFIER_CANDIDATE_EMPTY/)
   assert.doesNotMatch(page, /id="run-verifier"/)
 })
+
+test('verification page links a passing candidate to manual preview without treating it as gate completion', () => {
+  const page = renderVerificationReviewPage(changeCase, [{ status: 'PASS', candidateDigest: 'sha256:verified', evidenceDigest: 'sha256:evidence', verifierId: 'local', verifierVersion: '1', runtimeImageDigest: 'sha256:runtime' }], { ...options, previewUrl: '/application-preview' })
+  assert.match(page, /Open manual preview/)
+  assert.match(page, /\/application-preview/)
+  assert.match(page, /Manual testing does not complete Gate D by itself/)
+})

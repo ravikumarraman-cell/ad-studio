@@ -56,10 +56,12 @@ Open <http://127.0.0.1:3000>. Stop the process with `Ctrl+C`.
 
 ## Container deployment
 
-Build the container from the repository root:
+Health-X container builds use the corporate Artifactory npm virtual registry. The ADX preview service passes `ADX_PREVIEW_NPMRC_FILE` as a Docker BuildKit secret, so the configured file must contain the corporate npm authentication required by Artifactory. Do not copy that file into the repository, candidate, or image.
+
+Build the container from the repository root with your authenticated npm configuration mounted only for the dependency-install layer:
 
 ```bash
-docker build -f apps/health-x/Dockerfile -t health-x:local .
+docker build --secret id=npmrc,src="$HOME/.npmrc" -f apps/health-x/Dockerfile -t health-x:local .
 docker run --rm -p 3000:3000 health-x:local
 ```
 
@@ -87,14 +89,13 @@ Then repeat `npm run health-x:build`. Do not use `git restore` when you need to 
 
 ## Verification
 
-Run the production build first:
+Run the production acceptance suite:
 
 ```bash
-npm run health-x:build
 npm run verify:health-x
 ```
 
-`verify:health-x` starts the built Node output on an isolated local port, verifies the rendered shell, all three feature surfaces, and the fictional-data notice, then shuts the server down. For a human acceptance check, start the output and verify that the page renders these visible points:
+`verify:health-x` builds Health-X, starts the production Node output on an isolated local port, and uses a real browser to verify the rendered shell, appointment check-in, medication and care-plan state changes, refresh-reset behavior, the fictional-data notice, and the absence of external browser requests. It then shuts the server down. For a human acceptance check, start the output and verify that the page renders these visible points:
 
 - `Health-X` appears in the header.
 - `Upcoming care` exposes the check-in action and changes state when selected.

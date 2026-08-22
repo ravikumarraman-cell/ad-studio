@@ -10,12 +10,18 @@ export type PublicGitHubMilestone = { number: number; title: string; description
 export type ApiError = Error & { status?: number; code?: string }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, credentials: 'include', headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } })
+  let response: Response
+  try {
+    response = await fetch(path, { ...init, credentials: 'include', headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } })
+  } catch {
+    throw new Error('The ADX API could not be reached. Confirm that the local ADX API is running, then try again.')
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    const error = new Error(body?.error?.message ?? body?.message ?? 'ADX request failed') as ApiError
+    const code = body?.error?.code ?? body?.code
+    const error = new Error(body?.error?.message ?? body?.message ?? (code ? `The ADX API denied this request (${code}).` : `The ADX API returned HTTP ${response.status}.`)) as ApiError
     error.status = response.status
-    error.code = body?.error?.code ?? body?.code
+    error.code = code
     throw error
   }
   return response.json() as Promise<T>

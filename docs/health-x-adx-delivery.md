@@ -77,9 +77,11 @@ The agent prompt must include only the approved Health-X Change Case, writable p
 1. Recreate the application from a clean clone using [Health-X](../apps/health-x/README.md).
 2. Run `npm run health-x:build` followed by `npm run verify:health-x` to produce and smoke-test the server artifact.
 3. Run `PORT=3000 node apps/health-x/.output/server/index.mjs` and perform the listed browser acceptance checks.
-4. Build and run the local container using the documented Docker commands.
+4. Build and run the local container using the documented Docker commands and approved corporate Artifactory credentials.
 5. Retain build output, browser evidence, image digest, and the exact commit SHA as candidate evidence.
 6. Before describing this as an ADX end-to-end deployment, enable an approved non-production coding-agent executor and release provider, then complete Gate C through Gate F evidence under the main flow.
+
+For a digest-bound ADX manual preview after retained independent evidence, use the [local verified preview runbook](runbooks/local-verified-preview.md). It describes the corporate Artifactory requirement, BuildKit-secret credential handling, manual test URL, cleanup, and the boundary between manual testing and Gate D approval.
 
 ## Completion statement
 
