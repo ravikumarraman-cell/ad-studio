@@ -11,7 +11,7 @@ export function createPkceTransaction() {
 
 export function googleAuthorizationUrl({ clientId, redirectUri, transaction }) {
   const url = new URL(googleAuthorize)
-  url.search = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: 'openid email profile', state: transaction.state, code_challenge: transaction.challenge, code_challenge_method: 'S256', access_type: 'offline', prompt: 'select_account' }).toString()
+  url.search = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope: 'openid email profile', state: transaction.state, code_challenge: transaction.challenge, code_challenge_method: 'S256', access_type: 'offline' }).toString()
   return url.toString()
 }
 

@@ -34,6 +34,38 @@ test('OpenAI remains the default provider for existing configuration', async () 
   assert.equal(captured.init.headers.authorization, 'Bearer openai-secret')
 })
 
+test('UHG Azure OpenAI drafts stories through the injected server-owned gateway adapter', async () => {
+  let captured
+  const gatewayAdapter = {
+    status: () => ({ configured: true, model: 'gpt-5.6-terra' }),
+    complete: async (request) => { captured = request; return { text: JSON.stringify(result), providerRequestId: 'uhg-request-1' } }
+  }
+  const service = createStorySuggestionService({ provider: 'uhg', model: 'gpt-5.6-terra', gatewayAdapter })
+  const suggested = await service.suggest({ changeCase, governance, correlationId: 'trace-uhg' })
+  assert.equal(suggested.provider, 'UHG_AZURE_OPENAI')
+  assert.equal(suggested.providerLabel, 'UHG Azure OpenAI')
+  assert.equal(suggested.providerRequestId, 'uhg-request-1')
+  assert.equal(captured.maxTokens, 1_200)
+  assert.equal(captured.temperature, 1)
+  assert.match(captured.system, /ADX product-analysis assistant/)
+  assert.match(captured.prompt, /health-auth-service/)
+})
+
+test('UHG Claude drafts stories through the injected server-owned gateway adapter', async () => {
+  let captured
+  const anthropicGatewayAdapter = {
+    status: () => ({ configured: true, deployment: 'us.anthropic.claude-opus-4-8' }),
+    complete: async (request) => { captured = request; return { text: JSON.stringify(result), providerRequestId: 'claude-request-1' } }
+  }
+  const service = createStorySuggestionService({ provider: 'claude', model: 'us.anthropic.claude-opus-4-8', anthropicGatewayAdapter })
+  const suggested = await service.suggest({ changeCase, governance, correlationId: 'trace-claude' })
+  assert.equal(suggested.provider, 'UHG_ANTHROPIC')
+  assert.equal(suggested.providerLabel, 'UHG Claude')
+  assert.equal(suggested.providerRequestId, 'claude-request-1')
+  assert.equal(captured.maxTokens, 1_200)
+  assert.equal(captured.temperature, 1)
+})
+
 test('only server-approved models can be selected for a suggestion request', async () => {
   let requestedUrl
   const service = createStorySuggestionService({ provider: 'gemini', apiKey: 'gemini-secret', model: 'gemini-default', models: 'gemini-fast, gemini-careful', fetchImpl: async (url) => { requestedUrl = url; return response({ candidates: [{ content: { parts: [{ text: JSON.stringify(result) }] } }] }) } })
@@ -56,7 +88,7 @@ test('author-selected plain-text guidance is included in the provider prompt and
 test('an unsupported provider remains disabled with actionable guidance', () => {
   const service = createStorySuggestionService({ provider: 'unknown', apiKey: 'key', model: 'model', fetchImpl: async () => response({}) })
   assert.equal(service.status().configured, false)
-  return assert.rejects(() => service.suggest({ changeCase, governance, correlationId: 'trace-3' }), { message: /openai, gemini, or ollama/ })
+  return assert.rejects(() => service.suggest({ changeCase, governance, correlationId: 'trace-3' }), { message: /openai, gemini, ollama, uhg, or claude/ })
 })
 
 test('Gemini authorization failures tell the author what to check', async () => {

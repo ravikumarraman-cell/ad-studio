@@ -11,7 +11,7 @@ import './feature-delivery.css'
 import './feature-overrides.css'
 
 export function FeatureDelivery() {
-  const queryClient = useQueryClient(); const [mode, setMode] = useState<'choose' | 'real' | 'demo'>('choose'); const [workspaceId, setWorkspaceId] = useState(''); const [showCreate, setShowCreate] = useState(false); const [showImport, setShowImport] = useState(false); const [showGitHubImport, setShowGitHubImport] = useState(false); const [createError, setCreateError] = useState('')
+  const queryClient = useQueryClient(); const [mode, setMode] = useState<'choose' | 'real' | 'demo'>(() => new URLSearchParams(window.location.search).get('mode') === 'real' ? 'real' : 'choose'); const [workspaceId, setWorkspaceId] = useState(''); const [showCreate, setShowCreate] = useState(false); const [showImport, setShowImport] = useState(false); const [showGitHubImport, setShowGitHubImport] = useState(false); const [createError, setCreateError] = useState('')
   const session = useQuery({ queryKey: ['adx-session'], queryFn: () => api<Session>('/v1/me'), retry: false, enabled: mode === 'real' })
   const memberships: Membership[] = session.data?.memberships ?? []; const activeWorkspace = workspaceId || memberships[0]?.workspaceId || ''
   const changeCases = useQuery({ queryKey: ['adx-change-cases', activeWorkspace], queryFn: () => api<{ changeCases: ChangeCase[] }>(`/v1/workspaces/${activeWorkspace}/change-cases`), enabled: Boolean(activeWorkspace), retry: false })

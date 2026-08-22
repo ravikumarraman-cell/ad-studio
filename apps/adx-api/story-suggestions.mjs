@@ -14,14 +14,25 @@ const providerDefinitions = Object.freeze({
   OLLAMA_LOCAL: Object.freeze({
     label: 'Local Ollama',
     endpoint: 'http://127.0.0.1:11434'
+  }),
+  UHG_AZURE_OPENAI: Object.freeze({
+    label: 'UHG Azure OpenAI',
+    endpoint: null
+  }),
+  UHG_ANTHROPIC: Object.freeze({
+    label: 'UHG Claude',
+    endpoint: null
   })
 })
 
-export function createStorySuggestionService({ provider, apiKey, model, models, ollamaBaseUrl, fetchImpl = globalThis.fetch } = {}) {
+export function createStorySuggestionService({ provider, apiKey, model, models, ollamaBaseUrl, gatewayAdapter, anthropicGatewayAdapter, fetchImpl = globalThis.fetch } = {}) {
   const providerId = normalizeProvider(provider)
   const allowedModels = configuredModels(model, models)
   const ollamaEndpoint = providerId === 'OLLAMA_LOCAL' ? localOllamaEndpoint(ollamaBaseUrl) : null
-  const configured = Boolean(providerId && allowedModels.length && fetchImpl && (providerId === 'OLLAMA_LOCAL' ? ollamaEndpoint : apiKey))
+  const selectedGatewayAdapter = providerId === 'UHG_AZURE_OPENAI' ? gatewayAdapter : providerId === 'UHG_ANTHROPIC' ? anthropicGatewayAdapter : null
+  const gatewayStatus = selectedGatewayAdapter?.status?.() ?? null
+  const gatewayModel = gatewayStatus?.model ?? gatewayStatus?.deployment ?? null
+  const configured = Boolean(providerId && allowedModels.length && fetchImpl && (providerId === 'OLLAMA_LOCAL' ? ollamaEndpoint : selectedGatewayAdapter ? gatewayStatus?.configured && gatewayModel === allowedModels[0] : apiKey))
   const status = Object.freeze({ configured, provider: configured ? providerId : null, providerLabel: configured ? providerDefinitions[providerId].label : null, model: configured ? allowedModels[0] : null, models: configured ? allowedModels : [], mode: configured ? 'MODEL_BACKED_PREVIEW' : 'NOT_CONFIGURED' })
   return Object.freeze({
     status: () => status,
@@ -29,7 +40,12 @@ export function createStorySuggestionService({ provider, apiKey, model, models, 
       if (!configured) throw new ChangeCaseError('STORY_AI_NOT_CONFIGURED', configurationMessage(provider), { retryable: false, severity: 'warning' })
       const selectedModel = requestedModel ?? allowedModels[0]
       if (typeof selectedModel !== 'string' || !allowedModels.includes(selectedModel)) throw new ChangeCaseError('STORY_AI_MODEL_NOT_ALLOWED', 'The requested AI model is not enabled for story decomposition.', { retryable: false, severity: 'warning' })
+      if (selectedGatewayAdapter && selectedModel !== gatewayModel) throw new ChangeCaseError('STORY_AI_MODEL_NOT_ALLOWED', 'The requested AI model does not match the configured gateway deployment.', { retryable: false, severity: 'warning' })
       const guidance = normalizeTemplateGuidance(templateGuidance)
+      if (selectedGatewayAdapter) {
+        const completion = await gatewayCompletion({ providerId, gatewayAdapter: selectedGatewayAdapter, changeCase, governance, correlationId, guidance })
+        return Object.freeze({ provider: providerId, providerLabel: providerDefinitions[providerId].label, model: selectedModel, mode: 'MODEL_BACKED_PREVIEW', suggestions: parseStories(completion.text), providerRequestId: completion.providerRequestId })
+      }
       const request = providerId === 'GEMINI_GENERATE_CONTENT'
         ? geminiRequest({ apiKey, model: selectedModel, changeCase, governance, correlationId, guidance })
         : providerId === 'OLLAMA_LOCAL'
@@ -52,11 +68,13 @@ function normalizeProvider(provider) {
   if (value === 'openai' || value === 'openai_responses') return 'OPENAI_RESPONSES'
   if (value === 'gemini' || value === 'gemini_generate_content') return 'GEMINI_GENERATE_CONTENT'
   if (value === 'ollama' || value === 'ollama_local') return 'OLLAMA_LOCAL'
+  if (value === 'uhg' || value === 'uhg_azure_openai') return 'UHG_AZURE_OPENAI'
+  if (value === 'claude' || value === 'uhg_claude' || value === 'uhg_anthropic') return 'UHG_ANTHROPIC'
   return null
 }
 
 function configurationMessage(provider) {
-  if (provider && !normalizeProvider(provider)) return 'AI story suggestions have an unsupported provider. Set ADX_STORY_AI_PROVIDER to openai, gemini, or ollama.'
+  if (provider && !normalizeProvider(provider)) return 'AI story suggestions have an unsupported provider. Set ADX_STORY_AI_PROVIDER to openai, gemini, ollama, uhg, or claude.'
   return 'AI story suggestions are not configured. Set a provider, an approved model, and provider configuration on the ADX API server.'
 }
 
@@ -134,6 +152,15 @@ function ollamaRequest({ endpoint, model, changeCase, governance, correlationId,
   // The response contract only needs a compact set of draft cards; authors retain
   // complete control to edit or add stories after generation.
   return Object.freeze({ url: `${endpoint}/api/generate`, init: { method: 'POST', headers: { 'content-type': 'application/json', 'x-client-request-id': correlationId }, body: JSON.stringify({ model, system: `${instructionsWithTemplate(prompt.instructions, guidance)} For this latency-sensitive local request, generate no more than three stories and one scenario per story. Keep every field concise. Finish the JSON object before stopping.`, prompt: prompt.context, format: storyResponseSchema(), stream: false, keep_alive: '10m', options: { temperature: 0.2, num_ctx: 2048, num_predict: 768 } }) } })
+}
+
+async function gatewayCompletion({ providerId, gatewayAdapter, changeCase, governance, correlationId, guidance }) {
+  const prompt = storyPrompt(changeCase, governance)
+  try {
+    return await gatewayAdapter.complete({ system: instructionsWithTemplate(prompt.instructions, guidance), prompt: prompt.context, correlationId, maxTokens: 1_200, temperature: 1 })
+  } catch (error) {
+    throw new ChangeCaseError('STORY_AI_REQUEST_FAILED', 'The configured gateway story-suggestion provider did not return a usable response.', { retryable: Boolean(error?.retryable), severity: 'warning', details: { provider: providerId, providerCode: error?.code ?? null, providerRequestId: error?.details?.providerRequestId ?? null } })
+  }
 }
 
 function storyResponseSchema() {

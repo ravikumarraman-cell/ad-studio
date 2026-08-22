@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 
+const ignoredCandidateDirectories = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage'])
+const sensitiveCandidateFileNames = new Set(['.env', '.npmrc'])
+
 /**
  * Stage 6's verifier boundary. The candidate is copied into a disposable
  * directory and mounted read-only; verifier output is evidence, never a
@@ -15,9 +18,10 @@ export async function provisionVerificationSandbox({ candidateRoot, image, adapt
   const verifiedAdapter = validateVerifierAdapter(adapter)
   const source = await realpath(candidateRoot).catch(() => null)
   if (!source) throw new ChangeCaseError('VERIFIER_CANDIDATE_REQUIRED', 'A candidate checkout is required for verification.')
+  if (!(await hasCandidateFiles(source))) throw new ChangeCaseError('VERIFIER_CANDIDATE_EMPTY', 'The configured candidate checkout contains no files to verify.')
   const scratchRoot = await mkdtemp(join(tmpdir(), 'adx-verifier-'))
   try {
-    const candidate = join(scratchRoot, 'candidate'); await cp(source, candidate, { recursive: true, dereference: false, verbatimSymlinks: true })
+    const candidate = join(scratchRoot, 'candidate'); await cp(source, candidate, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (path) => shouldCopyCandidatePath(source, path) })
     const candidateDigest = await digestTree(candidate)
     const runtimeImageDigest = `sha256:${image.split('@sha256:')[1]}`
     const configDigest = sha256(config)
@@ -71,7 +75,9 @@ function validateVerifierAdapter(adapter) {
   const tool = adapter.tool && typeof adapter.tool.name === 'string' && typeof adapter.tool.version === 'string' ? Object.freeze({ name: adapter.tool.name.trim(), version: adapter.tool.version.trim() }) : Object.freeze({ name: adapter.verifierId.trim(), version: adapter.version.trim() })
   return Object.freeze({ verifierId: adapter.verifierId.trim(), version: adapter.version.trim(), category: typeof adapter.category === 'string' ? adapter.category : 'CUSTOM', tool, timeoutMs, maxOutputBytes, command: (config) => { const command = adapter.command(config); if (!Array.isArray(command) || !command.length || !command.every((part) => typeof part === 'string' && part.length)) throw new ChangeCaseError('VERIFIER_COMMAND_INVALID', 'Verifier commands must be a non-empty argument vector.'); return Object.freeze([...command]) } })
 }
+function shouldCopyCandidatePath(root, path) { const candidatePath = relative(root, path); if (!candidatePath) return true; const parts = candidatePath.split('/'); return !parts.some((part) => ignoredCandidateDirectories.has(part) || sensitiveCandidateFileNames.has(part) || part.endsWith('.pem') || part.endsWith('.key')) }
 async function digestTree(root) { const files = []; await collectTree(root, root, files); return sha256(files.sort((left, right) => left.path.localeCompare(right.path))) }
+async function hasCandidateFiles(root) { for (const entry of await readdir(root, { withFileTypes: true })) { if (entry.isFile() || entry.isSymbolicLink()) return true; if (entry.isDirectory() && await hasCandidateFiles(join(root, entry.name))) return true } return false }
 async function collectTree(root, current, files) { for (const entry of await readdir(current, { withFileTypes: true })) { const fullPath = join(current, entry.name); const path = relative(root, fullPath); if (entry.isDirectory()) await collectTree(root, fullPath, files); else if (entry.isFile()) { const bytes = await readFile(fullPath); files.push({ path, bytes: bytes.length, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }) } else { const stat = await lstat(fullPath); files.push({ path, type: stat.isSymbolicLink() ? 'symlink' : 'other' }) } } }
 async function cleanupVerification(plan) { await rm(plan.scratchRoot, { recursive: true, force: true }).catch(() => {}) }
 function nonRootUser() { const uid = typeof process.getuid === 'function' ? process.getuid() : 65534; const gid = typeof process.getgid === 'function' ? process.getgid() : 65534; if (uid === 0) throw new ChangeCaseError('VERIFIER_ROOT_IDENTITY_DENIED', 'A verifier cannot run as root.'); return `${uid}:${gid}` }

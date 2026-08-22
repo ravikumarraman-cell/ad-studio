@@ -2,7 +2,7 @@ function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
 }
 
-export function renderVerificationReviewPage(changeCase, evidence, { canRun, canReview, handoffUrl, runEndpoint, decisionEndpoint, verifierConfigured }) {
+export function renderVerificationReviewPage(changeCase, evidence, { canRun, canReview, handoffUrl, runEndpoint, decisionEndpoint, verifierConfigured, verifierIssue = 'LOCAL_VERIFIER_CANDIDATE_REQUIRED' }) {
   const passes = evidence.filter((item) => item.status === 'PASS')
   const candidate = passes[0]?.candidateDigest
   const runPanel = changeCase.state === 'READY_FOR_EXECUTION'
@@ -10,9 +10,9 @@ export function renderVerificationReviewPage(changeCase, evidence, { canRun, can
     : changeCase.state !== 'AWAITING_VERIFICATION'
       ? `<section class="notice"><h2>Verification is not open</h2><p>This Change Case must be awaiting verification before ADX can create independent evidence.</p></section>`
     : !verifierConfigured
-      ? `<section class="notice"><h2>Local verifier needs a candidate directory</h2><p>An administrator must configure the server-side candidate checkout before this suite can run. Browser input cannot select a filesystem path or command.</p></section>`
+      ? `<section class="notice"><h2>Independent verification is not ready</h2><p>The server-side candidate checkout cannot be verified yet: <code>${escapeHtml(verifierIssue)}</code>. Browser input cannot select a filesystem path or command.</p></section>`
       : canRun
-        ? `<section class="action"><p class="eyebrow">INDEPENDENT VERIFIER</p><h2>Run the pinned local verification suite</h2><p>ADX copies the configured candidate, mounts it read-only in a networkless container, runs fixed checks, then retains a signed evidence bundle. It never uses a browser-supplied command.</p><button id="run-verifier">Run independent verification</button><p id="run-status" class="status" role="status" aria-live="polite"></p></section>`
+        ? `<section class="action"><p class="eyebrow">INDEPENDENT VERIFIER</p><h2>Run the pinned local verification suite</h2><p>ADX copies the configured candidate, mounts it read-only in a networkless container, runs fixed checks, then retains a signed evidence bundle. It never uses a browser-supplied command.</p><button id="run-verifier" onclick="const status=document.getElementById('run-status'),started=Date.now(),timer=setInterval(()=>{if(!this.disabled){clearInterval(timer);return}status.textContent='Independent verification running · '+Math.max(1,Math.round((Date.now()-started)/1000))+'s elapsed.'},1000);status.textContent='Starting independent verification…'">Run independent verification</button><p id="run-status" class="status" role="status" aria-live="polite"></p></section>`
         : `<section class="notice"><h2>Awaiting an authorized verification request</h2><p>You can inspect evidence, but a workspace contributor must request the local verifier run.</p></section>`
   const decisionPanel = candidate && canReview && changeCase.state === 'AWAITING_VERIFICATION'
     ? `<section class="action"><p class="eyebrow">GATE D · INDEPENDENT DECISION</p><h2>Complete verification for this candidate?</h2><p>The decision advances only this exact passing candidate to delivery readiness.</p><button id="complete-verification">Complete Gate D</button><p id="decision-status" class="status" role="status" aria-live="polite"></p></section>`

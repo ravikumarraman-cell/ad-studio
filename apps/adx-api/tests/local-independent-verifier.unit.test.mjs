@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { LocalIndependentVerifier } from '../local-independent-verifier.mjs'
+import { provisionVerificationSandbox } from '../verification-evidence.mjs'
 
 const scope = { organizationId: '11111111-1111-4111-8111-111111111111', workspaceId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }
 
 test('local verifier fails closed without a server-configured candidate root', async () => {
   const verifier = new LocalIndependentVerifier({ evidenceRepository: {}, signer: { privateKey: {}, keyId: 'test' }, candidateRoot: '' })
   await assert.rejects(() => verifier.verify({ scope, changeCaseId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' }), { code: 'LOCAL_VERIFIER_CANDIDATE_REQUIRED' })
+  assert.deepEqual(await verifier.readiness(), { ready: false, code: 'LOCAL_VERIFIER_CANDIDATE_REQUIRED' })
+})
+
+test('verification provisioning rejects an empty candidate checkout before Docker starts', async () => {
+  const candidateRoot = await mkdtemp(join(tmpdir(), 'adx-empty-candidate-'))
+  try {
+    await assert.rejects(() => provisionVerificationSandbox({
+      candidateRoot,
+      image: 'alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc',
+      adapter: { verifierId: 'empty-candidate-test', version: '1.0.0', command: () => ['true'] }
+    }), { code: 'VERIFIER_CANDIDATE_EMPTY' })
+  } finally {
+    await rm(candidateRoot, { recursive: true, force: true })
+  }
 })
 
 test('local verifier retains service-produced signed evidence', async () => {

@@ -6,13 +6,14 @@ import { validateAdapterDeclaration, verifyExecutionLease } from './execution-go
  * dispatch without executing it: a real executor must be separately wired to
  * the Stage 5 sandbox and a brokered, run-scoped provider credential.
  */
-export const codingAgentProviders = Object.freeze(['CODEX', 'CLAUDE_CODE', 'GITHUB_COPILOT'])
+export const codingAgentProviders = Object.freeze(['CODEX', 'CLAUDE_CODE', 'GITHUB_COPILOT', 'UHG_AZURE_OPENAI'])
 export const codingAgentAdapterMode = 'DECLARATION_ONLY'
 
 const providerDefinitions = Object.freeze({
-  CODEX: Object.freeze({ adapterId: 'codex-cli', executable: 'codex', arguments: Object.freeze(['exec', '--json']), documentationUrl: 'https://developers.openai.com/codex/' }),
-  CLAUDE_CODE: Object.freeze({ adapterId: 'claude-code-cli', executable: 'claude', arguments: Object.freeze(['--print', '--output-format', 'stream-json']), documentationUrl: 'https://docs.anthropic.com/en/docs/claude-code' }),
-  GITHUB_COPILOT: Object.freeze({ adapterId: 'github-copilot-cli', executable: 'copilot', arguments: Object.freeze([]), documentationUrl: 'https://docs.github.com/en/copilot' })
+  CODEX: Object.freeze({ adapterId: 'codex-cli', executionKind: 'CLI', executable: 'codex', arguments: Object.freeze(['exec', '--json']), documentationUrl: 'https://developers.openai.com/codex/' }),
+  CLAUDE_CODE: Object.freeze({ adapterId: 'claude-code-cli', executionKind: 'CLI', executable: 'claude', arguments: Object.freeze(['--print', '--verbose', '--output-format', 'stream-json']), documentationUrl: 'https://docs.anthropic.com/en/docs/claude-code' }),
+  GITHUB_COPILOT: Object.freeze({ adapterId: 'github-copilot-cli', executionKind: 'CLI', executable: 'copilot', arguments: Object.freeze([]), documentationUrl: 'https://docs.github.com/en/copilot' }),
+  UHG_AZURE_OPENAI: Object.freeze({ adapterId: 'uhg-azure-openai-patch', executionKind: 'MODEL_PATCH', executable: null, arguments: Object.freeze([]), documentationUrl: 'https://learn.microsoft.com/azure/ai-services/openai/' })
 })
 
 export function createCodingAgentAdapter({ provider, version, capabilities = defaultCapabilities, enabled = false }) {
@@ -34,6 +35,7 @@ export function createCodingAgentAdapter({ provider, version, capabilities = def
     ...declaration,
     provider,
     mode: codingAgentAdapterMode,
+    executionKind: definition.executionKind,
     enabled: Boolean(enabled),
     executable: definition.executable,
     arguments: definition.arguments,
@@ -78,9 +80,9 @@ export function dispatchCodingAgent() {
 
 export function validateCodingAgentAdapter(adapter) {
   const declaration = validateAdapterDeclaration(adapter)
-  if (!codingAgentProviders.includes(adapter?.provider) || adapter.mode !== codingAgentAdapterMode || typeof adapter.executable !== 'string' || !Array.isArray(adapter.arguments) || adapter.taskTransport !== 'STDIN_JSON' || typeof adapter.configurationDigest !== 'string' || !adapter.configurationDigest.startsWith('sha256:')) throw new ChangeCaseError('CODING_AGENT_ADAPTER_INVALID', 'A complete declaration-only coding-agent adapter is required.')
+  if (!codingAgentProviders.includes(adapter?.provider) || adapter.mode !== codingAgentAdapterMode || !['CLI', 'MODEL_PATCH'].includes(adapter.executionKind) || !Array.isArray(adapter.arguments) || adapter.taskTransport !== 'STDIN_JSON' || typeof adapter.configurationDigest !== 'string' || !adapter.configurationDigest.startsWith('sha256:')) throw new ChangeCaseError('CODING_AGENT_ADAPTER_INVALID', 'A complete declaration-only coding-agent adapter is required.')
   const definition = providerDefinitions[adapter.provider]
-  if (declaration.adapterId !== definition.adapterId || adapter.executable !== definition.executable || adapter.arguments.join('\u0000') !== definition.arguments.join('\u0000')) throw new ChangeCaseError('CODING_AGENT_ADAPTER_TAMPERED', 'Coding-agent provider launch metadata does not match its registered adapter.')
+  if (declaration.adapterId !== definition.adapterId || adapter.executionKind !== definition.executionKind || adapter.executable !== definition.executable || adapter.arguments.join('\u0000') !== definition.arguments.join('\u0000')) throw new ChangeCaseError('CODING_AGENT_ADAPTER_TAMPERED', 'Coding-agent provider launch metadata does not match its registered adapter.')
   const expected = sha256({ schema: 'adx-coding-agent-adapter-v1', provider: adapter.provider, declaration, mode: codingAgentAdapterMode })
   if (expected !== adapter.configurationDigest) throw new ChangeCaseError('CODING_AGENT_ADAPTER_TAMPERED', 'Coding-agent adapter configuration digest does not match its declaration.')
   return adapter

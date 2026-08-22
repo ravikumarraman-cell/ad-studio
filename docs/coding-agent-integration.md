@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This guide describes how ADX can run coding agents such as Codex CLI, Claude Code, GitHub Copilot CLI, or a custom agent without giving those agents independent authority. It is an implementation and operating design, not a claim that a provider integration already exists.
+This guide describes how ADX runs coding agents such as Codex CLI, Claude Code, GitHub Copilot CLI, or a custom agent without giving those agents independent authority. The repository now includes an opt-in local execution pilot; it is not a production credential-brokered provider integration.
 
 ADX is the control plane. A coding agent is a replaceable worker in the execution plane. The agent may propose and make bounded repository changes; it cannot approve itself, widen its permissions, treat its own output as evidence, merge code, or deploy software.
 
@@ -10,7 +10,11 @@ ADX is the control plane. A coding agent is a replaceable worker in the executio
 
 Stage 5 provides the execution foundation: signed expiring leases, tenant-scoped run records, a hardened disposable sandbox, gateway-enforced filesystem/network/secret controls, immutable receipts, and revocation. The Stage 10 specialist-role model is also available locally.
 
-Codex CLI, Claude Code, and GitHub Copilot CLI now have provider-specific **declaration-only adapters**. They are pinned-version declarations, validate against the signed lease contract, create immutable launch previews, and fail closed if anything attempts live execution. In particular, the authenticated `/control-plane` UI does not currently start an external coding agent. A credential-brokered executor and non-production operational evidence are still required before any provider can run.
+Codex CLI, Claude Code, and GitHub Copilot CLI have provider-specific declarations. A generic local broker can execute exactly one explicitly configured provider after ADX issues a signed lease. It copies a server-configured source checkout into a disposable workspace, promotes only a successful candidate, records the terminal run receipt, and then opens independent verification for that candidate.
+
+The authenticated `/control-plane` UI exposes **Request implementation** only when all server-owned settings are present: `ADX_LOCAL_CODING_AGENT_ENABLED=1`, source and candidate roots, a provider and pinned version, repository identity/ref/write paths, a database, and ledger signer. The browser supplies only the selected registered provider and optimistic Change Case version. It cannot select a binary, checkout, command, capability, credential, or target state.
+
+This pilot does not authenticate a provider, grant network access, or broker run-scoped secrets. Its policy grants `shell`, repository read, and repository write only; network, secrets, browser, and deploy are denied. A production adapter still requires a dedicated provider identity, controlled egress, sandboxed tool gateway enforcement, cancellation exercise, and non-production operational evidence.
 
 ## The control boundary
 

@@ -1,4 +1,5 @@
 import { ChangeCaseError } from './change-case-ledger.mjs'
+import { readdir, realpath } from 'node:fs/promises'
 import { createEvidenceBundle, executeVerificationSandbox, provisionVerificationSandbox } from './verification-evidence.mjs'
 import { createVerifierAdapter } from './verification-adapters.mjs'
 
@@ -30,6 +31,13 @@ export class LocalIndependentVerifier {
     return Boolean(this.candidateRoot)
   }
 
+  async readiness() {
+    if (!this.candidateRoot) return Object.freeze({ ready: false, code: 'LOCAL_VERIFIER_CANDIDATE_REQUIRED' })
+    const root = await realpath(this.candidateRoot).catch(() => null)
+    if (!root) return Object.freeze({ ready: false, code: 'VERIFIER_CANDIDATE_REQUIRED' })
+    return Object.freeze({ ready: await hasFiles(root), code: 'VERIFIER_CANDIDATE_EMPTY' })
+  }
+
   async verify({ scope, changeCaseId }) {
     if (!this.candidateRoot) throw new ChangeCaseError('LOCAL_VERIFIER_CANDIDATE_REQUIRED', 'Independent verification is not configured. Set ADX_LOCAL_VERIFIER_CANDIDATE_ROOT to the checked-out candidate directory on the server.')
     const plan = await this.provision({ candidateRoot: this.candidateRoot, image: this.image, adapter: localSuite, config: { suite: 'adx-local-independent-suite-v1' } })
@@ -39,3 +47,5 @@ export class LocalIndependentVerifier {
     return { accepted: true, evidenceId: retained.evidenceId, evidenceDigest: evidence.evidenceDigest, candidateDigest: evidence.candidateDigest, status: evidence.status, verifier: evidence.verifier, deduplicated: retained.deduplicated }
   }
 }
+
+async function hasFiles(directory) { for (const entry of await readdir(directory, { withFileTypes: true })) { if (entry.isFile()) return true; if (entry.isDirectory() && await hasFiles(`${directory}/${entry.name}`)) return true } return false }

@@ -77,7 +77,7 @@ Health-X contains no account, API, database, analytics, external network depende
 | The three Health-X features are implemented. | Tracked TanStack Start source and passing production build. |
 | Health-X renders as a production Node artifact. | `npm run health-x:build` and `npm run verify:health-x`. |
 | Health-X can be locally containerized. | Tracked [Dockerfile](apps/health-x/Dockerfile); build it with Docker Desktop running. |
-| A live external agent ran under an ADX lease or deployed Health-X to a provider. | Not claimed: current agent adapters fail closed, Git delivery is preview-only, and release adapters are simulation-only. |
+| A live external agent ran under an ADX lease or deployed Health-X to a provider. | A local opt-in coding-agent pilot now issues a lease, creates a disposable candidate, retains a run receipt, and opens independent verification. It is not configured by default, has no provider credential/egress integration, and has not been demonstrated against a live provider. Git delivery remains preview-only and release adapters remain simulation-only. |
 
 This distinction matters. A passing local build is meaningful implementation evidence; it is not a substitute for a retained agent lease, independent verifier bundle, reviewed delivery preview, authorized non-production rollout, or outcome evidence.
 

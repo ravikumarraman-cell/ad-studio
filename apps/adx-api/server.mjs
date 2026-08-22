@@ -10,17 +10,25 @@ import { PostgresTenantRepository } from './postgres.mjs'
 import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
 import { PostgresExecutionRepository } from './execution-repository.mjs'
+import { CodingAgentExecutionService } from './coding-agent-execution-service.mjs'
+import { LocalCodingAgentBroker } from './local-coding-agent-broker.mjs'
+import { ModelPatchBroker } from './model-patch-broker.mjs'
+import { createCodingAgentAdapter, codingAgentProviders } from './coding-agent-adapters.mjs'
 import { PostgresEvidenceRepository } from './evidence-repository.mjs'
 import { PostgresPreviewDeliveryRepository } from './git-delivery-repository.mjs'
 import { PostgresPreviewCiRepository } from './ci-review-repository.mjs'
 import { PostgresOutcomeRepository } from './outcome-repository.mjs'
 import { createStorySuggestionService } from './story-suggestions.mjs'
 import { createStoryDecompositionAgent } from './story-decomposition-agent.mjs'
+import { createUhgAzureOpenAiStoryGateway } from './uhg-azure-openai-story-gateway.mjs'
+import { createUhgAzureOpenAiExecutionGateway } from './uhg-azure-openai-execution-gateway.mjs'
+import { createUhgClaudeStoryGateway } from './uhg-claude-story-gateway.mjs'
 import { renderDesignCapturePage } from './design-capture-page.mjs'
 import { renderDesignReviewPage } from './design-review-page.mjs'
 import { LocalIndependentVerifier } from './local-independent-verifier.mjs'
 import { renderVerificationReviewPage } from './verification-review-page.mjs'
 import { renderExecutionHandoffPage } from './execution-handoff-page.mjs'
+import { renderCandidateBrowserPage } from './candidate-browser-page.mjs'
 import { createPublicGitHubMilestoneClient } from './github-public-milestones.mjs'
 import workflowContract from '../../packages/domain/src/change-case-workflow.json' with { type: 'json' }
 import { escapeHtml, htmlScriptConfig } from './review-page-utils.mjs'
@@ -45,11 +53,21 @@ const postgres = process.env.DATABASE_URL ? new PostgresTenantRepository(process
 const ledgerSigner = createLedgerSigner(process.env)
 const changeCases = process.env.DATABASE_URL && ledgerSigner ? new PostgresChangeCaseRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
 const executions = process.env.DATABASE_URL && ledgerSigner ? new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
+const localCodingAgentBroker = new LocalCodingAgentBroker()
+const uhgAzureOpenAiExecutionGateway = createUhgAzureOpenAiExecutionGateway(process.env)
+const modelPatchBroker = new ModelPatchBroker({ enabled: process.env.ADX_CODING_MODEL_EXECUTOR_ENABLED === '1', sourceRoot: process.env.ADX_CODING_MODEL_SOURCE_ROOT ?? process.env.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT, candidateRoot: process.env.ADX_CODING_MODEL_CANDIDATE_ROOT ?? process.env.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT, gateway: uhgAzureOpenAiExecutionGateway })
+const candidateRoot = modelPatchBroker.candidateRoot
+const configuredModelCoding = createUhgModelCodingExecution({ executions, changeCases, broker: modelPatchBroker, gateway: uhgAzureOpenAiExecutionGateway })
+const configuredLocalCoding = createLocalCodingAgentExecution({ executions, changeCases, broker: localCodingAgentBroker })
+const configuredCoding = configuredModelCoding ?? configuredLocalCoding
+const codingAgentExecution = configuredCoding?.service ?? null
 const evidenceRepository = process.env.DATABASE_URL && ledgerSigner ? new PostgresEvidenceRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
 const previewDeliveries = process.env.DATABASE_URL ? new PostgresPreviewDeliveryRepository({ connectionString: process.env.DATABASE_URL }) : null
 const previewCi = process.env.DATABASE_URL ? new PostgresPreviewCiRepository({ connectionString: process.env.DATABASE_URL }) : null
 const outcomes = process.env.DATABASE_URL ? new PostgresOutcomeRepository({ connectionString: process.env.DATABASE_URL }) : null
-const storySuggestions = createStorySuggestionService({ provider: process.env.ADX_STORY_AI_PROVIDER, apiKey: process.env.ADX_STORY_AI_API_KEY, model: process.env.ADX_STORY_AI_MODEL, models: process.env.ADX_STORY_AI_MODELS, ollamaBaseUrl: process.env.ADX_STORY_AI_OLLAMA_BASE_URL })
+const uhgAzureOpenAiStoryGateway = createUhgAzureOpenAiStoryGateway(process.env)
+const uhgClaudeStoryGateway = createUhgClaudeStoryGateway(process.env)
+const storySuggestions = createStorySuggestionService({ provider: process.env.ADX_STORY_AI_PROVIDER, apiKey: process.env.ADX_STORY_AI_API_KEY, model: process.env.ADX_STORY_AI_MODEL, models: process.env.ADX_STORY_AI_MODELS, ollamaBaseUrl: process.env.ADX_STORY_AI_OLLAMA_BASE_URL, gatewayAdapter: uhgAzureOpenAiStoryGateway, anthropicGatewayAdapter: uhgClaudeStoryGateway })
 const storyDecompositionAgent = createStoryDecompositionAgent({ suggestionService: storySuggestions })
 const publicGitHubMilestones = createPublicGitHubMilestoneClient()
 const localIndependentVerifier = evidenceRepository && ledgerSigner ? new LocalIndependentVerifier({ evidenceRepository, signer: ledgerSigner }) : null
@@ -188,14 +206,11 @@ function changeCaseWorkflowCard(changeCase, workspaceId) {
   const gateCards = workflowGates.map((gate, index) => { const status = gateStatus(index, position); return `<div class="gate ${status}"><div class="gate-top"><span class="gate-title">Gate ${escapeHtml(gate.id)} · ${escapeHtml(gate.name)}</span><span class="status">${gateLabel(status)}</span></div><p>${escapeHtml(gate.purpose)}</p></div>` }).join('')
   const href = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCase.id)}/${currentGate.review}`
   const nextText = position === 7 ? 'All gates are complete. Review the retained outcome for this Change Case.' : changeCase.state === 'PAUSED' ? 'This Change Case is paused. Resolve the pause before advancing the active gate.' : changeCase.state === 'CANCELLED' ? 'This Change Case was cancelled. Its retained history remains available for review.' : `Focus on Gate ${currentGate.id}: ${currentGate.purpose}`
-  const agentPicker = changeCase.state === 'READY_FOR_EXECUTION' ? codingAgentPicker(changeCase) : ''
-  return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div>${agentPicker}<section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">Open Gate ${escapeHtml(currentGate.id)} review</a></section></article>`
-}
-function codingAgentPicker(changeCase) {
-  return `<section class="agent-picker" aria-labelledby="agent-picker-${escapeHtml(changeCase.id)}"><div><p class="eyebrow">IMPLEMENTATION PROVIDER</p><h3 id="agent-picker-${escapeHtml(changeCase.id)}">Choose an agent for planning</h3><p>Gate C is complete. Select the provider ADX should prepare for a future bounded run. This does not start an agent, create a lease, or expose credentials.</p></div><div class="agent-options" role="list"><label class="agent-option" role="listitem"><input type="radio" name="agent-${escapeHtml(changeCase.id)}" value="CODEX" checked><span><strong>Codex</strong><small>First provider planned. Requires the dedicated credential and egress gateway.</small></span></label><label class="agent-option" role="listitem"><input type="radio" name="agent-${escapeHtml(changeCase.id)}" value="CLAUDE_CODE"><span><strong>Claude Code</strong><small>Adapter declared. Executor is not connected.</small></span></label><label class="agent-option" role="listitem"><input type="radio" name="agent-${escapeHtml(changeCase.id)}" value="GITHUB_COPILOT"><span><strong>GitHub Copilot</strong><small>Adapter declared. Executor is not connected.</small></span></label></div><p class="agent-note">No live coding-agent provider is enabled yet. ADX will require a signed lease, disposable worktree, approved network gateway, and brokered credential before this selection can run.</p></section>`
+  return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">Open Gate ${escapeHtml(currentGate.id)} review</a></section></article>`
 }
 function bearer(request) { const value = request.headers.authorization; if (value?.startsWith('Bearer ')) return value.slice(7); return request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null }
 function uiRedirectLocation(value) { try { const url = new URL(value || 'http://127.0.0.1:4173/'); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol'); return url.toString() } catch { return 'http://127.0.0.1:4173/' } }
+function realWorkspaceLocation(value) { const url = new URL(uiRedirectLocation(value)); url.searchParams.set('mode', 'real'); return url.toString() }
 async function sessionFor(request) {
   const token = bearer(request); const local = sessions.resolve(token)
   if (local || !verifyOidc || !token) return local
@@ -215,6 +230,64 @@ function createLedgerSigner(env) {
   }
   if (env.ADX_TEST_AUTH === '1') { const keys = generateKeyPairSync('ed25519'); return { keyId: 'adx-test-ledger-ed25519', ...keys } }
   return null
+}
+function createLocalCodingAgentExecution({ executions, changeCases, broker }) {
+  const provider = String(process.env.ADX_LOCAL_CODING_AGENT_PROVIDER ?? '').trim().toUpperCase()
+  const version = String(process.env.ADX_LOCAL_CODING_AGENT_VERSION ?? '').trim()
+  const repositoryId = String(process.env.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ?? '').trim()
+  const ref = String(process.env.ADX_LOCAL_CODING_AGENT_REF ?? '').trim()
+  const writePaths = String(process.env.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ?? '').split(',').map((path) => path.trim()).filter(Boolean)
+  if (!executions || !changeCases || !broker.configured() || !codingAgentProviders.includes(provider) || !version || !repositoryId || !ref.startsWith('refs/') || !writePaths.length) return null
+  const capabilities = { shell: true, gitRead: true, gitWrite: true, browser: false, network: false, secrets: false, deploy: false }
+  const adapter = createCodingAgentAdapter({ provider, version, capabilities, enabled: true })
+  const policy = {
+    version: 'adx-local-coding-agent-v1',
+    agentPrincipal: { id: `agent:${adapter.adapterId}` },
+    repository: { repositoryId, ref, writePaths },
+    capabilities,
+    limits: { maxDurationSeconds: 900, maxToolCalls: 100, maxCostUsd: 0, maxNetworkBytes: 0, maxOutputBytes: 64 * 1024, maxWorkspaceBytes: 64 * 1024 * 1024 },
+    durationSeconds: 900,
+    taskFor: (changeCase) => ({ objective: changeCase.title, changeDigest: sha256({ changeCaseId: changeCase.id, projectionVersion: changeCase.projectionVersion }), allowedCommands: ['node --test'] })
+  }
+  const service = new CodingAgentExecutionService({ executionRepository: executions, changeCaseRepository: changeCases, broker, resolveAdapter: (requestedProvider) => {
+    if (requestedProvider !== provider) throw new ChangeCaseError('CODING_AGENT_PROVIDER_NOT_ENABLED', 'The requested coding-agent provider is not enabled on this ADX server.')
+    return adapter
+  }, policy })
+  return Object.freeze({ service, provider: Object.freeze({ id: provider, label: provider === 'CLAUDE_CODE' ? 'Claude Code CLI' : provider === 'GITHUB_COPILOT' ? 'GitHub Copilot CLI' : 'Codex CLI', description: 'Server-configured CLI implementation runner. ADX issues a signed lease and produces a disposable candidate.' }) })
+}
+function createUhgModelCodingExecution({ executions, changeCases, broker, gateway }) {
+  const provider = 'UHG_AZURE_OPENAI'
+  const version = String(process.env.ADX_CODING_MODEL_VERSION ?? '').trim()
+  const repositoryId = String(process.env.ADX_CODING_MODEL_REPOSITORY_ID ?? process.env.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ?? '').trim()
+  const ref = String(process.env.ADX_CODING_MODEL_REF ?? process.env.ADX_LOCAL_CODING_AGENT_REF ?? '').trim()
+  const writePaths = String(process.env.ADX_CODING_MODEL_WRITE_PATHS ?? process.env.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ?? '').split(',').map((path) => path.trim()).filter(Boolean)
+  if (!executions || !changeCases || !broker.configured() || !gateway?.status?.().configured || !version || !repositoryId || !ref.startsWith('refs/') || !writePaths.length) return null
+  const capabilities = { shell: true, gitRead: true, gitWrite: true, browser: false, network: false, secrets: false, deploy: false }
+  const adapter = createCodingAgentAdapter({ provider, version, capabilities, enabled: true })
+  const policy = {
+    version: 'adx-uhg-model-patch-v1',
+    agentPrincipal: { id: `agent:${adapter.adapterId}` },
+    repository: { repositoryId, ref, writePaths },
+    capabilities,
+    limits: { maxDurationSeconds: 900, maxToolCalls: 2, maxCostUsd: 0, maxNetworkBytes: 0, maxOutputBytes: 64 * 1024, maxWorkspaceBytes: 64 * 1024 * 1024 },
+    durationSeconds: 900,
+    taskFor: (changeCase) => ({ objective: changeCase.title, changeDigest: sha256({ changeCaseId: changeCase.id, projectionVersion: changeCase.projectionVersion }), allowedCommands: ['node --test'] })
+  }
+  const service = new CodingAgentExecutionService({ executionRepository: executions, changeCaseRepository: changeCases, broker, resolveAdapter: (requestedProvider) => {
+    if (requestedProvider !== provider) throw new ChangeCaseError('CODING_AGENT_PROVIDER_NOT_ENABLED', 'The requested coding-agent provider is not enabled on this ADX server.')
+    return adapter
+  }, policy })
+  const model = gateway.status().model ?? 'UHG model'
+  return Object.freeze({ service, provider: Object.freeze({ id: provider, label: `${model} (UHG)`, description: 'Server-owned bounded model-patch runner. ADX validates allowed paths, applies a disposable candidate, and runs approved tests.' }) })
+}
+function codingAgentProvidersForUi() {
+  if (!codingAgentExecution?.configured() || !configuredCoding?.provider) return []
+  return [{ ...configuredCoding.provider, enabled: true }]
+}
+function executionTask(changeCase, governance) {
+  const intent = governance?.intent
+  if (!intent?.outcome || !intent?.acceptanceCriteria) throw new ChangeCaseError('CODING_AGENT_INTENT_REQUIRED', 'A retained outcome and acceptance criteria are required for bounded implementation.')
+  return { objective: `${changeCase.title}\n\nOutcome: ${intent.outcome}\n\nAcceptance criteria: ${intent.acceptanceCriteria}`, changeDigest: sha256({ changeCaseId: changeCase.id, projectionVersion: changeCase.projectionVersion, intentDigest: intent.intentDigest }), allowedCommands: ['node --test'] }
 }
 function changeCaseResource(changeCase, scope) { return { id: changeCase.id, organizationId: scope.organizationId, workspaceId: scope.workspaceId, type: 'change-case', version: changeCase.projectionVersion, riskTier: changeCase.riskTier } }
 function commandError(response, error, traceId) {
@@ -300,7 +373,7 @@ const server = createServer(async (request, response) => {
       return write(response, 503, { code: 'IDENTITY_MEMBERSHIP_STORE_UNAVAILABLE', diagnostic }, traceId)
     }
     const token = sessions.create(principal, knownMemberships); audit({ type: 'session.login', principalId: principal.id, provider: 'google' })
-    response.statusCode = 302; response.setHeader('set-cookie', `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`); response.setHeader('location', uiRedirectLocation(process.env.ADX_UI_ORIGIN)); return response.end()
+    response.statusCode = 302; response.setHeader('set-cookie', `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`); response.setHeader('location', realWorkspaceLocation(process.env.ADX_UI_ORIGIN)); return response.end()
   }
   if (process.env.ADX_TEST_AUTH === '1' && url.pathname === '/__test/session') {
     const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'approver' ? approver : actor === 'designReviewer' ? designReviewer : actor === 'designAuthorReviewer' ? designAuthorReviewer : actor === 'bob' ? bob : null
@@ -362,9 +435,9 @@ const server = createServer(async (request, response) => {
     } catch (error) { return commandError(response, error, traceId) }
   }
 
-  const executionMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?)?$/i)
+  const executionMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?|\/(dispatch))?$/i)
   if (executionMatch) {
-    const [, workspaceId, changeCaseId, collection, leaseId, command] = executionMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    const [, workspaceId, changeCaseId, collection, leaseId, command, dispatch] = executionMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
     if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
     if (!changeCases || !executions) return write(response, 503, { code: 'EXECUTION_GOVERNANCE_NOT_CONFIGURED' }, traceId)
     const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }; const current = await changeCases.get(scope, changeCaseId)
@@ -374,6 +447,11 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && !collection) return write(response, 200, await executions.view(scope, changeCaseId), traceId)
     const body = await readJson(request)
     try {
+      if (request.method === 'POST' && dispatch === 'dispatch') {
+        if (!codingAgentExecution) throw new ChangeCaseError('CODING_AGENT_EXECUTOR_NOT_CONFIGURED', 'Coding-agent execution is not configured for this ADX server.')
+        const governance = await changeCases.intakeView(scope, changeCaseId)
+        return write(response, 202, await codingAgentExecution.start({ scope, principal: session.principal, changeCase: current, provider: body?.provider, task: executionTask(current, governance), expectedVersion: body?.expectedVersion, idempotencyKey: request.headers['idempotency-key'] }), traceId)
+      }
       if (request.method === 'POST' && collection === 'leases' && !leaseId) return write(response, 201, await executions.issueLease({ scope, principal: session.principal, changeCaseId, request: body }), traceId)
       if (request.method === 'POST' && collection === 'leases' && leaseId && command === 'revoke') return write(response, 200, await executions.revokeLease({ scope, principal: session.principal, leaseId, reason: body?.reason }), traceId)
       return write(response, 400, { error: { code: 'EXECUTION_COMMAND_INVALID', message: 'The execution governance command is invalid.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
@@ -400,8 +478,9 @@ const server = createServer(async (request, response) => {
     if (request.method === 'GET' && operation === 'outcomes') { if (!outcomes) return write(response, 503, { code: 'OUTCOME_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, { outcomes: await outcomes.list(scope, changeCaseId) }, traceId) }
     if (request.method === 'GET' && operation === 'outcome-review') { if (!outcomes) return write(response, 503, { code: 'OUTCOME_REPOSITORY_NOT_CONFIGURED' }, traceId); return writeHtml(response, 200, outcomeReviewPage(current, await outcomes.list(scope, changeCaseId)), traceId, session.principal) }
     if (request.method === 'GET' && operation === 'delivery-review') { if (!previewDeliveries || !previewCi) return write(response, 503, { code: 'GIT_PREVIEW_REVIEW_NOT_CONFIGURED' }, traceId); const plans = await previewDeliveries.list(scope, changeCaseId); const review = plans[0] ? { ...(await previewCi.view(scope, plans[0].id)), approvals: await previewDeliveries.approvals(scope, plans[0].id) } : null; return writeHtml(response, 200, deliveryReviewPage(current, plans, review), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'execution-handoff') { const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const transitionsEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/transitions`; const evidenceReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`; return writeHtml(response, 200, renderExecutionHandoffPage(current, { canSubmit: writeDecision.outcome === 'ALLOW', signedInRoles: membership.roles, transitionsEndpoint, evidenceReviewUrl }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'evidence-review') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const reviewDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.review' }); const handoffUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution-handoff`; const runEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-run`; const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-decision`; return writeHtml(response, 200, renderVerificationReviewPage(current, await evidenceRepository.list(scope, changeCaseId), { canRun: writeDecision.outcome === 'ALLOW', canReview: reviewDecision.outcome === 'ALLOW', handoffUrl, runEndpoint, decisionEndpoint, verifierConfigured: Boolean(localIndependentVerifier?.configured()) }), traceId, session.principal) }
+    if (request.method === 'GET' && operation === 'execution-handoff') { const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const dispatchEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution/dispatch`; const statusEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution`; const evidenceReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`; const candidateUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`; return writeHtml(response, 200, renderExecutionHandoffPage(current, { canSubmit: writeDecision.outcome === 'ALLOW', signedInRoles: membership.roles, dispatchEndpoint, statusEndpoint, evidenceReviewUrl, candidateUrl, providers: codingAgentProvidersForUi() }), traceId, session.principal) }
+    if (request.method === 'GET' && operation === 'generated-candidate') return writeHtml(response, 200, await renderCandidateBrowserPage({ candidateRoot, baseUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`, requestedPath: url.searchParams.get('path') ?? '' }), traceId, session.principal)
+    if (request.method === 'GET' && operation === 'evidence-review') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const reviewDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.review' }); const handoffUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution-handoff`; const runEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-run`; const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-decision`; const verifierReadiness = localIndependentVerifier ? await localIndependentVerifier.readiness() : { ready: false, code: 'LOCAL_VERIFIER_NOT_CONFIGURED' }; return writeHtml(response, 200, renderVerificationReviewPage(current, await evidenceRepository.list(scope, changeCaseId), { canRun: writeDecision.outcome === 'ALLOW', canReview: reviewDecision.outcome === 'ALLOW', handoffUrl, runEndpoint, decisionEndpoint, verifierConfigured: verifierReadiness.ready, verifierIssue: verifierReadiness.code }), traceId, session.principal) }
     if (request.method === 'GET' && operation === 'intake-workshop') {
       const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' })
       const classifyEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/classify`

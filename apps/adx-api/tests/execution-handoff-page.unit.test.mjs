@@ -3,20 +3,29 @@ import test from 'node:test'
 import { renderExecutionHandoffPage } from '../execution-handoff-page.mjs'
 
 const changeCase = { title: 'Referral decision communication', state: 'READY_FOR_EXECUTION', projectionVersion: 12 }
-const options = { canSubmit: true, signedInRoles: ['workspace_admin'], transitionsEndpoint: '/transitions', evidenceReviewUrl: '/evidence-review' }
+const options = { canSubmit: true, signedInRoles: ['workspace_admin'], dispatchEndpoint: '/execution/dispatch', statusEndpoint: '/execution', evidenceReviewUrl: '/evidence-review', candidateUrl: '/generated-candidate', providers: [{ id: 'LOCAL_TEST', label: 'Local test provider', description: 'A registered provider.', enabled: true }] }
 
-test('execution handoff requires a candidate-readiness attestation before the versioned transition', () => {
+test('execution handoff requests a bounded implementation run instead of attesting to an external candidate', () => {
   const page = renderExecutionHandoffPage(changeCase, options)
-  assert.match(page, /Submit the prepared candidate/)
-  assert.match(page, /configured candidate is complete and ready/)
-  assert.match(page, /toState:'AWAITING_VERIFICATION'/)
-  assert.match(page, /expectedVersion:config.expectedVersion/)
+  assert.match(page, /Request implementation/)
+  assert.match(page, /signed lease/)
+  assert.match(page, /Select a configured implementation runner/)
+  assert.match(page, /Story decomposition models are configured separately/)
+  assert.match(page, /dispatchEndpoint/)
+  assert.match(page, /statusEndpoint/)
+  assert.match(page, /Bounded implementation activity/)
+  assert.match(page, /progress-events/)
+  assert.match(page, /View generated candidate/)
+  assert.match(page, /candidateUrl/)
+  assert.match(page, /LOCAL_TEST/)
+  assert.doesNotMatch(page, /toState.*AWAITING_VERIFICATION/)
+  assert.doesNotMatch(page, /prepared candidate/)
   assert.match(page, /id="submit" disabled/)
 })
 
 test('execution handoff does not expose submission controls outside execution readiness', () => {
   const page = renderExecutionHandoffPage({ ...changeCase, state: 'AWAITING_VERIFICATION' }, options)
-  assert.match(page, /Handoff is not available/)
+  assert.match(page, /Implementation is not available/)
   assert.doesNotMatch(page, /id="attestation"/)
 })
 
