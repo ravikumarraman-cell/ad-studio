@@ -9,7 +9,7 @@ function renderValue(value) {
 }
 
 function artifact(title, detail, value) {
-  return `<article class="artifact"><div><p class="artifact-kicker">REVIEW EVIDENCE</p><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p></div><div class="artifact-body">${renderValue(value)}</div></article>`
+  return `<article class="artifact"><div><p class="artifact-kicker">REVIEW EVIDENCE</p><h3>${escapeHtml(title)}</h3><p>${escapeHtml(detail)}</p></div><details><summary>Inspect retained evidence</summary><div class="artifact-body">${renderValue(value)}</div></details></article>`
 }
 
 export function renderDesignReviewPage(changeCase, view, { canReview, canWrite, isDesignAuthor, decisionEndpoint, designCaptureUrl }) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCodingAgentAdapter } from '../coding-agent-adapters.mjs'
@@ -25,6 +25,15 @@ test('model-patch broker applies only a validated writable-file replacement in a
   assert.equal(Number.isInteger(result.timings.validationMs), true)
   assert.equal(await readFile(join(candidate, 'src', 'marker.js'), 'utf8'), 'export const marker = "after"\n')
   assert.equal(await readFile(join(source, 'src', 'marker.js'), 'utf8'), 'export const marker = "before"\n')
+})
+
+test('model-patch broker classifies a failed validation command', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adx-model-broker-test-')); const source = join(root, 'source'); const candidate = join(root, 'candidate')
+  await mkdir(join(source, 'src'), { recursive: true }); await writeFile(join(source, 'src', 'marker.js'), 'export const marker = "before"\n')
+  const broker = new ModelPatchBroker({ enabled: true, sourceRoot: source, candidateRoot: candidate, gateway: gateway({ schema: 'adx-model-patch-response-v1', patches: [{ path: 'src/marker.js', content: 'export const marker = "after"\n' }] }), validate: async () => ({ code: 1, signal: null, timedOut: false, outputBytes: 0, outputDigest: 'sha256:test' }) })
+  const result = await broker.execute({ adapter, task, repository })
+  assert.equal(result.errorCode, 'MODEL_PATCH_VALIDATION_FAILED')
+  await rm(root, { recursive: true, force: true })
 })
 
 test('model-patch broker rejects a model edit outside the lease write allowlist', async () => {

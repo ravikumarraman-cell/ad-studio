@@ -61,7 +61,7 @@ export class ModelPatchBroker {
       const validationStartedAt = Date.now()
       const validation = await this.validate({ cwd: workspace, allowedCommands: normalizedTask.allowedCommands, timeoutMs })
       timings.validationMs = elapsed(validationStartedAt)
-      if (validation.code !== 0 || validation.timedOut) return Object.freeze({ accepted: false, promoted: false, provider: provider.provider, code: validation.code, signal: validation.signal, timedOut: validation.timedOut, quotaExceeded: false, outputBytes: validation.outputBytes, outputDigest: validation.outputDigest, candidateDigest: null, timings: finalizedTimings(timings, startedAt) })
+      if (validation.code !== 0 || validation.timedOut) return Object.freeze({ accepted: false, promoted: false, provider: provider.provider, code: validation.code, signal: validation.signal, timedOut: validation.timedOut, quotaExceeded: false, outputBytes: validation.outputBytes, outputDigest: validation.outputDigest, errorCode: validation.timedOut ? 'MODEL_PATCH_VALIDATION_TIMED_OUT' : validation.signal ? 'MODEL_PATCH_VALIDATION_SIGNALED' : 'MODEL_PATCH_VALIDATION_FAILED', candidateDigest: null, timings: finalizedTimings(timings, startedAt) })
       const promotionStartedAt = Date.now()
       await mkdir(dirname(candidate), { recursive: true })
       await rm(candidate, { recursive: true, force: true })

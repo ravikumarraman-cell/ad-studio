@@ -21,3 +21,12 @@ test('delivery review enables a decision only after matching CI evidence and no 
   assert.match(page, /delivery-decision/)
   assert.match(page, /sha256:commit/)
 })
+
+test('delivery review gives a bounded recovery path for missing CI and blocking findings', () => {
+  const plan = { id: 'plan-1', branch: 'adx/preview/case-1', commitDigest: 'sha256:commit', candidateDigest: 'sha256:candidate', evidenceDigest: 'sha256:evidence' }
+  const page = renderDeliveryReviewPage(changeCase, [plan], { ciRuns: [], findings: [{ finding: { severity: 'ERROR', message: 'Missing authorization test' } }], approvals: [] }, options)
+  assert.match(page, /Refresh the preview evidence/)
+  assert.match(page, /Correct the source change for the error-level findings/)
+  assert.match(page, /cannot mark findings resolved or manufacture CI evidence/)
+  assert.doesNotMatch(page, /Approve this preview delivery/)
+})

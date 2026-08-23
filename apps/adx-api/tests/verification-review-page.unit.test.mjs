@@ -32,3 +32,11 @@ test('verification page links a passing candidate to manual preview without trea
   assert.match(page, /\/application-preview/)
   assert.match(page, /Manual testing does not complete Gate D by itself/)
 })
+
+test('verification page explains the recovery path for retained failures', () => {
+  const page = renderVerificationReviewPage(changeCase, [{ status: 'FAIL', candidateDigest: 'sha256:failed', evidenceDigest: 'sha256:evidence', verifierId: 'local', verifierVersion: '1', runtimeImageDigest: 'sha256:runtime' }], options)
+  assert.match(page, /Verification needs a fresh candidate/)
+  assert.match(page, /correct the candidate outside this review/)
+  assert.match(page, /Run independent verification/)
+  assert.doesNotMatch(page, /Complete Gate D/)
+})

@@ -4,9 +4,10 @@ function escapeHtml(value) {
 
 export function renderVerificationReviewPage(changeCase, evidence, { canRun, canReview, handoffUrl, runEndpoint, decisionEndpoint, previewUrl, verifierConfigured, verifierIssue = 'LOCAL_VERIFIER_CANDIDATE_REQUIRED' }) {
   const passes = evidence.filter((item) => item.status === 'PASS')
+  const failures = evidence.filter((item) => item.status === 'FAIL')
   const candidate = passes[0]?.candidateDigest
   const previewLink = candidate && previewUrl ? `<p><a href="${escapeHtml(previewUrl)}">Open manual preview</a></p>` : ''
-  const runPanel = changeCase.state === 'READY_FOR_EXECUTION'
+  let runPanel = changeCase.state === 'READY_FOR_EXECUTION'
     ? `<section class="notice"><h2>Submit a prepared candidate first</h2><p>Independent evidence opens after an authorized contributor records that the server-configured candidate is ready for verification. This handoff does not claim ADX executed or approved the candidate.</p><p><a href="${escapeHtml(handoffUrl)}">Open execution handoff</a></p></section>`
     : changeCase.state !== 'AWAITING_VERIFICATION'
       ? `<section class="notice"><h2>Verification is not open</h2><p>This Change Case must be awaiting verification before ADX can create independent evidence.</p></section>`
@@ -15,6 +16,10 @@ export function renderVerificationReviewPage(changeCase, evidence, { canRun, can
       : canRun
         ? `<section class="action"><p class="eyebrow">INDEPENDENT VERIFIER</p><h2>Run the pinned local verification suite</h2><p>ADX copies the configured candidate, mounts it read-only in a networkless container, runs fixed checks, then retains a signed evidence bundle. It never uses a browser-supplied command.</p><button id="run-verifier" onclick="const status=document.getElementById('run-status'),started=Date.now(),timer=setInterval(()=>{if(!this.disabled){clearInterval(timer);return}status.textContent='Independent verification running · '+Math.max(1,Math.round((Date.now()-started)/1000))+'s elapsed.'},1000);status.textContent='Starting independent verification…'">Run independent verification</button><p id="run-status" class="status" role="status" aria-live="polite"></p></section>`
         : `<section class="notice"><h2>Awaiting an authorized verification request</h2><p>You can inspect evidence, but a workspace contributor must request the local verifier run.</p></section>`
+    const recoveryPanel = failures.length && changeCase.state === 'AWAITING_VERIFICATION'
+      ? `<section class="notice"><p class="eyebrow">RECOVERY PATH</p><h2>Verification needs a fresh candidate</h2><p>${failures.length} retained verification run${failures.length === 1 ? '' : 's'} did not pass. Review the failing bundle below, correct the candidate outside this review, then request a new independent run. ADX does not alter the candidate or reinterpret a failing result.</p></section>`
+      : ''
+    runPanel += recoveryPanel
   const decisionPanel = candidate && canReview && changeCase.state === 'AWAITING_VERIFICATION'
     ? `<section class="action"><p class="eyebrow">GATE D · INDEPENDENT DECISION</p><h2>Complete verification for this candidate?</h2><p>The decision advances only this exact passing candidate to delivery readiness.</p><p>Manual testing does not complete Gate D by itself.</p>${previewLink}<button id="complete-verification">Complete Gate D</button><p id="decision-status" class="status" role="status" aria-live="polite"></p></section>`
     : candidate && changeCase.state === 'AWAITING_VERIFICATION' ? `<section class="notice"><h2>A passing bundle is available</h2><p>An independent reviewer with review permission must complete Gate D for the displayed candidate digest.</p><p>Manual testing does not complete Gate D by itself.</p>${previewLink}</section>` : ''

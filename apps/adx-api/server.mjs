@@ -25,7 +25,7 @@ import { createUhgAzureOpenAiStoryGateway } from './uhg-azure-openai-story-gatew
 import { createUhgAzureOpenAiExecutionGateway } from './uhg-azure-openai-execution-gateway.mjs'
 import { createUhgClaudeStoryGateway } from './uhg-claude-story-gateway.mjs'
 import { renderDesignCapturePage } from './design-capture-page.mjs'
-import { renderDesignReviewPage } from './design-review-page.mjs'
+import { renderDesignReviewPage } from './design-review-workbench.mjs'
 import { LocalIndependentVerifier } from './local-independent-verifier.mjs'
 import { digestCandidateTree } from './verification-evidence.mjs'
 import { createApplicationPreviewProfiles } from './application-preview-profiles.mjs'

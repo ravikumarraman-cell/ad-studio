@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCodexAdapter } from '../coding-agent-adapters.mjs'
@@ -17,6 +17,16 @@ test('local broker executes only in a disposable copy and promotes the successfu
   assert.equal(result.promoted, true)
   assert.equal(await readFile(join(candidate, 'implemented.txt'), 'utf8'), 'done')
   await assert.rejects(() => readFile(join(source, 'implemented.txt'), 'utf8'))
+})
+
+test('local broker classifies a nonzero provider exit without retaining its output', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adx-agent-broker-test-')); const source = join(root, 'source'); const candidate = join(root, 'candidate')
+  await mkdir(source, { recursive: true }); await writeFile(join(source, 'marker.txt'), 'before')
+  const broker = new LocalCodingAgentBroker({ enabled: true, sourceRoot: source, candidateRoot: candidate, run: async () => ({ code: 1, signal: null, output: 'private runner output', outputDigest: 'sha256:output', outputBytes: 21, quotaExceeded: false, timedOut: false }) })
+  const result = await broker.execute({ adapter, task: { objective: 'retain marker', changeDigest: 'sha256:case', allowedCommands: ['node --test'] } })
+  assert.equal(result.errorCode, 'CODING_AGENT_RUN_FAILED')
+  assert.equal(result.candidateDigest, null)
+  await rm(root, { recursive: true, force: true })
 })
 
 test('local broker is disabled until explicitly enabled', async () => {

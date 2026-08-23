@@ -32,7 +32,7 @@ export class LocalCodingAgentBroker {
       await cp(source, workspace, { recursive: true, dereference: false, verbatimSymlinks: true })
       await writeFile(join(workspace, '.adx-agent-task.json'), JSON.stringify({ schema: 'adx-local-coding-agent-task-v1', provider: provider.provider, task: normalizedTask }))
       const result = await this.run({ executable: provider.executable, providerArguments: provider.arguments, cwd: workspace, prompt: buildPrompt(normalizedTask), maxOutputBytes: 64 * 1024, timeoutMs })
-      if (result.code !== 0 || result.timedOut || result.quotaExceeded) return Object.freeze({ accepted: false, promoted: false, provider: provider.provider, ...result, candidateDigest: null })
+      if (result.code !== 0 || result.timedOut || result.quotaExceeded) return Object.freeze({ accepted: false, promoted: false, provider: provider.provider, ...result, errorCode: localFailureCode(result), candidateDigest: null })
       await rm(candidate, { recursive: true, force: true })
       await rename(workspace, candidate)
       return Object.freeze({ accepted: true, promoted: true, provider: provider.provider, ...result, candidateDigest: await digestTree(candidate) })
@@ -40,6 +40,13 @@ export class LocalCodingAgentBroker {
       await rm(scratchRoot, { recursive: true, force: true }).catch(() => {})
     }
   }
+}
+
+function localFailureCode(result) {
+  if (result.timedOut) return 'CODING_AGENT_RUN_TIMED_OUT'
+  if (result.quotaExceeded) return 'CODING_AGENT_OUTPUT_QUOTA_EXCEEDED'
+  if (result.signal) return 'CODING_AGENT_RUN_SIGNALED'
+  return 'CODING_AGENT_RUN_FAILED'
 }
 
 function normalizeTask(task) {
