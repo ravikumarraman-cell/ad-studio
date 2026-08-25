@@ -1,7 +1,8 @@
 import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 import { createPreviewDeliveryPlan, createPreviewGitProvider } from './git-delivery-preview.mjs'
+import { createCandidateGitExport } from './candidate-git-export.mjs'
 
-export function createPreviewDeliveryService({ providerId, repositories, deliveryRepository, evidenceRepository, changeCaseRepository, servicePrincipal }) {
+export function createPreviewDeliveryService({ providerId, repositories, deliveryRepository, evidenceRepository, changeCaseRepository, servicePrincipal, sourceRoot, candidateRoot, createExport = createCandidateGitExport }) {
   if (!deliveryRepository || !evidenceRepository || !changeCaseRepository || servicePrincipal?.type !== 'service' || !servicePrincipal.id) throw new Error('PREVIEW_DELIVERY_SERVICE_CONFIGURATION_REQUIRED')
   const provider = createPreviewGitProvider({ providerId, repositories })
   return Object.freeze({
@@ -16,7 +17,11 @@ export function createPreviewDeliveryService({ providerId, repositories, deliver
       const governance = await changeCaseRepository.intakeView(scope, changeCase.id)
       const repositoryId = governance.intent?.targetRepository
       if (typeof repositoryId !== 'string' || !repositoryId.trim()) throw new ChangeCaseError('DELIVERY_PREVIEW_REPOSITORY_MISSING', 'The retained intake contract must name a registered target repository.')
-      const plan = createPreviewDeliveryPlan({ provider, changeCaseId: changeCase.id, repositoryId, candidateDigest, evidenceDigest, title: changeCase.title, changes: [{ path: '.adx/candidate-manifest.json', digest: sha256({ changeCaseId: changeCase.id, candidateDigest, evidenceDigest }) }] })
+      const repository = provider.repository(repositoryId)
+      const exported = await createExport({ sourceRoot, candidateRoot, candidateDigest, canonicalRemote: repository.canonicalRemote })
+      const basePlan = createPreviewDeliveryPlan({ provider, changeCaseId: changeCase.id, repositoryId, candidateDigest, evidenceDigest, title: changeCase.title, changes: exported.changes.map(({ path, afterDigest }) => ({ path, digest: afterDigest ?? sha256({ path, deleted: true }) })) })
+      const provenance = Object.freeze({ baseCommit: exported.baseCommit, exportDigest: exported.exportDigest })
+      const plan = Object.freeze({ ...basePlan, sourceExport: provenance })
       return deliveryRepository.retain({ scope, principal: servicePrincipal, plan })
     },
   })

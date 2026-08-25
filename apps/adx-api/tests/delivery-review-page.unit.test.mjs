@@ -30,3 +30,10 @@ test('delivery review gives a bounded recovery path for missing CI and blocking 
   assert.match(page, /cannot mark findings resolved or manufacture CI evidence/)
   assert.doesNotMatch(page, /Approve this preview delivery/)
 })
+
+test('delivery review offers a new server-owned plan when an unexecuted plan must be refreshed', () => {
+  const plan = { id: 'plan-1', branch: 'adx/preview/case-1', commitDigest: 'sha256:commit', candidateDigest: 'sha256:candidate', evidenceDigest: 'sha256:evidence' }
+  const page = renderDeliveryReviewPage(changeCase, [plan], { ciRuns: [], findings: [], approvals: [] }, options)
+  assert.match(page, /Rebuild preview plan/)
+  assert.match(page, /delivery-preview-prepare/)
+})

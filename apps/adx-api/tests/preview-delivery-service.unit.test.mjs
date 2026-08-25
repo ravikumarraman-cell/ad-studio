@@ -17,6 +17,9 @@ function service({ evidence = [{ status: 'PASS', ...binding }], timeline = [{ ev
       evidenceRepository: { list: async () => evidence },
       changeCaseRepository: { intakeView: async () => ({ intent: { targetRepository: 'health-x' } }) },
       servicePrincipal: { type: 'service', id: 'delivery-preview-service' },
+      sourceRoot: '/source',
+      candidateRoot: '/candidate',
+      createExport: async () => ({ baseCommit: 'a'.repeat(40), exportDigest: 'sha256:export', changes: [{ path: 'src/feature.js', afterDigest: 'sha256:feature' }] }),
     }).prepare({ scope, changeCase, timeline }),
   }
 }
@@ -30,6 +33,7 @@ test('prepares a server-owned preview-only plan from the exact Gate D binding', 
   assert.equal(prepared.retained[0].plan.candidateDigest, binding.candidateDigest)
   assert.equal(prepared.retained[0].plan.evidenceDigest, binding.evidenceDigest)
   assert.equal(prepared.retained[0].plan.repository.repositoryId, 'health-x')
+  assert.deepEqual(prepared.retained[0].plan.sourceExport, { baseCommit: 'a'.repeat(40), exportDigest: 'sha256:export' })
 })
 
 test('rejects a plan when Gate D evidence is no longer retained', async () => {

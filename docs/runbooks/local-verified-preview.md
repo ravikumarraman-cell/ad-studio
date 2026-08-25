@@ -44,6 +44,25 @@ Use a dedicated service-owned npm configuration file when ADX runs outside a dev
 
 The Dockerfile uses that secret only for `npm ci`. The credential file is not copied into the image, final filesystem, candidate, evidence record, or UI response.
 
+## Prepare a draft-PR export
+
+Before ADX can retain a delivery preview plan for a draft pull request, configure two server-only paths in addition to the registered Git provider values:
+
+```bash
+export ADX_PREVIEW_SOURCE_ROOT="/absolute/path/to/clean/source-checkout"
+export ADX_PREVIEW_CANDIDATE_ROOT="/absolute/path/to/verified/candidate"
+```
+
+The source checkout must be clean, have an `origin` matching the registered canonical HTTPS repository, and remain separate from the candidate checkout. ADX recomputes the candidate digest and refuses the plan if it differs from the independently verified candidate, the Git base is dirty, or secret files would be exported.
+
+To create a remote **draft** pull request from a retained preview plan, set a server-only GitHub credential with repository contents and pull-request write permission. ADX never exposes it to the browser:
+
+```bash
+export ADX_GITHUB_DRAFT_PR_TOKEN="server-only-github-token"
+```
+
+The command recomputes the source export and requires its base commit and export digest to match the retained plan exactly. It creates only the deterministic `adx/preview/<change-case-id>` branch and a provenance-marked draft PR. It has no merge, deployment, environment, or administration action.
+
 ## Start a verified preview
 
 1. Open the target Change Case in ADX.
