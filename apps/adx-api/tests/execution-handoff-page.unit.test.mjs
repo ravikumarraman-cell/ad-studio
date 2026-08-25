@@ -44,3 +44,12 @@ test('execution handoff names the current role and the contributor-capable roles
   assert.match(page, /contributor<\/strong> or <strong>workspace_admin/)
   assert.match(page, /reviewer<\/strong> role remains read-and-review only/)
 })
+
+test('execution handoff sends only a reviewed coding specification ID with dispatch', () => {
+  const page = renderExecutionHandoffPage(changeCase, { ...options, templates: [{ id: 'evidence-first-feature', label: 'Evidence-first feature', description: 'Bounded feature delivery.' }] })
+  assert.match(page, /Implementation specification/)
+  assert.match(page, /coding-spec-template/)
+  assert.match(page, /evidence-first-feature/)
+  assert.match(page, /templateId/)
+  assert.match(page, /cannot expand the lease scope/)
+})

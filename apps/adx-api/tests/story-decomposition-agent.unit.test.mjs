@@ -26,6 +26,13 @@ test('story decomposition agent applies an allowlisted reviewed skill and binds 
   await assert.rejects(() => agent.run({ changeCase, governance, correlationId: 'trace-skill-denied', skillId: 'unreviewed-skill' }), { code: 'STORY_SKILL_NOT_ALLOWED' })
 })
 
+test('story decomposition agent binds a reviewed specification template to its receipt', async () => {
+  const agent = createStoryDecompositionAgent({ suggestionService: { status: () => ({ configured: true }), suggest: async ({ templateGuidance }) => { assert.match(templateGuidance, /independently observable user value/); return { provider: 'OLLAMA_LOCAL', model: 'local-story-model', suggestions } } } })
+  const run = await agent.run({ changeCase, governance, correlationId: 'trace-template', templateId: 'user-value-slices' })
+  assert.equal(run.receipt.template.id, 'user-value-slices')
+  await assert.rejects(() => agent.run({ changeCase, governance, correlationId: 'trace-template-denied', templateId: 'unknown' }), { code: 'AGENT_SPEC_TEMPLATE_NOT_ALLOWED' })
+})
+
 test('story decomposition agent refuses unresolved intake ambiguity', async () => {
   const agent = createStoryDecompositionAgent({ suggestionService: { status: () => ({}), suggest: async () => ({ suggestions }) } })
   await assert.rejects(() => agent.run({ changeCase, governance: { ...governance, ambiguities: [{ code: 'SOURCE_CONTENT_MISSING', status: 'OPEN' }] }, correlationId: 'trace-2' }), { code: 'STORY_AGENT_CLARIFICATION_REQUIRED' })

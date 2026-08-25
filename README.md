@@ -240,10 +240,12 @@ Despite its historical name, this applies the ordered ADX migrations through Sta
 In one terminal:
 
 ```bash
-npm run api:dev
+npm run api:start
 ```
 
-The API binds to `http://127.0.0.1:3100` by default. Confirm its basic health:
+`api:start` loads the ignored `.env.local`, confirms the database and ledger-signing configuration, checks that the selected port is free, and then starts the API. It does not print secrets. Use `npm run api:dev` only when you deliberately want the minimal unvalidated development launcher.
+
+The API binds to `http://127.0.0.1:3100` by default. To use another free local port, run `PORT=3101 npm run api:start`. Confirm its basic health:
 
 ```bash
 curl http://127.0.0.1:3100/healthz
@@ -351,6 +353,16 @@ ADX_STORY_AI_OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
 
 AI output remains a preview. A human selects and edits content before it is submitted to the versioned Story API.
+
+### Optional GitHub milestone publication
+
+After an independent story approval, ADX can rank the approved stories during design review and create one GitHub issue per story in a selected existing milestone. Configure a server-only token with only the repository Issues and Milestones permissions needed for the target repository:
+
+```dotenv
+ADX_GITHUB_MILESTONE_TOKEN=your_server_only_github_token
+```
+
+The browser never receives this token. ADX stores an immutable receipt for each created issue; GitHub issue edits do not alter the approved ADX story contract or advance a workflow gate.
 
 ## Validate the workspace
 

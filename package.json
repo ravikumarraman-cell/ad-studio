@@ -74,6 +74,7 @@
     "verify:maintainability": "node scripts/verify-maintainability.mjs",
     "bootstrap:stage0": "bash scripts/bootstrap-stage0.sh",
     "api:dev": "npm --workspace=@adx/api run dev",
+    "api:start": "node scripts/start-adx-api.mjs",
     "provision:local-user": "node scripts/provision-local-user.mjs",
     "github:create-demo-milestones": "bash scripts/create-github-demo-milestones.sh",
     "api:smoke": "npm --workspace=@adx/api run smoke",
