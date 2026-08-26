@@ -3,6 +3,7 @@ import { createServer } from 'node:net'
 import { access } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { loadLocalEnv } from './load-local-env.mjs'
+import { validatePreviewCheckoutPaths } from '../apps/adx-api/preview-checkout-config.mjs'
 
 if (process.argv.includes('--help')) {
   console.log('Usage: npm run api:start\n\nLoads .env.local, verifies governed API prerequisites, checks the configured PORT (default 3100), then starts the ADX API. Environment variables already set in the shell take precedence over .env.local.')
@@ -20,6 +21,12 @@ for (const name of ['ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE', 'ADX_LEDGER_SIGNING_P
   const value = process.env[name]
   if (!value?.trim()) continue
   try { await access(value) } catch { throw new Error(`API_START_KEY_FILE_UNREADABLE: ${name} does not reference a readable file.`) }
+}
+
+try {
+  await validatePreviewCheckoutPaths({ sourceRoot: process.env.ADX_PREVIEW_SOURCE_ROOT, candidateRoot: process.env.ADX_PREVIEW_CANDIDATE_ROOT })
+} catch (error) {
+  throw new Error(`API_START_${error?.message ?? 'PREVIEW_CHECKOUT_INVALID'}: Configure ADX_PREVIEW_SOURCE_ROOT and ADX_PREVIEW_CANDIDATE_ROOT as readable server-owned checkout directories.`)
 }
 
 const port = Number(process.env.PORT ?? 3100)

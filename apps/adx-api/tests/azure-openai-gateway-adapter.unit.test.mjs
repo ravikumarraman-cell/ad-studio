@@ -31,6 +31,97 @@ test('Azure OpenAI gateway adapter uses the approved UHG endpoint, Azure AD head
   assert.equal(JSON.parse(captured.init.body).temperature, 1)
 })
 
+test('gateway forwards a strict JSON Schema response contract', async () => {
+  let captured
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { captured = JSON.parse(init.body); return response({ choices: [{ message: { content: '{"ok":true}' } }] }) } })
+  await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-structured-output', temperature: 0, responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean' } } } } })
+  assert.deepEqual(captured.response_format, { type: 'json_schema', json_schema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false, required: ['ok'], properties: { ok: { type: 'boolean' } } } } })
+  assert.equal(captured.temperature, 0)
+})
+
+test('gateway falls back when its route explicitly rejects structured output', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'unsupported_parameter', param: 'response_format' } }, { status: 400 }) : response({ choices: [{ message: { content: '{"schema":"adx-model-patch-response-v1","patches":[]}' } }] }) } })
+  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-structured-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+  assert.equal(result.text, '{"schema":"adx-model-patch-response-v1","patches":[]}')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].response_format.type, 'json_schema')
+  assert.equal(requests[1].response_format, undefined)
+})
+
+test('gateway falls back when structured-output schema validation is rejected', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'invalid_json_schema', param: 'response_format.json_schema.schema' } }, { status: 400 }) : response({ choices: [{ message: { content: 'ready' } }] }) } })
+  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-schema-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+  assert.equal(result.text, 'ready')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].response_format, undefined)
+})
+
+test('gateway falls back to the legacy token-limit field when required by its route', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'unsupported_parameter', param: 'max_completion_tokens' } }, { status: 400 }) : response({ choices: [{ message: { content: 'ready' } }] }) } })
+  const result = await adapter.complete({ system: 'Be concise.', prompt: 'Reply ready.', correlationId: 'trace-legacy-token-field' })
+  assert.equal(result.text, 'ready')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].max_completion_tokens, undefined)
+  assert.equal(requests[1].max_tokens, 2_000)
+})
+
+test('gateway retries without temperature when its route rejects that value', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'unsupported_value', param: 'temperature' } }, { status: 400 }) : response({ choices: [{ message: { content: 'ready' } }] }) } })
+  const result = await adapter.complete({ system: 'Be concise.', prompt: 'Reply ready.', correlationId: 'trace-temperature-fallback', temperature: 0 })
+  assert.equal(result.text, 'ready')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].temperature, 0)
+  assert.equal(requests[1].temperature, undefined)
+})
+
+test('gateway composes explicit compatibility retries without restoring rejected fields', async () => {
+  const requests = []
+  const responses = [
+    response({ error: { code: 'unsupported_value', param: 'temperature' } }, { status: 400 }),
+    response({ error: { code: 'unsupported_parameter', param: 'response_format' } }, { status: 400 }),
+    response({ error: { code: 'unsupported_parameter', param: 'max_completion_tokens' } }, { status: 400 }),
+    response({ choices: [{ message: { content: 'ready' } }] })
+  ]
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return responses.shift() } })
+  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Reply ready.', correlationId: 'trace-composed-fallbacks', temperature: 0, responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+  assert.equal(result.text, 'ready')
+  assert.equal(requests.length, 4)
+  assert.equal(requests[1].temperature, undefined)
+  assert.equal(requests[2].temperature, undefined)
+  assert.equal(requests[2].response_format, undefined)
+  assert.equal(requests[3].max_completion_tokens, undefined)
+  assert.equal(requests[3].max_tokens, 2_000)
+  assert.equal(requests[3].temperature, undefined)
+  assert.equal(requests[3].response_format, undefined)
+})
+
+test('gateway composes every supported compatibility-rejection order exactly once', async () => {
+  const adjustments = [
+    { error: { code: 'unsupported_value', param: 'temperature' }, omitted: 'temperature' },
+    { error: { code: 'unsupported_parameter', param: 'response_format' }, omitted: 'response_format' },
+    { error: { code: 'unsupported_parameter', param: 'max_completion_tokens' }, omitted: 'max_completion_tokens' }
+  ]
+  const orders = [
+    [0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]
+  ]
+  for (const order of orders) {
+    const requests = []
+    const responses = [...order.map((index) => response({ error: adjustments[index].error }, { status: 400 })), response({ choices: [{ message: { content: 'ready' } }] })]
+    const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return responses.shift() } })
+    const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Reply ready.', correlationId: `trace-compatibility-order-${order.join('')}`, temperature: 0, responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+    assert.equal(result.text, 'ready')
+    assert.equal(requests.length, 4)
+    for (let requestIndex = 1; requestIndex < requests.length; requestIndex += 1) {
+      for (const adjustmentIndex of order.slice(0, requestIndex)) assert.equal(requests[requestIndex][adjustments[adjustmentIndex].omitted], undefined)
+    }
+    assert.equal(requests[3].max_tokens, 2_000)
+  }
+})
+
 test('Azure OpenAI gateway adapter accepts a bounded source-context prompt', async () => {
   let captured
   const prompt = `source context\n${'x'.repeat(8_000)}`
@@ -45,8 +136,10 @@ test('Azure OpenAI gateway adapter sanitizes project authorization failures', as
 })
 
 test('Azure OpenAI gateway adapter retains only structured gateway validation metadata', async () => {
-  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async () => response({ error: { code: 'unsupported_parameter', type: 'invalid_request_error', param: 'temperature', message: 'Do not retain this message.' } }, { status: 400 }) })
+  let calls = 0
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async () => { calls += 1; return response({ error: { code: 'unsupported_parameter', type: 'invalid_request_error', param: 'temperature', message: 'Do not retain this message.' } }, { status: 400 }) } })
   await assert.rejects(() => adapter.complete({ system: 'Be concise.', prompt: 'Explain.', correlationId: 'trace-structured-error' }), (error) => error.details.gatewayError?.code === 'unsupported_parameter' && error.details.gatewayError?.param === 'temperature' && !JSON.stringify(error).includes('Do not retain this message.'))
+  assert.equal(calls, 1)
 })
 
 test('Azure OpenAI gateway adapter retains no completion text when a successful response is empty', async () => {

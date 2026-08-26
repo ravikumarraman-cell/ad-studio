@@ -16,16 +16,14 @@ export function createAzureOpenAiGatewayAdapter({ endpoint, apiVersion = '2025-0
   const configured = Boolean(gateway && configuration && typeof tokenProvider === 'function' && fetchImpl)
   return Object.freeze({
     status: () => Object.freeze({ configured, provider: configured ? 'AZURE_OPENAI_GATEWAY' : null, deployment: configured ? configuration.deployment : null, model: configured ? configuration.model : null, projectId: configured ? configuration.projectId : null, endpoint: configured ? gateway.origin : null, apiVersion: configured ? apiVersion : null }),
-    async complete({ system, prompt, correlationId, maxTokens = 2_000, temperature = 1 }) {
+    async complete({ system, prompt, correlationId, maxTokens = 2_000, temperature = 1, responseSchema = null }) {
       if (!configured) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_NOT_CONFIGURED', 'The Azure OpenAI gateway adapter requires its approved endpoint, deployment, project ID, Azure AD token provider, and fetch implementation.', { severity: 'warning' })
-      const request = normalizeRequest({ system, prompt, correlationId, maxTokens, temperature })
+      const request = normalizeRequest({ system, prompt, correlationId, maxTokens, temperature, responseSchema })
       const accessToken = await tokenProvider({ scope: defaultScope, audience: gateway.origin, deployment: configuration.deployment, projectId: configuration.projectId, correlationId: request.correlationId })
       if (!validToken(accessToken)) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_CREDENTIAL_UNAVAILABLE', 'Azure AD did not provide a usable Cognitive Services access token.', { severity: 'warning' })
       const headers = Object.freeze({ accept: 'application/json', 'content-type': 'application/json', 'x-client-request-id': request.correlationId, projectId: configuration.projectId, 'x-idp': 'azuread', [configuration.credentialHeaderName]: credentialValue(configuration.credentialHeaderName, accessToken) })
-      const body = { model: configuration.model, messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.prompt }], max_completion_tokens: request.maxTokens, temperature: request.temperature }
-      let response
-      try { response = await fetchImpl(gateway.url, { method: 'POST', headers, body: JSON.stringify(body) }) } catch { throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' }) }
-      const payload = await response.json().catch(() => null)
+      const baseBody = { model: configuration.model, messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.prompt }], max_completion_tokens: request.maxTokens, temperature: request.temperature }
+      const { response, payload } = await sendCompatibleGatewayRequest(fetchImpl, gateway.url, headers, { ...baseBody, ...(request.responseSchema ? { response_format: { type: 'json_schema', json_schema: request.responseSchema } } : {}) })
       const providerRequestId = response.headers.get('x-request-id') ?? response.headers.get('x-ms-request-id') ?? response.headers.get('apim-request-id') ?? null
       if (!response.ok) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_FAILED', failureMessage(response.status), { retryable: response.status === 429 || response.status >= 500, severity: 'warning', details: { provider: 'AZURE_OPENAI_GATEWAY', providerStatus: response.status, providerRequestId, gatewayError: safeGatewayError(payload?.error) } })
       const text = payload?.choices?.[0]?.message?.content
@@ -83,10 +81,56 @@ function normalizeConfiguration({ deployment, model, projectId, credentialHeader
   return Object.freeze({ deployment: String(deployment).trim(), model: String(model).trim(), projectId: String(projectId).trim(), credentialHeaderName: header })
 }
 
-function normalizeRequest({ system, prompt, correlationId, maxTokens, temperature }) {
+function normalizeRequest({ system, prompt, correlationId, maxTokens, temperature, responseSchema }) {
   if (!messageText(system, maxSystemCharacters) || !messageText(prompt, maxPromptCharacters) || !token(correlationId) || !Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 8_192 || !Number.isFinite(temperature) || temperature < 0 || temperature > 1) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_INVALID', 'Azure OpenAI gateway requests require bounded system, prompt, correlation, token, and temperature values.', { severity: 'warning' })
-  return Object.freeze({ system: String(system).trim(), prompt: String(prompt).trim(), correlationId: String(correlationId).trim(), maxTokens, temperature })
+  const normalizedSchema = normalizeResponseSchema(responseSchema)
+  return Object.freeze({ system: String(system).trim(), prompt: String(prompt).trim(), correlationId: String(correlationId).trim(), maxTokens, temperature, responseSchema: normalizedSchema })
 }
+
+function normalizeResponseSchema(value) {
+  if (value === null || value === undefined) return null
+  if (!value || typeof value !== 'object' || !token(value.name) || value.strict !== true || !value.schema || typeof value.schema !== 'object') throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_INVALID', 'Structured-output requests require a named strict JSON Schema.', { severity: 'warning' })
+  return Object.freeze({ name: String(value.name).trim(), strict: true, schema: value.schema })
+}
+
+async function sendGatewayRequest(fetchImpl, url, headers, body) {
+  let response
+  try { response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) }) } catch { throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' }) }
+  return { response, payload: await response.json().catch(() => null) }
+}
+
+async function sendCompatibleGatewayRequest(fetchImpl, url, headers, body) {
+  let currentBody = body
+  let result
+  const applied = new Set()
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    result = await sendGatewayRequest(fetchImpl, url, headers, currentBody)
+    const adjustment = compatibleBodyAdjustment(result.response, result.payload, currentBody)
+    if (!adjustment || applied.has(adjustment.kind)) return result
+    applied.add(adjustment.kind)
+    currentBody = adjustment.body
+  }
+  return result
+}
+
+function compatibleBodyAdjustment(response, payload, body) {
+  if (rejectsTemperatureValue(response, payload) && Object.hasOwn(body, 'temperature')) return { kind: 'temperature', body: withoutTemperature(body) }
+  if (rejectsStructuredOutput(response, payload, body) && Object.hasOwn(body, 'response_format')) return { kind: 'response_format', body: withoutResponseFormat(body) }
+  if (rejectsMaxCompletionTokens(response, payload) && Object.hasOwn(body, 'max_completion_tokens')) return { kind: 'max_completion_tokens', body: legacyTokenBody(body) }
+  return null
+}
+
+function rejectsStructuredOutput(response, payload, body) {
+  if (!body.response_format || response.status !== 400) return false
+  const parameter = String(payload?.error?.param ?? '').trim().toLowerCase()
+  return parameter === 'response_format' || parameter === 'json_schema' || parameter.startsWith('response_format.') || parameter.startsWith('json_schema.')
+}
+
+function rejectsMaxCompletionTokens(response, payload) { return response.status === 400 && String(payload?.error?.param ?? '').trim().toLowerCase() === 'max_completion_tokens' }
+function legacyTokenBody(body) { const { max_completion_tokens: maxTokens, ...legacy } = body; return { ...legacy, max_tokens: maxTokens } }
+function rejectsTemperatureValue(response, payload) { return response.status === 400 && String(payload?.error?.code ?? '').trim().toLowerCase() === 'unsupported_value' && String(payload?.error?.param ?? '').trim().toLowerCase() === 'temperature' }
+function withoutTemperature(body) { const { temperature: _temperature, ...request } = body; return request }
+function withoutResponseFormat(body) { const { response_format: _responseFormat, ...request } = body; return request }
 
 function normalizeUsage(usage) { return Object.freeze({ inputTokens: Number.isInteger(usage?.prompt_tokens) ? usage.prompt_tokens : null, outputTokens: Number.isInteger(usage?.completion_tokens) ? usage.completion_tokens : null, totalTokens: Number.isInteger(usage?.total_tokens) ? usage.total_tokens : null }) }
 function safeFinishReason(value) { return ['stop', 'length', 'content_filter'].includes(value) ? value : null }

@@ -90,12 +90,19 @@ export class CodingAgentExecutionService {
 
 function failureResult(error) {
   const code = error instanceof ChangeCaseError ? error.code : 'CODING_AGENT_EXECUTION_FAILED'
-  return { accepted: false, promoted: false, code: 1, signal: null, timedOut: false, quotaExceeded: false, output: '', outputBytes: 0, outputDigest: sha256(''), errorCode: code, errorDetails: safeErrorDetails(error?.details), timings: safeTimings(error?.executionTimings), candidateDigest: null }
+  const errorDetails = safeErrorDetails(error?.details)
+  return { accepted: false, promoted: false, code: 1, signal: null, timedOut: false, quotaExceeded: false, output: '', outputBytes: 0, outputDigest: sha256(''), errorCode: diagnosticCode(code, errorDetails), errorDetails, timings: safeTimings(error?.executionTimings), candidateDigest: null }
+}
+
+function diagnosticCode(code, details) {
+  if (code !== 'AZURE_OPENAI_GATEWAY_REQUEST_FAILED') return code
+  const gateway = [details?.gatewayCode, details?.gatewayParam].filter(Boolean).join(':')
+  return gateway ? `${code} (${gateway})` : code
 }
 
 function toCompletionResult(result) {
   const candidateArtifact = result.candidateDigest ? [{ mediaType: 'application/vnd.adx.candidate-digest', digest: result.candidateDigest, bytes: 0 }] : []
-  return { code: Number(result.code ?? 1), signal: result.signal ?? null, timedOut: Boolean(result.timedOut), quotaExceeded: Boolean(result.quotaExceeded), outputBytes: Number(result.outputBytes ?? 0), errorCode: result.errorCode ?? null, errorDetails: result.errorDetails ?? null, timings: safeTimings(result.timings), artifacts: candidateArtifact }
+  return { code: Number(result.code ?? 1), signal: result.signal ?? null, timedOut: Boolean(result.timedOut), quotaExceeded: Boolean(result.quotaExceeded), outputDigest: typeof result.outputDigest === 'string' && result.outputDigest.startsWith('sha256:') ? result.outputDigest : null, outputBytes: Number(result.outputBytes ?? 0), errorCode: result.errorCode ?? null, errorDetails: result.errorDetails ?? null, timings: safeTimings(result.timings), artifacts: candidateArtifact }
 }
 
 function publicResult(result) {
@@ -109,7 +116,8 @@ function safeErrorDetails(details) {
   const gatewayParam = typeof details?.gatewayError?.param === 'string' && details.gatewayError.param.length <= 128 ? details.gatewayError.param : null
   const responseIssue = ['NON_JSON', 'SCHEMA_INVALID', 'PATCH_INVALID'].includes(details?.responseIssue) ? details.responseIssue : null
   const modelFinishReason = ['stop', 'length', 'content_filter'].includes(details?.modelFinishReason) ? details.modelFinishReason : null
-  const safe = { provider: details?.provider === 'AZURE_OPENAI_GATEWAY' ? details.provider : null, providerStatus: Number.isInteger(providerStatus) && providerStatus >= 100 && providerStatus <= 599 ? providerStatus : null, providerRequestId, gatewayCode, gatewayParam, responseIssue, modelFinishReason }
+  const modelAttempts = Number.isInteger(details?.modelAttempts) && details.modelAttempts >= 1 && details.modelAttempts <= 2 ? details.modelAttempts : null
+  const safe = { provider: details?.provider === 'AZURE_OPENAI_GATEWAY' ? details.provider : null, providerStatus: Number.isInteger(providerStatus) && providerStatus >= 100 && providerStatus <= 599 ? providerStatus : null, providerRequestId, gatewayCode, gatewayParam, responseIssue, modelFinishReason, modelAttempts }
   return Object.values(safe).some(Boolean) ? safe : null
 }
 

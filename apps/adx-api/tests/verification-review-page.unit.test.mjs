@@ -11,12 +11,13 @@ test('verification page reports elapsed time while the governed verifier request
   assert.match(page, /Starting independent verification/)
   assert.match(page, /Independent verification running/)
   assert.match(page, /run-status/)
+  assert.match(page, /'idempotency-key':crypto\.randomUUID\(\)/)
 })
 
 test('verification page does not offer a run outside the awaiting-verification state', () => {
   const page = renderVerificationReviewPage({ ...changeCase, state: 'READY_FOR_EXECUTION' }, [], options)
-  assert.match(page, /Submit a prepared candidate first/)
-  assert.doesNotMatch(page, /onclick="const status=document.getElementById\('run-status'\)/)
+  assert.match(page, /Submit a candidate before verification/)
+  assert.doesNotMatch(page, /id="run-verifier"/)
 })
 
 test('verification page identifies an empty server candidate before a run is submitted', () => {
@@ -30,7 +31,7 @@ test('verification page links a passing candidate to manual preview without trea
   const page = renderVerificationReviewPage(changeCase, [{ status: 'PASS', candidateDigest: 'sha256:verified', evidenceDigest: 'sha256:evidence', verifierId: 'local', verifierVersion: '1', runtimeImageDigest: 'sha256:runtime' }], { ...options, previewUrl: '/application-preview' })
   assert.match(page, /Open manual preview/)
   assert.match(page, /\/application-preview/)
-  assert.match(page, /Manual testing does not complete Gate D by itself/)
+  assert.match(page, /Manual preview is optional and does not complete Gate D/)
 })
 
 test('verification page explains the recovery path for retained failures', () => {

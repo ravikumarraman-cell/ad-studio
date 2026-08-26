@@ -15,7 +15,7 @@ const definitions = Object.freeze({
 
 const catalogs = Object.freeze(Object.fromEntries(Object.entries(definitions).map(([kind, entries]) => [kind, Object.freeze(entries.map(([id, label, description, guidance]) => Object.freeze({ id, label, description, version: '1.0.0', guidance, digest: sha256({ schema: 'adx-agent-spec-template-v1', kind, id, version: '1.0.0', guidance }) }))) ])))
 
-export function listAgentSpecTemplates(kind) { return Object.freeze((catalogs[kind] ?? []).map(({ guidance, ...template }) => Object.freeze(template))) }
+export function listAgentSpecTemplates(kind) { return Object.freeze((catalogs[kind] ?? []).map((template) => Object.freeze({ ...template }))) }
 export function resolveAgentSpecTemplate(kind, templateId) {
   if (templateId === undefined || templateId === null || templateId === '') return null
   const template = catalogs[kind]?.find((item) => item.id === String(templateId).trim())

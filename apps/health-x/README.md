@@ -25,9 +25,9 @@ ADX records the work as three independently reviewable Change Cases:
 
 All state resets on refresh. The feature labels in the UI make this delivery scope visible.
 
-## Run locally
+## Run Locally
 
-From the repository root:
+From the ADX Studio repository root:
 
 ```bash
 npm install
@@ -43,6 +43,13 @@ npm run health-x:build
 ```
 
 The Node server entrypoint is produced at `apps/health-x/.output/server/index.mjs`.
+
+From the standalone Health-X repository root, install through the approved corporate registry and use the project-local scripts:
+
+```bash
+npm ci --registry=https://edgeinternal1uhg.optum.com/artifactory/api/npm/tenant-compass-npm-vir/ --no-audit --no-fund
+npm run build
+```
 
 ## Run the production artifact
 
@@ -94,6 +101,14 @@ Run the production acceptance suite:
 ```bash
 npm run verify:health-x
 ```
+
+Health-X now also owns the equivalent project-local command:
+
+```bash
+npm --prefix apps/health-x run verify:production
+```
+
+This command builds the application, runs the generated Node server on an isolated local port, verifies the browser flows and refresh-reset behavior, and checks for browser console errors or external browser requests. It passed in an independent fresh clone of `ravikumarraman-cell/health-x` after `npm ci` through the corporate Artifactory registry on Node 22.19.0.
 
 `verify:health-x` builds Health-X, starts the production Node output on an isolated local port, and uses a real browser to verify the rendered shell, appointment check-in, medication and care-plan state changes, refresh-reset behavior, the fictional-data notice, and the absence of external browser requests. It then shuts the server down. For a human acceptance check, start the output and verify that the page renders these visible points:
 

@@ -2,14 +2,49 @@
   "name": "@adx/health-x",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.19.0 <23"
+  },
   "scripts": {
     "dev": "vinxi dev",
-    "build": "vinxi build"
+    "build": "vinxi build",
+    "verify:production": "node scripts/verify-production.mjs",
+    "verify": "npm run verify:production"
   },
   "dependencies": {
     "@tanstack/react-router": "1.120.0",
     "@tanstack/react-start": "1.120.0",
     "react": "18.3.1",
     "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "playwright": "1.54.1"
+  },
+  "overrides": {
+    "@tanstack/directive-functions-plugin": "1.119.2",
+    "@tanstack/history": "1.115.0",
+    "@tanstack/react-router": "1.120.0",
+    "@tanstack/react-start": "1.120.0",
+    "@tanstack/react-start-client": "1.120.0",
+    "@tanstack/react-start-config": "1.120.0",
+    "@tanstack/react-start-plugin": "1.115.0",
+    "@tanstack/react-start-router-manifest": "1.119.0",
+    "@tanstack/react-start-server": "1.120.0",
+    "@tanstack/react-store": "0.7.7",
+    "@tanstack/router-core": "1.119.0",
+    "@tanstack/router-generator": "1.120.0",
+    "@tanstack/router-plugin": "1.120.0",
+    "@tanstack/router-utils": "1.162.2",
+    "@tanstack/server-functions-plugin": "1.119.2",
+    "@tanstack/start-api-routes": "1.119.0",
+    "@tanstack/start-client-core": "1.119.0",
+    "@tanstack/start-server-core": "1.119.0",
+    "@tanstack/start-server-functions-client": "1.119.2",
+    "@tanstack/start-server-functions-fetcher": "1.119.0",
+    "@tanstack/start-server-functions-handler": "1.119.0",
+    "@tanstack/start-server-functions-server": "1.119.2",
+    "@tanstack/start-server-functions-ssr": "1.119.2",
+    "@tanstack/store": "0.7.7",
+    "@tanstack/virtual-file-routes": "1.162.0"
   }
 }

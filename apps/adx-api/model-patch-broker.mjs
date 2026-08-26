@@ -10,6 +10,7 @@ const maxContextBytes = 160 * 1024
 const maxFileBytes = 24 * 1024
 const maxPatchBytes = 64 * 1024
 const maxPatches = 12
+const maxModelAttempts = 2
 const ignoredDirectories = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage'])
 const sensitiveFileNames = new Set(['.env', '.npmrc'])
 
@@ -46,16 +47,9 @@ export class ModelPatchBroker {
       await cp(source, workspace, { recursive: true, dereference: false, verbatimSymlinks: true, filter: (path) => shouldCopyCandidatePath(source, path) })
       timings.workspaceCopyMs = elapsed(copyStartedAt)
       const modelStartedAt = Date.now()
-      const completion = await this.gateway.complete({
-        system: 'You are a bounded code-editing worker. Return only valid JSON matching the requested schema. Never include markdown, explanations, credentials, commands, or files outside the supplied writable context.',
-        prompt: buildPatchPrompt(normalizedTask, context),
-        correlationId: randomUUID(),
-        maxTokens: 8192,
-        temperature: 1
-      })
+      const { completion, patches } = await requestValidatedPatches({ gateway: this.gateway, task: normalizedTask, context, writePaths })
       timings.modelMs = elapsed(modelStartedAt)
       const patchStartedAt = Date.now()
-      const patches = parsePatches(completion.text, writePaths, completion.finishReason)
       for (const patch of patches) await writePatch(workspace, patch)
       timings.patchMs = elapsed(patchStartedAt)
       const validationStartedAt = Date.now()
@@ -129,27 +123,75 @@ async function collectContext(root, writePaths) {
   return Object.freeze(files)
 }
 
-function buildPatchPrompt(task, files) {
+function buildPatchPrompt(task, files, attempt = 1, previousResponseIssue = null) {
   return JSON.stringify({
     schema: 'adx-model-patch-request-v1',
     objective: task.objective,
     changeDigest: task.changeDigest,
     validation: task.allowedCommands,
     responseSchema: { schema: 'adx-model-patch-response-v1', patches: [{ path: 'relative writable path', content: 'complete replacement file content' }] },
+    attempt,
+    previousResponseIssue,
     rules: ['Return JSON only.', 'Change only supplied paths.', 'Use complete replacement content for each changed file.', 'Do not add dependencies, run commands, request secrets, create commits, or claim verification.'],
     files
   })
 }
 
-function parsePatches(text, writePaths, finishReason = null) {
+async function requestValidatedPatches({ gateway, task, context, writePaths }) {
+  let lastError
+  for (let attempt = 1; attempt <= maxModelAttempts; attempt += 1) {
+    const completion = await gateway.complete({
+      system: 'You are a bounded code-editing worker. Return only valid JSON matching the requested schema. Never include markdown, explanations, credentials, commands, or files outside the supplied writable context.',
+      prompt: buildPatchPrompt(task, context, attempt, lastError?.details?.responseIssue),
+      correlationId: randomUUID(),
+      maxTokens: 8192,
+      temperature: 0,
+      responseSchema: modelPatchResponseSchema
+    })
+    try {
+      return Object.freeze({ completion, patches: parsePatches(completion.text, writePaths, completion) })
+    } catch (error) {
+      if (error?.code !== 'MODEL_PATCH_RESPONSE_INVALID' || attempt === maxModelAttempts) throw withAttempts(error, attempt)
+      lastError = error
+    }
+  }
+  throw lastError
+}
+
+const modelPatchResponseSchema = Object.freeze({
+  name: 'adx_model_patch_response',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['schema', 'patches'],
+    properties: {
+      schema: { type: 'string', enum: ['adx-model-patch-response-v1'] },
+      patches: {
+        type: 'array',
+        minItems: 1,
+        maxItems: maxPatches,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['path', 'content'],
+          properties: { path: { type: 'string' }, content: { type: 'string' } }
+        }
+      }
+    }
+  }
+})
+
+function parsePatches(text, writePaths, completion = {}) {
+  const finishReason = completion.finishReason ?? null
   let response
-  try { response = JSON.parse(unwrapJsonFence(text)) } catch { throw patchResponseError('NON_JSON', 'The model-patch executor received a non-JSON response.', finishReason) }
-  if (response?.schema !== 'adx-model-patch-response-v1' || !Array.isArray(response.patches) || !response.patches.length || response.patches.length > maxPatches) throw patchResponseError('SCHEMA_INVALID', 'The model-patch response must contain a bounded non-empty patch list.', finishReason)
+  try { response = JSON.parse(unwrapJsonFence(text)) } catch { throw patchResponseError('NON_JSON', 'The model-patch executor received a non-JSON response.', completion) }
+  if (response?.schema !== 'adx-model-patch-response-v1' || !Array.isArray(response.patches) || !response.patches.length || response.patches.length > maxPatches) throw patchResponseError('SCHEMA_INVALID', 'The model-patch response must contain a bounded non-empty patch list.', completion)
   const seen = new Set()
   const patches = response.patches.map((patch) => {
     const path = typeof patch?.path === 'string' ? patch.path.trim() : ''
     const content = typeof patch?.content === 'string' ? patch.content : null
-    if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').includes('..') || !isWritable(path, writePaths) || isSensitivePath(path) || content === null || content.includes('\u0000') || Buffer.byteLength(content) > maxPatchBytes || seen.has(path)) throw patchResponseError('PATCH_INVALID', 'The model-patch response contains an invalid or unauthorized file replacement.', finishReason)
+    if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').includes('..') || !isWritable(path, writePaths) || isSensitivePath(path) || content === null || content.includes('\u0000') || Buffer.byteLength(content) > maxPatchBytes || seen.has(path)) throw patchResponseError('PATCH_INVALID', 'The model-patch response contains an invalid or unauthorized file replacement.', completion)
     seen.add(path)
     return Object.freeze({ path, content })
   })
@@ -162,9 +204,16 @@ function unwrapJsonFence(text) {
   return match ? match[1].trim() : trimmed
 }
 
-function patchResponseError(responseIssue, message, finishReason) {
+function patchResponseError(responseIssue, message, completion) {
+  const finishReason = completion?.finishReason ?? null
   const safeFinishReason = ['stop', 'length', 'content_filter'].includes(finishReason) ? finishReason : null
-  return new ChangeCaseError('MODEL_PATCH_RESPONSE_INVALID', message, { details: { responseIssue, modelFinishReason: safeFinishReason } })
+  const providerRequestId = typeof completion?.providerRequestId === 'string' && completion.providerRequestId.length <= 256 ? completion.providerRequestId : null
+  return new ChangeCaseError('MODEL_PATCH_RESPONSE_INVALID', message, { details: { responseIssue, modelFinishReason: safeFinishReason, providerRequestId } })
+}
+
+function withAttempts(error, attempts) {
+  if (!(error instanceof ChangeCaseError)) return error
+  return new ChangeCaseError(error.code, error.message, { details: { ...error.details, modelAttempts: attempts } })
 }
 
 async function writePatch(root, patch) {

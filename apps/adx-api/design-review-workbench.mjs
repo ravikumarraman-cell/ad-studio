@@ -12,7 +12,7 @@ function evidenceCard(title, summary, value) {
   return `<article class="evidence-card"><div class="evidence-card-head"><p>RETAINED EVIDENCE</p><h3>${escapeHtml(title)}</h3><span>${escapeHtml(summary)}</span></div><details><summary>Inspect retained evidence</summary><div class="evidence-card-body">${renderValue(value)}</div></details></article>`
 }
 
-export function renderDesignReviewPage(changeCase, view, { canReview, canWrite, isDesignAuthor, decisionEndpoint, designCaptureUrl }) {
+export function renderDesignReviewPage(changeCase, view, { canReview, canWrite, isDesignAuthor, decisionEndpoint, designCaptureUrl, releasePlanningUrl }) {
   const design = view.design
   const artifacts = design?.artifacts ?? {}
   const threats = Array.isArray(artifacts.threatModel?.threats) ? artifacts.threatModel.threats : []
@@ -29,11 +29,14 @@ export function renderDesignReviewPage(changeCase, view, { canReview, canWrite, 
     ['Exceptions', hasExpiredException ? 'Expired exception' : activeExceptions.length ? `${activeExceptions.length} active` : 'Current', !hasExpiredException],
   ]
   const readinessMarkup = readiness.map(([label, detail, passed]) => `<li class="${passed ? 'ready' : 'attention'}"><span aria-hidden="true">${passed ? 'OK' : '!'}</span><div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></div></li>`).join('')
-  const decision = approved
+  const releasePlanning = changeCase.state === 'DESIGN_REVIEW' && releasePlanningUrl
+    ? `<section class="decision-panel"><p class="panel-kicker">RELEASE PLANNING</p><h2>Set the story delivery order</h2><p class="decision-intro">Review every independently approved story, set one delivery order, and optionally publish the plan to a GitHub milestone before concluding design review.</p><a class="primary-action" href="${escapeHtml(releasePlanningUrl)}">Plan story release order</a></section>`
+    : ''
+  const decision = releasePlanning + (approved
     ? `<section class="decision-panel approved"><p class="panel-kicker">GATE C COMPLETE</p><h2>Design approved</h2><p>${escapeHtml(approval.rationale)}</p><small>Recorded by ${escapeHtml(approval.reviewedBy)} for this exact design digest.</small></section>`
     : blockers
       ? `<section class="decision-panel blocked"><p class="panel-kicker">DECISION UNAVAILABLE</p><h2>Review cannot conclude yet</h2><p>${escapeHtml(blockers)}</p>${!design && canWrite ? `<a class="primary-action" href="${escapeHtml(designCaptureUrl)}">Capture design package</a>` : ''}</section>`
-      : `<section class="decision-panel"><p class="panel-kicker">INDEPENDENT REVIEWER DECISION</p><h2>Record the outcome</h2><p class="decision-intro">Choose a decision only after you have reviewed the retained package. Your rationale is bound to this design digest.</p><form id="design-decision-form" novalidate><fieldset><legend>Decision</legend><div class="decision-choices"><label><input type="radio" name="decision" value="APPROVED"><span><strong>Approve design</strong><small>The package may proceed to execution readiness.</small></span></label><label><input type="radio" name="decision" value="REJECTED"><span><strong>Request changes</strong><small>Return the package with specific, actionable feedback.</small></span></label></div></fieldset><label class="rationale-label" for="design-rationale">Review rationale <span>Required</span></label><textarea id="design-rationale" required placeholder="State the evidence you verified, or describe the changes required before approval."></textarea><p id="decision-status" class="status" role="status" aria-live="polite"></p><button type="submit">Record design decision</button></form></section>`
+      : `<section class="decision-panel"><p class="panel-kicker">INDEPENDENT REVIEWER DECISION</p><h2>Record the outcome</h2><p class="decision-intro">Choose a decision only after you have reviewed the retained package. Your rationale is bound to this design digest.</p><form id="design-decision-form" novalidate><fieldset><legend>Decision</legend><div class="decision-choices"><label><input type="radio" name="decision" value="APPROVED"><span><strong>Approve design</strong><small>The package may proceed to execution readiness.</small></span></label><label><input type="radio" name="decision" value="REJECTED"><span><strong>Request changes</strong><small>Return the package with specific, actionable feedback.</small></span></label></div></fieldset><label class="rationale-label" for="design-rationale">Review rationale <span>Required</span></label><textarea id="design-rationale" required placeholder="State the evidence you verified, or describe the changes required before approval."></textarea><p id="decision-status" class="status" role="status" aria-live="polite"></p><button type="submit">Record design decision</button></form></section>`)
   const cards = design ? [
     evidenceCard('Architecture decision', 'Boundary and decision record', artifacts.architectureDecision),
     evidenceCard('Interface and migration', 'Contract and transition impact', { interfaceDelta: artifacts.interfaceDelta, migrationPlan: artifacts.migrationPlan }),

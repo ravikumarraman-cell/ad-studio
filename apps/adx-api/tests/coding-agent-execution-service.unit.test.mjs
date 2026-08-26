@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { CodingAgentExecutionService } from '../coding-agent-execution-service.mjs'
+import { ChangeCaseError } from '../change-case-ledger.mjs'
 
 const scope = { organizationId: 'org', workspaceId: 'workspace' }
 const principal = { id: 'human:author' }
@@ -24,7 +25,7 @@ function harness(result) {
     completeDispatch: async (input) => { calls.push(['completeDispatch', input]); return { status: input.result.code === 0 ? 'COMPLETED' : 'FAILED' } }
   }
   const changeCaseRepository = { transition: async (input) => { calls.push(['transition', input]); return { newState: 'AWAITING_VERIFICATION' } } }
-  const broker = { configured: () => true, execute: async () => result }
+  const broker = { configured: () => true, execute: async () => { if (result instanceof Error) throw result; return result } }
   const service = new CodingAgentExecutionService({ executionRepository, changeCaseRepository, broker, resolveAdapter: () => adapter, policy })
   return { service, calls }
 }
@@ -44,6 +45,25 @@ test('failed implementation retains execution readiness and never transitions to
   assert.equal(outcome.accepted, false)
   assert.deepEqual(calls.map(([name]) => name), ['issueLease', 'dispatchContext', 'completeDispatch'])
   assert.equal(calls[2][1].result.errorCode, 'MODEL_PATCH_CONTEXT_EMPTY')
+})
+
+test('failed model validation retains its result without promoting a candidate or transitioning the case', async () => {
+  const { service, calls } = harness({ accepted: false, promoted: false, provider: 'LOCAL_TEST', code: 1, outputDigest: 'sha256:validation-output', outputBytes: 42, errorCode: 'MODEL_PATCH_VALIDATION_FAILED', candidateDigest: null })
+  const outcome = await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-validation-failure' })
+  assert.equal(outcome.accepted, false)
+  assert.deepEqual(calls.map(([name]) => name), ['issueLease', 'dispatchContext', 'completeDispatch'])
+  assert.equal(calls[2][1].result.errorCode, 'MODEL_PATCH_VALIDATION_FAILED')
+  assert.deepEqual(calls[2][1].result.artifacts, [])
+  assert.equal(calls[2][1].result.outputDigest, 'sha256:validation-output')
+})
+
+test('gateway failures retain only the sanitized rejected request field in the diagnostic code', async () => {
+  const failure = new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_FAILED', 'Do not retain this provider message.', { details: { provider: 'AZURE_OPENAI_GATEWAY', providerStatus: 400, gatewayError: { code: 'unsupported_parameter', param: 'model', message: 'Do not retain this.' } } })
+  const { service, calls } = harness(failure)
+  await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-gateway-failure' })
+  assert.equal(calls[2][1].result.errorCode, 'AZURE_OPENAI_GATEWAY_REQUEST_FAILED (unsupported_parameter:model)')
+  assert.equal(calls[2][1].result.errorDetails.gatewayParam, 'model')
+  assert.doesNotMatch(JSON.stringify(calls[2][1].result), /Do not retain this/)
 })
 
 test('starting bounded implementation returns the run identity before the broker completes', async () => {

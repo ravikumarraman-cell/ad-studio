@@ -27,12 +27,32 @@ test('model-patch broker applies only a validated writable-file replacement in a
   assert.equal(await readFile(join(source, 'src', 'marker.js'), 'utf8'), 'export const marker = "before"\n')
 })
 
+test('model-patch broker retries one malformed model response with deterministic structured output', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adx-model-broker-test-')); const source = join(root, 'source'); const candidate = join(root, 'candidate')
+  await mkdir(join(source, 'src'), { recursive: true }); await writeFile(join(source, 'src', 'marker.js'), 'export const marker = "before"\n')
+  const calls = []
+  const response = { schema: 'adx-model-patch-response-v1', patches: [{ path: 'src/marker.js', content: 'export const marker = "after"\n' }] }
+  const broker = new ModelPatchBroker({ enabled: true, sourceRoot: source, candidateRoot: candidate, gateway: { status: () => ({ configured: true }), complete: async (request) => { calls.push(request); return calls.length === 1 ? { text: 'not json', providerRequestId: 'provider-1', finishReason: 'stop' } : { text: JSON.stringify(response), providerRequestId: 'provider-2', finishReason: 'stop' } } }, validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: 'sha256:test' }) })
+  const result = await broker.execute({ adapter, task, repository })
+  assert.equal(result.promoted, true)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[0].temperature, 0)
+  assert.equal(calls[0].responseSchema.strict, true)
+  assert.match(calls[1].prompt, /"previousResponseIssue":"NON_JSON"/)
+})
+
 test('model-patch broker classifies a failed validation command', async () => {
   const root = await mkdtemp(join(tmpdir(), 'adx-model-broker-test-')); const source = join(root, 'source'); const candidate = join(root, 'candidate')
   await mkdir(join(source, 'src'), { recursive: true }); await writeFile(join(source, 'src', 'marker.js'), 'export const marker = "before"\n')
-  const broker = new ModelPatchBroker({ enabled: true, sourceRoot: source, candidateRoot: candidate, gateway: gateway({ schema: 'adx-model-patch-response-v1', patches: [{ path: 'src/marker.js', content: 'export const marker = "after"\n' }] }), validate: async () => ({ code: 1, signal: null, timedOut: false, outputBytes: 0, outputDigest: 'sha256:test' }) })
+  const broker = new ModelPatchBroker({ enabled: true, sourceRoot: source, candidateRoot: candidate, gateway: gateway({ schema: 'adx-model-patch-response-v1', patches: [{ path: 'src/marker.js', content: 'export const marker = "after"\n' }] }), validate: async () => ({ code: 1, signal: null, timedOut: false, outputBytes: 27, outputDigest: 'sha256:test' }) })
   const result = await broker.execute({ adapter, task, repository })
   assert.equal(result.errorCode, 'MODEL_PATCH_VALIDATION_FAILED')
+  assert.equal(result.promoted, false)
+  assert.equal(result.candidateDigest, null)
+  assert.equal(result.outputDigest, 'sha256:test')
+  assert.equal(result.outputBytes, 27)
+  assert.equal(await readFile(join(source, 'src', 'marker.js'), 'utf8'), 'export const marker = "before"\n')
+  await assert.rejects(() => readFile(join(candidate, 'src', 'marker.js'), 'utf8'), { code: 'ENOENT' })
   await rm(root, { recursive: true, force: true })
 })
 

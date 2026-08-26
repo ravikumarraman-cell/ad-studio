@@ -1,0 +1,32 @@
+# Template only: ADX does not yet parse or register Delivery Passport files.
+apiVersion: adx.io/v1alpha1
+kind: DeliveryPassport
+metadata:
+  id: health-x
+  displayName: Health-X
+  owner: personal-care-demo
+  classification: fictional-demo
+repository:
+  canonicalRemote: https://github.com/ravikumarraman-cell/health-x.git
+  defaultBaseRef: refs/heads/main
+  sourcePath: .
+build:
+  runtime: node-22
+  validateTemplate: node-web-production-build
+preview:
+  adapter: container
+  dockerfile: Dockerfile.standalone
+  context: .
+  readiness:
+    port: 3000
+    path: /
+  secretRefs:
+    - npm-registry-read
+capabilities:
+  agent:
+    writePaths:
+      - app/**
+    network: package-registry-only
+  delivery:
+    preview: true
+    production: false

@@ -18,7 +18,7 @@ export function createPreviewDeliveryService({ providerId, repositories, deliver
       const repositoryId = governance.intent?.targetRepository
       if (typeof repositoryId !== 'string' || !repositoryId.trim()) throw new ChangeCaseError('DELIVERY_PREVIEW_REPOSITORY_MISSING', 'The retained intake contract must name a registered target repository.')
       const repository = provider.repository(repositoryId)
-      const exported = await createExport({ sourceRoot, candidateRoot, candidateDigest, canonicalRemote: repository.canonicalRemote })
+        const exported = await createExport({ sourceRoot, candidateRoot, candidateDigest, canonicalRemote: repository.canonicalRemote, projectPath: repository.projectPath })
       const basePlan = createPreviewDeliveryPlan({ provider, changeCaseId: changeCase.id, repositoryId, candidateDigest, evidenceDigest, title: changeCase.title, changes: exported.changes.map(({ path, afterDigest }) => ({ path, digest: afterDigest ?? sha256({ path, deleted: true }) })) })
       const provenance = Object.freeze({ baseCommit: exported.baseCommit, exportDigest: exported.exportDigest })
       const plan = Object.freeze({ ...basePlan, sourceExport: provenance })
