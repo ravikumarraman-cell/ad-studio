@@ -13,7 +13,7 @@ assert.equal(Object.keys(workflow.statePositions).length, workflow.states.length
 
 const ledger = read('apps/adx-api/change-case-ledger.mjs')
 const server = read('apps/adx-api/server.mjs')
-const workflowUi = read('apps/health-authorization-demo/src/workflow.ts')
+const workflowUi = read('apps/adx-studio-web/src/workflow.ts')
 for (const [name, source] of Object.entries({ ledger, server, workflowUi })) {
   assert.match(source, /change-case-workflow\.json/, `${name} must consume the canonical workflow contract.`)
 }

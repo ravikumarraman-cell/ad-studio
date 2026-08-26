@@ -31,7 +31,7 @@
     "@tanstack/start-server-functions-fetcher": "1.119.0"
   },
   "scripts": {
-    "dev": "npm --workspace=adx-health-authorization-demo run dev",
+    "dev": "npm --workspace=@adx/studio-web run dev",
     "health-x:dev": "npm --workspace=@adx/health-x run dev",
     "health-x:build": "npm --workspace=@adx/health-x run build",
     "verify:health-x": "node scripts/verify-health-x.mjs",
@@ -76,11 +76,13 @@
     "api:dev": "npm --workspace=@adx/api run dev",
     "api:start": "node scripts/start-adx-api.mjs",
     "provision:local-user": "node scripts/provision-local-user.mjs",
+    "test:api:unit": "node --test apps/adx-api/tests/*.unit.test.mjs",
+    "test:api:coverage": "node --experimental-test-coverage --test apps/adx-api/tests/*.unit.test.mjs",
     "github:create-demo-milestones": "bash scripts/create-github-demo-milestones.sh",
     "api:smoke": "npm --workspace=@adx/api run smoke",
     "canary:smoke": "node scripts/verify-canary-smoke.mjs",
-    "typecheck:domain": "apps/health-authorization-demo/node_modules/.bin/tsc -p packages/domain/tsconfig.json",
-    "typecheck": "npm run verify:stage0 && npm run verify:feature-import && npm run typecheck:domain && npm --prefix apps/health-authorization-demo run typecheck",
-    "build": "npm run typecheck && npm --prefix apps/health-authorization-demo run build"
+    "typecheck:domain": "apps/adx-studio-web/node_modules/.bin/tsc -p packages/domain/tsconfig.json",
+    "typecheck": "npm run verify:stage0 && npm run verify:feature-import && npm run typecheck:domain && npm --prefix apps/adx-studio-web run typecheck",
+    "build": "npm run typecheck && npm --prefix apps/adx-studio-web run build"
   }
 }

@@ -66,5 +66,5 @@ jobs:
       - run: npm --workspace=@adx/api run test:browser:stage3
       - run: npm --workspace=@adx/api run test:browser:stage4
       - run: npm --workspace=@adx/api run test:browser
-      - run: npm --workspace=adx-health-authorization-demo run build
-      - run: npm --workspace=adx-health-authorization-demo run test:browser
+      - run: npm --workspace=@adx/studio-web run build
+      - run: npm --workspace=@adx/studio-web run test:browser

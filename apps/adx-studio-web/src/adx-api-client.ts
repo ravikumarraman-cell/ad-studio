@@ -53,3 +53,11 @@ export async function listPublicGitHubMilestones(workspaceId: string, owner: str
 export async function importPublicGitHubMilestone(workspaceId: string, input: { owner: string; repository: string; milestone: number; featureOwner: string; targetRepository: string; riskTier: string }): Promise<FeatureImportResponse> {
   return api(`/v1/workspaces/${workspaceId}/github-public/milestone-import`, { method: 'POST', headers: { 'idempotency-key': newIdempotencyKey() }, body: JSON.stringify({ ...input, importId: crypto.randomUUID() }) })
 }
+
+export async function listPrivateGitHubMilestones(workspaceId: string, owner: string, repository: string): Promise<{ milestones: PublicGitHubMilestone[] }> {
+  return api(`/v1/workspaces/${workspaceId}/github-private/milestones?owner=${encodeURIComponent(owner)}&repository=${encodeURIComponent(repository)}`)
+}
+
+export async function importPrivateGitHubMilestone(workspaceId: string, input: { owner: string; repository: string; milestone: number; featureOwner: string; targetRepository: string; riskTier: string }): Promise<FeatureImportResponse> {
+  return api(`/v1/workspaces/${workspaceId}/github-private/milestone-import`, { method: 'POST', headers: { 'idempotency-key': newIdempotencyKey() }, body: JSON.stringify({ ...input, importId: crypto.randomUUID() }) })
+}

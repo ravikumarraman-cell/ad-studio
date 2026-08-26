@@ -18,7 +18,7 @@ The backend control plane is the authoritative system of record. After authentic
 
 It lists Change Cases available to the signed-in user and links to their review surfaces.
 
-The separate `apps/health-authorization-demo` UI is deliberately fictional and in-memory. It illustrates a feature-delivery experience; it does **not** create, advance, approve, execute, verify, release, or complete persisted ADX Change Cases.
+The separate `apps/adx-studio-web` UI is deliberately fictional and in-memory. It illustrates a feature-delivery experience; it does **not** create, advance, approve, execute, verify, release, or complete persisted ADX Change Cases.
 
 ## Main-flow overview
 

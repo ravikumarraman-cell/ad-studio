@@ -170,7 +170,7 @@ npm run dev
 
 Open the Vite address printed by the command, normally <http://127.0.0.1:4173>. Choose **Guided demo** on the opening screen.
 
-The root `dev` script starts `apps/health-authorization-demo`. To stop it, press `Ctrl+C` in that terminal.
+The root `dev` script starts `apps/adx-studio-web`. To stop it, press `Ctrl+C` in that terminal.
 
 ### Demo journey
 
@@ -400,7 +400,7 @@ npm run typecheck
 | Path | Purpose |
 | --- | --- |
 | `apps/adx-api` | Node.js API, OIDC adapter, tenant-scoped repositories, control-plane routes, database migrations, and browser tests |
-| `apps/health-authorization-demo` | React/Vite experience with Guided demo and authenticated Real mode |
+| `apps/adx-studio-web` | React/Vite experience with Guided demo and authenticated Real mode |
 | `apps/health-x` | Fictional TanStack Start reference app with a professional, low-cognitive-load care dashboard and three delivered feature slices |
 | `apps/tanstack-start-canary` | TanStack Start compatibility and SSR runtime canary |
 | `packages/contracts` | Shared contracts and vocabulary |

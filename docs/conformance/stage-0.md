@@ -18,7 +18,7 @@
 | STG0-007 | CI-ready typecheck, build, and structural verification commands exist. | `npm run typecheck`, `npm run build`, `npm run verify:stage0`. | Verified |
 | STG0-008 | Backend health/readiness and request trace correlation are available. | Self-contained `npm run api:smoke` verifies `/healthz`, `/readyz`, and `x-trace-id` propagation. | Verified |
 | STG0-009 | Local PostgreSQL and object-store emulator definitions are reproducible. | `compose.yaml`; `docker compose up -d postgres minio`; both container health checks reported `healthy` on 2026-08-18. | Verified |
-| STG0-010 | CI executes the deterministic Stage 0 checks, including a Chromium-rendered user-path smoke. | `.github/workflows/stage0.yml`; local `npm --workspace=adx-health-authorization-demo run test:browser` passed on Chromium 139 / 2026-08-18; GitHub Actions `Stage 0 gate` on `main` reported green. | Verified |
+| STG0-010 | CI executes the deterministic Stage 0 checks, including a Chromium-rendered user-path smoke. | `.github/workflows/stage0.yml`; local `npm --workspace=@adx/studio-web run test:browser` passed on Chromium 139 / 2026-08-18; GitHub Actions `Stage 0 gate` on `main` reported green. | Verified |
 
 ## Commands and evidence
 

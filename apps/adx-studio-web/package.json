@@ -1,5 +1,5 @@
 {
-  "name": "adx-health-authorization-demo",
+  "name": "@adx/studio-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",

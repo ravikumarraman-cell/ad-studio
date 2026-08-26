@@ -43,9 +43,15 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
       <section className="adx-workspace">
         <label htmlFor="workspace">Workspace</label>
         <select id="workspace" value={activeWorkspace} onChange={(event) => setWorkspaceId(event.target.value)}>{memberships.map((membership) => <option key={membership.workspaceId} value={membership.workspaceId}>{membership.workspaceId}</option>)}</select>
-        <button className="adx-secondary" onClick={onImport}>Import CSV</button>
-        <button className="adx-secondary" onClick={onImportGitHub}>Import GitHub milestone</button>
-        <button className="adx-danger adx-clear-workspace" disabled={!cancellableCases.length} onClick={() => setCancellationMode('all')}>Clear open cases</button>
+        <details className="adx-workspace-tools">
+          <summary>Workspace tools</summary>
+          <div className="adx-workspace-tools-menu">
+            <p>Bring planned work into this workspace, or remove open cases.</p>
+            <button className="adx-secondary" onClick={onImport}>Import feature CSV</button>
+            <button className="adx-secondary" onClick={onImportGitHub}>Import GitHub milestone</button>
+            <button className="adx-danger" disabled={!cancellableCases.length} onClick={() => setCancellationMode('all')}>Clear open cases</button>
+          </div>
+        </details>
         <button className="adx-primary" onClick={onCreate}>New Change Case</button>
       </section>
       {selected && <WorkflowMap current={current} />}

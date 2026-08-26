@@ -19,7 +19,7 @@ This is a product demo, not a clinical decision-support system. It uses mock dat
 Preferred React/TanStack development path:
 
 ```bash
-cd apps/health-authorization-demo
+cd apps/adx-studio-web
 npm install
 npm run dev
 ```

@@ -13,7 +13,7 @@
 | FVS-003 | A selected feature is bound to a Change Case before the delivery cycle begins. | The first governed action is `Create Change Case`; its source-binding evidence appears in Feature Traceability. |
 | FVS-004 | A feature moves only through the declared sequence. | Backlog → Clarify → Design review → Bounded execution → Independent verification → Controlled release → Outcome recorded. |
 | FVS-005 | Every demo transition appends visible traceability evidence. | Feature Traceability ledger in the app. |
-| FVS-006 | The app compiles as a production bundle. | `npm run typecheck` and `npm --prefix apps/health-authorization-demo run build`. |
+| FVS-006 | The app compiles as a production bundle. | `npm run typecheck` and `npm --prefix apps/adx-studio-web run build`. |
 
 ## Deliberate non-claims
 
@@ -26,6 +26,6 @@
 ```bash
 npm run verify:feature-import
 npm run typecheck
-npm --prefix apps/health-authorization-demo run build
-cd apps/health-authorization-demo && npm run dev
+npm --prefix apps/adx-studio-web run build
+cd apps/adx-studio-web && npm run dev
 ```

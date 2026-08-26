@@ -9,6 +9,7 @@ import { createPkceTransaction, exchangeGoogleCode, googleAuthorizationUrl } fro
 import { PostgresTenantRepository } from './postgres.mjs'
 import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
+import { PostgresProjectPassportRepository } from './project-passport-repository.mjs'
 import { PostgresExecutionRepository } from './execution-repository.mjs'
 import { CodingAgentExecutionService } from './coding-agent-execution-service.mjs'
 import { LocalCodingAgentBroker } from './local-coding-agent-broker.mjs'
@@ -44,9 +45,13 @@ import { renderCandidateBrowserPage } from './candidate-browser-page.mjs'
 import { renderDeliveryReviewPage } from './delivery-review-page.mjs'
 import { selectPreviewCheckout } from './preview-checkout-selection.mjs'
 import { createPublicGitHubMilestoneClient } from './github-public-milestones.mjs'
+import { createPrivateGitHubMilestoneClient } from './github-private-milestones.mjs'
+import { adxPageThemeCss } from './adx-page-theme.mjs'
+import { renderStoryReviewPage } from './story-review-page.mjs'
 import workflowContract from '../../packages/domain/src/change-case-workflow.json' with { type: 'json' }
 import { escapeHtml, htmlScriptConfig } from './review-page-utils.mjs'
 import { authorizationAction, matchChangeCaseRoute } from './change-case-routes.mjs'
+import { authorizationAction as projectAuthorizationAction, matchProjectRoute } from './project-routes.mjs'
 
 const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
 const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
@@ -66,6 +71,7 @@ const verifyOidc = createOidcVerifier()
 const postgres = process.env.DATABASE_URL ? new PostgresTenantRepository(process.env.DATABASE_URL) : null
 const ledgerSigner = createLedgerSigner(process.env)
 const changeCases = process.env.DATABASE_URL && ledgerSigner ? new PostgresChangeCaseRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
+const projects = process.env.DATABASE_URL ? new PostgresProjectPassportRepository({ connectionString: process.env.DATABASE_URL }) : null
 const executions = process.env.DATABASE_URL && ledgerSigner ? new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
 const localCodingAgentBroker = new LocalCodingAgentBroker()
 const uhgAzureOpenAiExecutionGateway = createUhgAzureOpenAiExecutionGateway(process.env)
@@ -89,6 +95,7 @@ const uhgClaudeStoryGateway = createUhgClaudeStoryGateway(process.env)
 const storySuggestions = createStorySuggestionService({ provider: process.env.ADX_STORY_AI_PROVIDER, apiKey: process.env.ADX_STORY_AI_API_KEY, model: process.env.ADX_STORY_AI_MODEL, models: process.env.ADX_STORY_AI_MODELS, ollamaBaseUrl: process.env.ADX_STORY_AI_OLLAMA_BASE_URL, gatewayAdapter: uhgAzureOpenAiStoryGateway, anthropicGatewayAdapter: uhgClaudeStoryGateway })
 const storyDecompositionAgent = createStoryDecompositionAgent({ suggestionService: storySuggestions })
 const publicGitHubMilestones = createPublicGitHubMilestoneClient()
+const privateGitHubMilestones = createConfiguredPrivateGitHubMilestones(process.env)
 const localIndependentVerifier = evidenceRepository && ledgerSigner ? new LocalIndependentVerifier({ evidenceRepository, signer: ledgerSigner }) : null
 const oauthTransactions = new Map()
 
@@ -119,6 +126,11 @@ function createConfiguredStoryMilestones({ repository, environment }) {
   try { return { service: createStoryMilestoneService({ repository, client: createGitHubMilestoneStoryClient({ token }) }), code: null } } catch { return { service: null, code: 'GITHUB_MILESTONE_CONFIGURATION_INVALID' } }
 }
 
+function createConfiguredPrivateGitHubMilestones(environment) {
+  if (!environment.ADX_GITHUB_PRIVATE_READ_TOKEN) return null
+  try { return createPrivateGitHubMilestoneClient({ token: environment.ADX_GITHUB_PRIVATE_READ_TOKEN }) } catch { return null }
+}
+
 function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
 function oidcCallbackFailureReason(error) {
   if (!(error instanceof Error)) return 'OIDC_TOKEN_VERIFICATION_FAILED'
@@ -133,7 +145,7 @@ function oidcFailureMetadata(error) {
   if (!(error instanceof Error)) return { name: typeof error, code: null, causeCode: null }
   return { name: error.name, code: typeof error.code === 'string' ? error.code : null, causeCode: typeof error.cause?.code === 'string' ? error.cause.code : null }
 }
-const accessiblePageFoundation = '<style id="adx-accessibility-foundation">:root{color:#102b43}body{color:#102b43}p,.muted{color:#294b63}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:#52657f}input,select,textarea{color:#102b43;background:#fff;border-color:#728fa3}input::placeholder,textarea::placeholder{color:#48677e;opacity:1}button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #d98a00;outline-offset:3px}button:disabled{cursor:not-allowed;opacity:.62}.error{color:#912526}.signed-in-indicator{position:fixed;top:12px;right:16px;z-index:10;display:flex;gap:6px;align-items:baseline;max-width:calc(100vw - 32px);padding:6px 10px;background:#fff;border:1px solid #cddbeb;border-radius:8px;box-shadow:0 1px 4px #14213d14;color:#294b63;font-size:.78rem}.signed-in-indicator strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#102b43;font-weight:700}@media (max-width:600px){.signed-in-indicator{position:static;width:max-content;max-width:calc(100% - 32px);margin:10px 16px 0}.signed-in-indicator strong{max-width:14rem}}</style>'
+const accessiblePageFoundation = `${adxPageThemeCss}<style id="adx-accessibility-foundation">p,.muted{color:var(--adx-copy)}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:var(--adx-muted)}input,select,textarea{color:var(--adx-ink);background:var(--adx-surface);border-color:var(--adx-line)}input::placeholder,textarea::placeholder{color:var(--adx-muted);opacity:1}.error{color:var(--adx-danger)}.signed-in-indicator{position:fixed;top:12px;right:16px;z-index:10;display:flex;gap:6px;align-items:baseline;max-width:calc(100vw - 32px);padding:6px 10px;background:var(--adx-surface);border:1px solid var(--adx-line);border-radius:8px;box-shadow:0 1px 4px #14213d14;color:var(--adx-copy);font-size:.78rem}.signed-in-indicator strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--adx-ink);font-weight:700}@media (max-width:600px){.signed-in-indicator{position:static;width:max-content;max-width:calc(100% - 32px);margin:10px 16px 0}.signed-in-indicator strong{max-width:14rem}}</style>`
 function signedInIndicator(principal) { const identity = String(principal?.displayName ?? principal?.id?.split(':').at(-1) ?? 'Authenticated user').trim() || 'Authenticated user'; return `<aside class="signed-in-indicator" aria-label="Signed in as ${escapeHtml(identity)}"><span>Signed in</span><strong>${escapeHtml(identity)}</strong></aside>` }
 function writeHtml(response, status, html, traceId, principal = null) { response.statusCode = status; response.setHeader('content-type', 'text/html; charset=utf-8'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(html.replace('</head>', `${accessiblePageFoundation}</head>`).replace(/<body([^>]*)>/, `<body$1>${principal ? signedInIndicator(principal) : ''}`)) }
 function storyReviewPage(changeCase, governance) {
@@ -435,6 +447,33 @@ const server = createServer(async (request, response) => {
   if (request.method === 'GET' && url.pathname === '/v1/me') return write(response, 200, { principal: session.principal, memberships: session.memberships.map(({ organizationId, workspaceId, roles }) => ({ organizationId, workspaceId, roles })) }, traceId)
   if (request.method === 'GET' && url.pathname === '/control-plane') { if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId); const workspaces = []; for (const membership of session.memberships) { const decision = decisionFor({ session, resource: workspaceResource(membership.workspaceId, membership.organizationId), action: 'workspace.read' }); if (decision.outcome === 'ALLOW') workspaces.push({ workspaceId: membership.workspaceId, changeCases: await changeCases.list({ organizationId: membership.organizationId, workspaceId: membership.workspaceId }) }) } return writeHtml(response, 200, controlPlanePage(session.principal, workspaces), traceId, session.principal) }
 
+  const projectMatch = matchProjectRoute(url.pathname)
+  if (projectMatch) {
+    const [, workspaceId, projectId, operation, recordId] = projectMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
+    if (!projects) return write(response, 503, { code: 'PROJECT_CATALOG_NOT_CONFIGURED' }, traceId)
+    const action = projectAuthorizationAction(request.method)
+    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
+    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
+    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action })
+    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    if (!projectId) return write(response, 200, { projects: await projects.list(scope) }, traceId)
+    if (!operation) {
+      const project = await projects.getProject(scope, projectId)
+      return project ? write(response, 200, { project }, traceId) : write(response, 404, { code: 'PROJECT_NOT_FOUND' }, traceId)
+    }
+    if (operation === 'installations' && !recordId) return write(response, 200, { installations: await projects.listInstallations(scope, projectId) }, traceId)
+    if (operation === 'installations') {
+      const installation = await projects.getInstallation(scope, projectId, recordId)
+      return installation ? write(response, 200, { installation }, traceId) : write(response, 404, { code: 'PROJECT_INSTALLATION_NOT_FOUND' }, traceId)
+    }
+    if (operation === 'snapshots' && recordId) {
+      const snapshot = await projects.getSnapshot(scope, projectId, recordId)
+      return snapshot ? write(response, 200, { snapshot }, traceId) : write(response, 404, { code: 'PASSPORT_SNAPSHOT_NOT_FOUND' }, traceId)
+    }
+    return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
+  }
+
   const changeCaseListMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases$/i)
   if (changeCaseListMatch) {
     const workspaceId = changeCaseListMatch[1]; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
@@ -480,6 +519,26 @@ const server = createServer(async (request, response) => {
       if (operation === 'milestones') return write(response, 200, { milestones: await publicGitHubMilestones.listMilestones({ owner: url.searchParams.get('owner'), repository: url.searchParams.get('repository') }) }, traceId)
       const body = await readJson(request)
       const features = await publicGitHubMilestones.featuresFromMilestone({ owner: body?.owner, repository: body?.repository, milestone: body?.milestone, featureOwner: body?.featureOwner, targetRepository: body?.targetRepository, riskTier: body?.riskTier })
+      return write(response, 200, await importFeatureBatch({ scope, principal: session.principal, importId: body?.importId, features, correlationId: traceId }), traceId)
+    } catch (error) { return commandError(response, error, traceId) }
+  }
+
+  const privateGitHubMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/github-private\/(milestones|milestone-import)$/i)
+  if (privateGitHubMatch) {
+    const [, workspaceId, operation] = privateGitHubMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
+    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
+    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
+    if (!privateGitHubMilestones) return write(response, 503, { code: 'GITHUB_PRIVATE_REPOSITORY_READ_NOT_CONFIGURED' }, traceId)
+    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
+    const action = operation === 'milestones' && request.method === 'GET' ? 'workspace.read' : operation === 'milestone-import' && request.method === 'POST' ? 'workspace.manage' : null
+    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
+    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action })
+    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    try {
+      if (operation === 'milestones') return write(response, 200, { milestones: await privateGitHubMilestones.listMilestones({ owner: url.searchParams.get('owner'), repository: url.searchParams.get('repository') }) }, traceId)
+      const body = await readJson(request)
+      if (['token', 'accessToken', 'githubToken'].some((key) => Object.hasOwn(body ?? {}, key))) throw new ChangeCaseError('GITHUB_PRIVATE_BROWSER_CREDENTIAL_REJECTED', 'GitHub credentials must remain server-side and cannot be supplied by the browser.', { retryable: false, severity: 'warning' })
+      const features = await privateGitHubMilestones.featuresFromMilestone({ owner: body?.owner, repository: body?.repository, milestone: body?.milestone, featureOwner: body?.featureOwner, targetRepository: body?.targetRepository, riskTier: body?.riskTier })
       return write(response, 200, await importFeatureBatch({ scope, principal: session.principal, importId: body?.importId, features, correlationId: traceId }), traceId)
     } catch (error) { return commandError(response, error, traceId) }
   }
@@ -552,7 +611,7 @@ const server = createServer(async (request, response) => {
       const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`
       const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`
       const governance = await changeCases.intakeView(scope, changeCaseId)
-      return writeHtml(response, 200, storyReviewPageV2(current, governance, { canReview: reviewDecision.outcome === 'ALLOW', isStoryAuthor: governance.stories?.authoredBy === session.principal.id, decisionEndpoint, designReviewUrl, releasePlanningUrl, storyWorkshopUrl }), traceId, session.principal)
+      return writeHtml(response, 200, renderStoryReviewPage(current, governance, { canReview: reviewDecision.outcome === 'ALLOW', isStoryAuthor: governance.stories?.authoredBy === session.principal.id, decisionEndpoint, designReviewUrl, releasePlanningUrl, storyWorkshopUrl }), traceId, session.principal)
     }
     if (request.method === 'GET' && operation === 'story-release-planning') { if (!storyMilestones) return write(response, 503, { code: 'STORY_RELEASE_PLANNING_NOT_CONFIGURED' }, traceId); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`; const view = await storyMilestones.view(scope, changeCaseId); return writeHtml(response, 200, renderStoryReleasePlanningPage(current, view, { canPlan: writeDecision.outcome === 'ALLOW', publisherConfigured: Boolean(configuredStoryMilestones.service), endpoints: { priorityEndpoint: `${base}/story-priority-plan`, milestonesEndpoint: `${base}/story-milestones`, publishEndpoint: `${base}/story-milestone-publish`, storyDigest: view.approvedStories?.storyDigest ?? null } }), traceId, session.principal) }
     if (request.method === 'GET' && operation === 'story-milestones') { if (!configuredStoryMilestones.service) return write(response, 503, { code: configuredStoryMilestones.code }, traceId); return write(response, 200, { milestones: await configuredStoryMilestones.service.listMilestones({ owner: url.searchParams.get('owner'), repository: url.searchParams.get('repository') }) }, traceId) }

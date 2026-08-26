@@ -26,7 +26,7 @@
 
 The authenticated backend control-plane index is available at `/control-plane` after `/auth/login`. It lists authorized Change Cases and links directly to the Story, Design, Evidence, Delivery, and Outcome review surfaces.
 
-The local UI is available from `apps/health-authorization-demo` with `npm run dev`. At startup, the user explicitly chooses **Real mode** (authenticated API-backed ADX data) or **Guided demo** (a local, fictional, non-writing walkthrough). It proxies `/v1`, `/auth`, and `/control-plane` to the local ADX API on port 3100, so start `npm run api:dev` first for Real mode. Set `ADX_UI_ORIGIN=http://127.0.0.1:4173/` in `.env.local` (the local default) so a successful OIDC callback returns to the React UI rather than the API JSON endpoint.
+The local UI is available from `apps/adx-studio-web` with `npm run dev`. At startup, the user explicitly chooses **Real mode** (authenticated API-backed ADX data) or **Guided demo** (a local, fictional, non-writing walkthrough). It proxies `/v1`, `/auth`, and `/control-plane` to the local ADX API on port 3100, so start `npm run api:dev` first for Real mode. Set `ADX_UI_ORIGIN=http://127.0.0.1:4173/` in `.env.local` (the local default) so a successful OIDC callback returns to the React UI rather than the API JSON endpoint.
 
 It currently lets an authenticated user:
 

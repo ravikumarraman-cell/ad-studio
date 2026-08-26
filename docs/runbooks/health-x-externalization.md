@@ -11,6 +11,18 @@ The private repository [ravikumarraman-cell/health-x](https://github.com/ravikum
 3. The private `ravikumarraman-cell/health-x` repository contains the verified standalone source and lockfile.
 4. The maintainer has an approved mechanism for the required private npm registry credential. Do not commit `.npmrc`, tokens, or secret values.
 
+## Import Private Health-X Milestones
+
+ADX Studio can read a private GitHub milestone only with a server-side credential. The browser never accepts or forwards a GitHub credential.
+
+1. Provision a dedicated GitHub App installation token or fine-grained token that can read repository metadata and issues for `ravikumarraman-cell/health-x`. Do not grant repository write, pull-request write, administration, or organization-wide permissions.
+2. Inject the credential into the ADX API runtime as `ADX_GITHUB_PRIVATE_READ_TOKEN` using the approved secret mechanism. Do not place it in `.env` files, source code, browser storage, or Git.
+3. Restart the ADX API after the secret is available.
+4. In ADX Studio, select **Workspace tools**, then **Import GitHub milestone**. Choose **Private repository**, enter `ravikumarraman-cell` and `health-x`, then select an open milestone.
+5. ADX records each non-pull-request issue as a feature with private GitHub source lineage. The existing workspace authorization still controls discovery and import.
+
+If the UI returns `GITHUB_PRIVATE_REPOSITORY_READ_NOT_CONFIGURED`, the ADX API does not have the server-side credential. If it returns `GITHUB_PRIVATE_FORBIDDEN`, the configured credential lacks access to the selected repository.
+
 ## Copy, Verify, Then Cut Over
 
 1. Keep `apps/health-x` in ADX Studio until all verification gates below pass.

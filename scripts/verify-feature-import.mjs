@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const source = resolve('apps/health-authorization-demo/public/samples/adx-health-insurance-features.csv')
+const source = resolve('apps/adx-studio-web/public/samples/adx-health-insurance-features.csv')
 const [header, ...rows] = readFileSync(source, 'utf8').trim().split(/\r?\n/)
 const columns = header.split(',')
 const required = ['feature_id', 'title', 'description', 'priority', 'owner', 'target_repository', 'acceptance_criteria', 'risk_tier']
