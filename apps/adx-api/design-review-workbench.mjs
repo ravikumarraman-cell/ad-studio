@@ -30,7 +30,7 @@ export function renderDesignReviewPage(changeCase, view, { canReview, canWrite, 
   ]
   const readinessMarkup = readiness.map(([label, detail, passed]) => `<li class="${passed ? 'ready' : 'attention'}"><span aria-hidden="true">${passed ? 'OK' : '!'}</span><div><strong>${escapeHtml(label)}</strong><small>${escapeHtml(detail)}</small></div></li>`).join('')
   const releasePlanning = changeCase.state === 'DESIGN_REVIEW' && releasePlanningUrl
-    ? `<section class="decision-panel"><p class="panel-kicker">RELEASE PLANNING</p><h2>Set the story delivery order</h2><p class="decision-intro">Review every independently approved story, set one delivery order, and optionally publish the plan to a GitHub milestone before concluding design review.</p><a class="primary-action" href="${escapeHtml(releasePlanningUrl)}">Plan story release order</a></section>`
+    ? `<section class="decision-panel"><p class="panel-kicker">NEXT · STORY PRIORITIZATION</p><h2>Prioritize approved stories</h2><p class="decision-intro">Put the independently approved stories in delivery order before continuing design review. You can then optionally publish that plan to a GitHub milestone.</p><a class="primary-action" href="${escapeHtml(releasePlanningUrl)}">Prioritize stories</a></section>`
     : ''
   const decision = releasePlanning + (approved
     ? `<section class="decision-panel approved"><p class="panel-kicker">GATE C COMPLETE</p><h2>Design approved</h2><p>${escapeHtml(approval.rationale)}</p><small>Recorded by ${escapeHtml(approval.reviewedBy)} for this exact design digest.</small></section>`

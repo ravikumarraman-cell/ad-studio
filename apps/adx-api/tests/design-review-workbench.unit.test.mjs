@@ -7,8 +7,8 @@ const view = { design: { revision: 1, designDigest: 'sha256:design', authoredBy:
 
 test('design review offers release planning before its Gate C decision', () => {
   const page = renderDesignReviewPage(changeCase, view, { canReview: true, canWrite: true, isDesignAuthor: false, decisionEndpoint: '/design-decision', designCaptureUrl: '/design-workbench', releasePlanningUrl: '/story-release-planning' })
-  assert.match(page, /Set the story delivery order/)
-  assert.match(page, /Plan story release order/)
+  assert.match(page, /Prioritize approved stories/)
+  assert.match(page, /Prioritize stories/)
   assert.match(page, /story-release-planning/)
-  assert.ok(page.indexOf('Plan story release order') < page.indexOf('Record the outcome'))
+  assert.ok(page.indexOf('Prioritize stories') < page.indexOf('Record the outcome'))
 })

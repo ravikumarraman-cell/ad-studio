@@ -31,8 +31,31 @@ export class StoryMilestoneRepository {
     })
   }
 
+  async workspaceView(scope) {
+    return this.scoped(scope, async (client) => {
+      const approved = await workspaceApprovedStories(client, scope)
+      const plan = await client.query('SELECT portfolio_digest AS "planDigest", entries, planned_by AS "plannedBy", created_at AS "createdAt" FROM adx_workspace_story_portfolio WHERE organization_id=$1 AND workspace_id=$2 ORDER BY created_at DESC LIMIT 1', [scope.organizationId, scope.workspaceId])
+      const syncs = await client.query('SELECT sync.change_case_id AS "changeCaseId", change_case.title AS "sourceTitle", sync.story_digest AS "storyDigest", sync.story_key AS "storyKey", sync.priority, sync.owner, sync.repository, sync.milestone_number AS "milestoneNumber", sync.issue_number AS "issueNumber", sync.issue_url AS "issueUrl", sync.created_at AS "createdAt" FROM adx_github_milestone_story_sync sync JOIN adx_change_case change_case ON change_case.id=sync.change_case_id WHERE sync.organization_id=$1 AND sync.workspace_id=$2 ORDER BY sync.priority, sync.created_at, sync.story_key', [scope.organizationId, scope.workspaceId])
+      return { approvedStories: { storyDigest: 'workspace', stories: approved }, plan: plan.rows[0] ? { ...plan.rows[0], priorities: plan.rows[0].entries } : null, syncs: syncs.rows }
+    })
+  }
+
+  async recordSourceMilestone({ scope, principal, changeCaseId, source }) {
+    return this.scoped(scope, async (client) => {
+      const sourceDigest = sha256({ schema: 'adx-github-source-milestone-v1', changeCaseId, source })
+      const existing = await client.query('SELECT source_digest AS "sourceDigest" FROM adx_github_source_milestone WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3', [changeCaseId, scope.organizationId, scope.workspaceId])
+      if (existing.rowCount) {
+        if (existing.rows[0].sourceDigest !== sourceDigest) throw new ChangeCaseError('GITHUB_SOURCE_MILESTONE_CONFLICT', 'The imported GitHub source milestone cannot be changed after intake.', { retryable: false, severity: 'warning' })
+        return { sourceDigest, deduplicated: true }
+      }
+      await client.query('INSERT INTO adx_github_source_milestone (id,organization_id,workspace_id,change_case_id,owner,repository,milestone_number,milestone_title,source_digest,recorded_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [randomUUID(), scope.organizationId, scope.workspaceId, changeCaseId, source.owner, source.repository, source.number, source.title, sourceDigest, principal.id])
+      return { sourceDigest, deduplicated: false }
+    })
+  }
+
   async prioritize({ scope, principal, changeCaseId, storyDigest, priorities, expectedVersion }) {
     return this.scoped(scope, async (client) => {
+      if (storyDigest === 'workspace') return prioritizeWorkspace(client, { scope, principal, priorities })
       const approved = await requirePlanningState(client, scope, changeCaseId, storyDigest, expectedVersion)
       const normalized = normalizePriorities(approved.stories, priorities)
       const planDigest = sha256({ schema: 'adx-story-priority-plan-v1', changeCaseId, storyDigest, priorities: normalized })
@@ -57,7 +80,37 @@ export class StoryMilestoneRepository {
     })
   }
 
+  async retainWorkspaceSync({ scope, principal, entry, priority, owner, repository, milestoneNumber, issue, destinationOverride }) {
+    return this.scoped(scope, async (client) => {
+      const existing = await client.query('SELECT issue_number AS "issueNumber", issue_url AS "issueUrl", sync_digest AS "syncDigest" FROM adx_github_milestone_story_sync WHERE change_case_id=$1 AND story_digest=$2 AND story_key=$3 AND owner=$4 AND repository=$5 AND milestone_number=$6 AND organization_id=$7 AND workspace_id=$8', [entry.changeCaseId, entry.storyDigest, entry.sourceStoryKey, owner, repository, milestoneNumber, scope.organizationId, scope.workspaceId])
+      if (existing.rowCount) return { ...existing.rows[0], deduplicated: true }
+      const syncDigest = sha256({ schema: 'adx-workspace-story-portfolio-sync-v1', entry, priority, owner, repository, milestoneNumber, issueNumber: issue.number, issueUrl: issue.url })
+      await client.query('INSERT INTO adx_github_milestone_story_sync (id,organization_id,workspace_id,change_case_id,story_digest,story_key,priority,owner,repository,milestone_number,issue_number,issue_url,sync_digest,recorded_by,source_milestone,destination_override) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)', [randomUUID(), scope.organizationId, scope.workspaceId, entry.changeCaseId, entry.storyDigest, entry.sourceStoryKey, priority, owner, repository, milestoneNumber, issue.number, issue.url, syncDigest, principal.id, JSON.stringify(entry.sourceMilestone), destinationOverride ? JSON.stringify(destinationOverride) : null])
+      return { issueNumber: issue.number, issueUrl: issue.url, syncDigest, deduplicated: false }
+    })
+  }
+
   async close() { await this.pool.end() }
+}
+
+async function workspaceApprovedStories(client, scope) {
+  const result = await client.query("SELECT change_case.id AS \"changeCaseId\", change_case.title AS \"sourceTitle\", revision.story_digest AS \"storyDigest\", revision.stories, source.owner AS \"sourceOwner\", source.repository AS \"sourceRepository\", source.milestone_number AS \"sourceMilestoneNumber\", source.milestone_title AS \"sourceMilestoneTitle\" FROM adx_change_case change_case JOIN adx_story_revision revision ON revision.change_case_id=change_case.id JOIN adx_story_approval approval ON approval.change_case_id=revision.change_case_id AND approval.story_digest=revision.story_digest AND approval.status='ACTIVE' AND approval.decision='APPROVED' LEFT JOIN adx_github_source_milestone source ON source.change_case_id=change_case.id AND source.organization_id=$1 AND source.workspace_id=$2 WHERE change_case.organization_id=$1 AND change_case.workspace_id=$2 AND change_case.state='DESIGN_REVIEW' ORDER BY change_case.created_at,revision.revision", [scope.organizationId, scope.workspaceId])
+  return result.rows.flatMap((row) => (row.stories ?? []).map((story) => ({ ...story, key: `${row.changeCaseId}:${story.key}`, sourceTitle: row.sourceTitle, sourceStoryKey: story.key, changeCaseId: row.changeCaseId, storyDigest: row.storyDigest, sourceMilestone: row.sourceOwner ? { owner: row.sourceOwner, repository: row.sourceRepository, number: row.sourceMilestoneNumber, title: row.sourceMilestoneTitle } : null })))
+}
+
+async function prioritizeWorkspace(client, { scope, principal, priorities }) {
+  const stories = await workspaceApprovedStories(client, scope)
+  const ranks = normalizePriorities(stories, priorities)
+  const byKey = new Map(stories.map((story) => [story.key, story]))
+  const normalized = ranks.map((item) => {
+    const story = byKey.get(item.storyKey)
+    return { ...item, changeCaseId: story.changeCaseId, storyDigest: story.storyDigest, sourceStoryKey: story.sourceStoryKey, sourceMilestone: story.sourceMilestone }
+  })
+  const portfolioDigest = sha256({ schema: 'adx-workspace-story-portfolio-v1', entries: normalized })
+  const existing = await client.query('SELECT portfolio_digest AS "planDigest", entries FROM adx_workspace_story_portfolio WHERE organization_id=$1 AND workspace_id=$2 AND portfolio_digest=$3', [scope.organizationId, scope.workspaceId, portfolioDigest])
+  if (existing.rowCount) return { ...existing.rows[0], priorities: existing.rows[0].entries, deduplicated: true }
+  await client.query('INSERT INTO adx_workspace_story_portfolio (id,organization_id,workspace_id,portfolio_digest,entries,planned_by) VALUES ($1,$2,$3,$4,$5,$6)', [randomUUID(), scope.organizationId, scope.workspaceId, portfolioDigest, JSON.stringify(normalized), principal.id])
+  return { planDigest: portfolioDigest, priorities: normalized, plannedBy: principal.id, deduplicated: false }
 }
 
 async function currentApprovedStories(client, scope, changeCaseId) {

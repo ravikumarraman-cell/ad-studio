@@ -32,7 +32,7 @@ test('story review keeps read-only reviewers out of the decision workflow', () =
 test('story review directs completed contracts to their next governed action', () => {
   const page = renderStoryReviewPage({ ...changeCase, state: 'DESIGN_REVIEW' }, governance, options)
   assert.match(page, /Story contract approved/)
-  assert.match(page, /Plan release order/)
+  assert.match(page, /Prioritize approved stories/)
   assert.match(page, /Open design review/)
   assert.doesNotMatch(page, /id="story-decision-form"/)
 })

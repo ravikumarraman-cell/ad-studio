@@ -31,5 +31,6 @@ test('story review deep link presents authoritative retained intent, risk, and B
   await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/stories`, { headers: headers(`stage3-ui-story-${randomUUID()}`), data: { expectedVersion: classifiedVersion, stories: submitted.stories } })
   await page.goto(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-review`)
   await expect(page.locator('.signed-in-indicator')).toHaveAttribute('aria-label', 'Signed in as alice')
+  await expect(page.getByRole('link', { name: 'Return to workspace' })).toHaveAttribute('href', 'http://127.0.0.1:4173/?mode=real')
   await expect(page.getByRole('heading', { name: 'Story review deep link' })).toBeVisible(); await expect(page.getByText('R4 effective risk')).toBeVisible(); await expect(page.getByText('Given')).toBeVisible(); await expect(page.getByText('ONE SAFE NEXT ACTION')).toBeVisible(); await page.reload(); await expect(page.getByText('review.csv')).toBeVisible()
 })

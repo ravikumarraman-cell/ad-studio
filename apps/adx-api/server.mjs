@@ -1,675 +1,3235 @@
-import { createServer } from 'node:http'
-import { createPrivateKey, createPublicKey, generateKeyPairSync, randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
-import { isAbsolute, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { authorize, createAuthorizationSnapshot, InMemorySessionStore, TenantResourceStore } from '../../packages/identity/src/index.mjs'
-import { createOidcVerifier } from './oidc.mjs'
-import { createPkceTransaction, exchangeGoogleCode, googleAuthorizationUrl } from './oauth.mjs'
-import { PostgresTenantRepository } from './postgres.mjs'
-import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
-import { PostgresChangeCaseRepository } from './change-case-repository.mjs'
-import { PostgresProjectPassportRepository } from './project-passport-repository.mjs'
-import { PostgresExecutionRepository } from './execution-repository.mjs'
-import { CodingAgentExecutionService } from './coding-agent-execution-service.mjs'
-import { LocalCodingAgentBroker } from './local-coding-agent-broker.mjs'
-import { ModelPatchBroker } from './model-patch-broker.mjs'
-import { createCodingAgentAdapter, codingAgentProviders } from './coding-agent-adapters.mjs'
-import { PostgresEvidenceRepository } from './evidence-repository.mjs'
-import { PostgresPreviewDeliveryRepository } from './git-delivery-repository.mjs'
-import { PostgresPreviewCiRepository } from './ci-review-repository.mjs'
-import { createPreviewDeliveryService } from './preview-delivery-service.mjs'
-import { createGitHubDraftPrClient } from './github-draft-pr-client.mjs'
-import { createGitHubDraftPrExecutionService } from './github-draft-pr-execution-service.mjs'
-import { createGitHubMilestoneStoryClient } from './github-milestone-story-client.mjs'
-import { StoryMilestoneRepository } from './story-milestone-repository.mjs'
-import { createStoryMilestoneService } from './story-milestone-service.mjs'
-import { PostgresOutcomeRepository } from './outcome-repository.mjs'
-import { createStorySuggestionService } from './story-suggestions.mjs'
-import { createStoryDecompositionAgent } from './story-decomposition-agent.mjs'
-import { listAgentSpecTemplates, resolveAgentSpecTemplate } from './agent-spec-templates.mjs'
-import { createUhgAzureOpenAiStoryGateway } from './uhg-azure-openai-story-gateway.mjs'
-import { createUhgAzureOpenAiExecutionGateway } from './uhg-azure-openai-execution-gateway.mjs'
-import { createUhgClaudeStoryGateway } from './uhg-claude-story-gateway.mjs'
-import { renderDesignCapturePage } from './design-capture-page.mjs'
-import { renderDesignReviewPage } from './design-review-workbench.mjs'
-import { LocalIndependentVerifier } from './local-independent-verifier.mjs'
-import { digestCandidateTree } from './verification-evidence.mjs'
-import { createApplicationPreviewProfiles } from './application-preview-profiles.mjs'
-import { LocalPreviewManager } from './local-preview-manager.mjs'
-import { renderApplicationPreviewPage } from './application-preview-page.mjs'
-import { renderVerificationReviewPage } from './verification-review-page.mjs'
-import { renderExecutionHandoffPage } from './execution-handoff-page.mjs'
-import { renderStoryReleasePlanningPage } from './story-release-planning-page.mjs'
-import { renderCandidateBrowserPage } from './candidate-browser-page.mjs'
-import { renderDeliveryReviewPage } from './delivery-review-page.mjs'
-import { selectPreviewCheckout } from './preview-checkout-selection.mjs'
-import { createPublicGitHubMilestoneClient } from './github-public-milestones.mjs'
-import { createPrivateGitHubMilestoneClient } from './github-private-milestones.mjs'
-import { adxPageThemeCss } from './adx-page-theme.mjs'
-import { renderStoryReviewPage } from './story-review-page.mjs'
-import workflowContract from '../../packages/domain/src/change-case-workflow.json' with { type: 'json' }
-import { escapeHtml, htmlScriptConfig } from './review-page-utils.mjs'
-import { authorizationAction, matchChangeCaseRoute } from './change-case-routes.mjs'
-import { authorizationAction as projectAuthorizationAction, matchProjectRoute } from './project-routes.mjs'
+import { createServer } from "node:http";
+import {
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+} from "node:crypto";
+import { readFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  authorize,
+  createAuthorizationSnapshot,
+  InMemorySessionStore,
+  TenantResourceStore,
+} from "../../packages/identity/src/index.mjs";
+import { createOidcVerifier } from "./oidc.mjs";
+import {
+  createPkceTransaction,
+  exchangeGoogleCode,
+  googleAuthorizationUrl,
+} from "./oauth.mjs";
+import { PostgresTenantRepository } from "./postgres.mjs";
+import { ChangeCaseError, sha256 } from "./change-case-ledger.mjs";
+import { PostgresChangeCaseRepository } from "./change-case-repository.mjs";
+import { PostgresProjectPassportRepository } from "./project-passport-repository.mjs";
+import { PostgresExecutionRepository } from "./execution-repository.mjs";
+import { CodingAgentExecutionService } from "./coding-agent-execution-service.mjs";
+import { LocalCodingAgentBroker } from "./local-coding-agent-broker.mjs";
+import { ModelPatchBroker } from "./model-patch-broker.mjs";
+import {
+  createCodingAgentAdapter,
+  codingAgentProviders,
+} from "./coding-agent-adapters.mjs";
+import { PostgresEvidenceRepository } from "./evidence-repository.mjs";
+import { PostgresPreviewDeliveryRepository } from "./git-delivery-repository.mjs";
+import { PostgresPreviewCiRepository } from "./ci-review-repository.mjs";
+import { createPreviewDeliveryService } from "./preview-delivery-service.mjs";
+import { createGitHubDraftPrClient } from "./github-draft-pr-client.mjs";
+import { createGitHubDraftPrExecutionService } from "./github-draft-pr-execution-service.mjs";
+import { createGitHubMilestoneStoryClient } from "./github-milestone-story-client.mjs";
+import { StoryMilestoneRepository } from "./story-milestone-repository.mjs";
+import { createStoryMilestoneService } from "./story-milestone-service.mjs";
+import { PostgresOutcomeRepository } from "./outcome-repository.mjs";
+import { createStorySuggestionService } from "./story-suggestions.mjs";
+import { createStoryDecompositionAgent } from "./story-decomposition-agent.mjs";
+import {
+  listAgentSpecTemplates,
+  resolveAgentSpecTemplate,
+} from "./agent-spec-templates.mjs";
+import { createUhgAzureOpenAiStoryGateway } from "./uhg-azure-openai-story-gateway.mjs";
+import { createUhgAzureOpenAiExecutionGateway } from "./uhg-azure-openai-execution-gateway.mjs";
+import { createUhgClaudeStoryGateway } from "./uhg-claude-story-gateway.mjs";
+import { renderDesignCapturePage } from "./design-capture-page.mjs";
+import { renderDesignReviewPage } from "./design-review-workbench.mjs";
+import { LocalIndependentVerifier } from "./local-independent-verifier.mjs";
+import { digestCandidateTree } from "./verification-evidence.mjs";
+import { createApplicationPreviewProfiles } from "./application-preview-profiles.mjs";
+import { LocalPreviewManager } from "./local-preview-manager.mjs";
+import { renderApplicationPreviewPage } from "./application-preview-page.mjs";
+import { renderVerificationReviewPage } from "./verification-review-page.mjs";
+import { renderExecutionHandoffPage } from "./execution-handoff-page.mjs";
+import { renderStoryReleasePlanningPage } from "./story-release-planning-page.mjs";
+import { renderCandidateBrowserPage } from "./candidate-browser-page.mjs";
+import { renderDeliveryReviewPage } from "./delivery-review-page.mjs";
+import { selectPreviewCheckout } from "./preview-checkout-selection.mjs";
+import { createPublicGitHubMilestoneClient } from "./github-public-milestones.mjs";
+import { createPrivateGitHubMilestoneClient } from "./github-private-milestones.mjs";
+import { adxPageThemeCss } from "./adx-page-theme.mjs";
+import { renderStoryReviewPage } from "./story-review-page.mjs";
+import workflowContract from "../../packages/domain/src/change-case-workflow.json" with { type: "json" };
+import { escapeHtml, htmlScriptConfig } from "./review-page-utils.mjs";
+import {
+  authorizationAction,
+  matchChangeCaseRoute,
+} from "./change-case-routes.mjs";
+import {
+  authorizationAction as projectAuthorizationAction,
+  matchProjectRoute,
+} from "./project-routes.mjs";
 
-const ids = Object.freeze({ orgA: '11111111-1111-4111-8111-111111111111', orgB: '22222222-2222-4222-8222-222222222222', workspaceA: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', workspaceB: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', resourceA: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', resourceB: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' })
-const alice = Object.freeze({ id: 'oidc:https://issuer.example:alice', type: 'human', issuer: 'https://issuer.example' })
-const bob = Object.freeze({ id: 'oidc:https://issuer.example:bob', type: 'human', issuer: 'https://issuer.example' })
-const approver = Object.freeze({ id: 'oidc:https://issuer.example:approver', type: 'human', issuer: 'https://issuer.example' })
-const designReviewer = Object.freeze({ id: 'oidc:https://issuer.example:design-reviewer', type: 'human', issuer: 'https://issuer.example' })
-const designAuthorReviewer = Object.freeze({ id: 'oidc:https://issuer.example:design-author-reviewer', type: 'human', issuer: 'https://issuer.example' })
-const memberships = Object.freeze({ alice: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], approver: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin'], version: 1 }], designReviewer: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['reviewer'], version: 1 }], designAuthorReviewer: [{ organizationId: ids.orgA, workspaceId: ids.workspaceA, roles: ['workspace_admin', 'reviewer'], version: 1 }], bob: [{ organizationId: ids.orgB, workspaceId: ids.workspaceB, roles: ['contributor'], version: 1 }] })
-const sessions = new InMemorySessionStore()
+const ids = Object.freeze({
+  orgA: "11111111-1111-4111-8111-111111111111",
+  orgB: "22222222-2222-4222-8222-222222222222",
+  workspaceA: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  workspaceB: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  resourceA: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+  resourceB: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+});
+const alice = Object.freeze({
+  id: "oidc:https://issuer.example:alice",
+  type: "human",
+  issuer: "https://issuer.example",
+});
+const bob = Object.freeze({
+  id: "oidc:https://issuer.example:bob",
+  type: "human",
+  issuer: "https://issuer.example",
+});
+const approver = Object.freeze({
+  id: "oidc:https://issuer.example:approver",
+  type: "human",
+  issuer: "https://issuer.example",
+});
+const designReviewer = Object.freeze({
+  id: "oidc:https://issuer.example:design-reviewer",
+  type: "human",
+  issuer: "https://issuer.example",
+});
+const designAuthorReviewer = Object.freeze({
+  id: "oidc:https://issuer.example:design-author-reviewer",
+  type: "human",
+  issuer: "https://issuer.example",
+});
+const memberships = Object.freeze({
+  alice: [
+    {
+      organizationId: ids.orgA,
+      workspaceId: ids.workspaceA,
+      roles: ["workspace_admin"],
+      version: 1,
+    },
+  ],
+  approver: [
+    {
+      organizationId: ids.orgA,
+      workspaceId: ids.workspaceA,
+      roles: ["workspace_admin"],
+      version: 1,
+    },
+  ],
+  designReviewer: [
+    {
+      organizationId: ids.orgA,
+      workspaceId: ids.workspaceA,
+      roles: ["reviewer"],
+      version: 1,
+    },
+  ],
+  designAuthorReviewer: [
+    {
+      organizationId: ids.orgA,
+      workspaceId: ids.workspaceA,
+      roles: ["workspace_admin", "reviewer"],
+      version: 1,
+    },
+  ],
+  bob: [
+    {
+      organizationId: ids.orgB,
+      workspaceId: ids.workspaceB,
+      roles: ["contributor"],
+      version: 1,
+    },
+  ],
+});
+const sessions = new InMemorySessionStore();
 const resources = new TenantResourceStore([
-  { id: ids.resourceA, organizationId: ids.orgA, workspaceId: ids.workspaceA, type: 'demo-record', ownerId: alice.id, riskTier: 'R2', version: 1, label: 'Workspace A confidential record' },
-  { id: ids.resourceB, organizationId: ids.orgB, workspaceId: ids.workspaceB, type: 'demo-record', ownerId: bob.id, riskTier: 'R2', version: 1, label: 'Workspace B confidential record' },
-])
-const auditEvents = []
-const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url))
-const verifyOidc = createOidcVerifier()
-const postgres = process.env.DATABASE_URL ? new PostgresTenantRepository(process.env.DATABASE_URL) : null
-const ledgerSigner = createLedgerSigner(process.env)
-const changeCases = process.env.DATABASE_URL && ledgerSigner ? new PostgresChangeCaseRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
-const projects = process.env.DATABASE_URL ? new PostgresProjectPassportRepository({ connectionString: process.env.DATABASE_URL }) : null
-const executions = process.env.DATABASE_URL && ledgerSigner ? new PostgresExecutionRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
-const localCodingAgentBroker = new LocalCodingAgentBroker()
-const uhgAzureOpenAiExecutionGateway = createUhgAzureOpenAiExecutionGateway(process.env)
-const modelPatchBroker = new ModelPatchBroker({ enabled: process.env.ADX_CODING_MODEL_EXECUTOR_ENABLED === '1', sourceRoot: process.env.ADX_CODING_MODEL_SOURCE_ROOT ?? process.env.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT, candidateRoot: process.env.ADX_CODING_MODEL_CANDIDATE_ROOT ?? process.env.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT, gateway: uhgAzureOpenAiExecutionGateway })
-const candidateRoot = modelPatchBroker.candidateRoot
-const localPreviewManager = new LocalPreviewManager({ profiles: createApplicationPreviewProfiles({ candidateRoot }), digestCandidate: digestCandidateTree })
-const configuredModelCoding = createUhgModelCodingExecution({ executions, changeCases, broker: modelPatchBroker, gateway: uhgAzureOpenAiExecutionGateway })
-const configuredLocalCoding = createLocalCodingAgentExecution({ executions, changeCases, broker: localCodingAgentBroker })
-const configuredCoding = configuredModelCoding ?? configuredLocalCoding
-const codingAgentExecution = configuredCoding?.service ?? null
-const evidenceRepository = process.env.DATABASE_URL && ledgerSigner ? new PostgresEvidenceRepository({ connectionString: process.env.DATABASE_URL, signer: ledgerSigner }) : null
-const previewDeliveries = process.env.DATABASE_URL ? new PostgresPreviewDeliveryRepository({ connectionString: process.env.DATABASE_URL }) : null
-const previewCi = process.env.DATABASE_URL ? new PostgresPreviewCiRepository({ connectionString: process.env.DATABASE_URL }) : null
-const storyMilestones = process.env.DATABASE_URL ? new StoryMilestoneRepository({ connectionString: process.env.DATABASE_URL }) : null
-const configuredStoryMilestones = createConfiguredStoryMilestones({ repository: storyMilestones, environment: process.env })
-const previewDeliveryPreparation = createConfiguredPreviewDeliveryPreparation({ changeCases, evidenceRepository, previewDeliveries, environment: process.env })
-const githubDraftPrExecution = createConfiguredGitHubDraftPrExecution({ previewDeliveries, previewCi, environment: process.env })
-const outcomes = process.env.DATABASE_URL ? new PostgresOutcomeRepository({ connectionString: process.env.DATABASE_URL }) : null
-const uhgAzureOpenAiStoryGateway = createUhgAzureOpenAiStoryGateway(process.env)
-const uhgClaudeStoryGateway = createUhgClaudeStoryGateway(process.env)
-const storySuggestions = createStorySuggestionService({ provider: process.env.ADX_STORY_AI_PROVIDER, apiKey: process.env.ADX_STORY_AI_API_KEY, model: process.env.ADX_STORY_AI_MODEL, models: process.env.ADX_STORY_AI_MODELS, ollamaBaseUrl: process.env.ADX_STORY_AI_OLLAMA_BASE_URL, gatewayAdapter: uhgAzureOpenAiStoryGateway, anthropicGatewayAdapter: uhgClaudeStoryGateway })
-const storyDecompositionAgent = createStoryDecompositionAgent({ suggestionService: storySuggestions })
-const publicGitHubMilestones = createPublicGitHubMilestoneClient()
-const privateGitHubMilestones = createConfiguredPrivateGitHubMilestones(process.env)
-const localIndependentVerifier = evidenceRepository && ledgerSigner ? new LocalIndependentVerifier({ evidenceRepository, signer: ledgerSigner }) : null
-const oauthTransactions = new Map()
+  {
+    id: ids.resourceA,
+    organizationId: ids.orgA,
+    workspaceId: ids.workspaceA,
+    type: "demo-record",
+    ownerId: alice.id,
+    riskTier: "R2",
+    version: 1,
+    label: "Workspace A confidential record",
+  },
+  {
+    id: ids.resourceB,
+    organizationId: ids.orgB,
+    workspaceId: ids.workspaceB,
+    type: "demo-record",
+    ownerId: bob.id,
+    riskTier: "R2",
+    version: 1,
+    label: "Workspace B confidential record",
+  },
+]);
+const auditEvents = [];
+const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+const verifyOidc = createOidcVerifier();
+const postgres = process.env.DATABASE_URL
+  ? new PostgresTenantRepository(process.env.DATABASE_URL)
+  : null;
+const ledgerSigner = createLedgerSigner(process.env);
+const changeCases =
+  process.env.DATABASE_URL && ledgerSigner
+    ? new PostgresChangeCaseRepository({
+        connectionString: process.env.DATABASE_URL,
+        signer: ledgerSigner,
+      })
+    : null;
+const projects = process.env.DATABASE_URL
+  ? new PostgresProjectPassportRepository({
+      connectionString: process.env.DATABASE_URL,
+    })
+  : null;
+const executions =
+  process.env.DATABASE_URL && ledgerSigner
+    ? new PostgresExecutionRepository({
+        connectionString: process.env.DATABASE_URL,
+        signer: ledgerSigner,
+      })
+    : null;
+const localCodingAgentBroker = new LocalCodingAgentBroker();
+const uhgAzureOpenAiExecutionGateway = createUhgAzureOpenAiExecutionGateway(
+  process.env,
+);
+const modelPatchProfile = resolveModelPatchProfile(process.env);
+const modelPatchBroker = new ModelPatchBroker({
+  enabled: process.env.ADX_CODING_MODEL_EXECUTOR_ENABLED === "1",
+  sourceRoot: modelPatchProfile.sourceRoot,
+  candidateRoot: modelPatchProfile.candidateRoot,
+  allowedValidationCommands: [modelPatchProfile.validationCommand],
+  linkSourceDependencies: modelPatchProfile.linkSourceDependencies,
+  gateway: uhgAzureOpenAiExecutionGateway,
+});
+const candidateRoot = modelPatchBroker.candidateRoot;
+const localPreviewManager = new LocalPreviewManager({
+  profiles: createApplicationPreviewProfiles({
+    sourceRoot: modelPatchProfile.sourceRoot,
+    candidateRoot,
+  }),
+  digestCandidate: digestCandidateTree,
+});
+const configuredModelCoding = createUhgModelCodingExecution({
+  executions,
+  changeCases,
+  broker: modelPatchBroker,
+  gateway: uhgAzureOpenAiExecutionGateway,
+});
+const configuredLocalCoding = createLocalCodingAgentExecution({
+  executions,
+  changeCases,
+  broker: localCodingAgentBroker,
+});
+const configuredCoding = configuredModelCoding ?? configuredLocalCoding;
+const codingAgentExecution = configuredCoding?.service ?? null;
+const evidenceRepository =
+  process.env.DATABASE_URL && ledgerSigner
+    ? new PostgresEvidenceRepository({
+        connectionString: process.env.DATABASE_URL,
+        signer: ledgerSigner,
+      })
+    : null;
+const previewDeliveries = process.env.DATABASE_URL
+  ? new PostgresPreviewDeliveryRepository({
+      connectionString: process.env.DATABASE_URL,
+    })
+  : null;
+const previewCi = process.env.DATABASE_URL
+  ? new PostgresPreviewCiRepository({
+      connectionString: process.env.DATABASE_URL,
+    })
+  : null;
+const storyMilestones = process.env.DATABASE_URL
+  ? new StoryMilestoneRepository({ connectionString: process.env.DATABASE_URL })
+  : null;
+const configuredStoryMilestones = createConfiguredStoryMilestones({
+  repository: storyMilestones,
+  environment: process.env,
+});
+const previewDeliveryPreparation = createConfiguredPreviewDeliveryPreparation({
+  changeCases,
+  evidenceRepository,
+  previewDeliveries,
+  storyRepository: storyMilestones,
+  environment: process.env,
+});
+const githubDraftPrExecution = createConfiguredGitHubDraftPrExecution({
+  previewDeliveries,
+  previewCi,
+  environment: process.env,
+});
+const outcomes = process.env.DATABASE_URL
+  ? new PostgresOutcomeRepository({
+      connectionString: process.env.DATABASE_URL,
+    })
+  : null;
+const uhgAzureOpenAiStoryGateway = createUhgAzureOpenAiStoryGateway(
+  process.env,
+);
+const uhgClaudeStoryGateway = createUhgClaudeStoryGateway(process.env);
+const storySuggestions = createStorySuggestionService({
+  provider: process.env.ADX_STORY_AI_PROVIDER,
+  apiKey: process.env.ADX_STORY_AI_API_KEY,
+  model: process.env.ADX_STORY_AI_MODEL,
+  models: process.env.ADX_STORY_AI_MODELS,
+  ollamaBaseUrl: process.env.ADX_STORY_AI_OLLAMA_BASE_URL,
+  gatewayAdapter: uhgAzureOpenAiStoryGateway,
+  anthropicGatewayAdapter: uhgClaudeStoryGateway,
+});
+const storyDecompositionAgent = createStoryDecompositionAgent({
+  suggestionService: storySuggestions,
+});
+const publicGitHubMilestones = createPublicGitHubMilestoneClient();
+const privateGitHubMilestones = createConfiguredPrivateGitHubMilestones(
+  process.env,
+);
+const localIndependentVerifier =
+  evidenceRepository && ledgerSigner
+    ? new LocalIndependentVerifier({
+        evidenceRepository,
+        signer: ledgerSigner,
+        candidateRoot,
+      })
+    : null;
+const oauthTransactions = new Map();
 
-function createConfiguredPreviewDeliveryPreparation({ changeCases, evidenceRepository, previewDeliveries, environment }) {
-  const providerId = environment.ADX_PREVIEW_GIT_PROVIDER_ID
-  const repositoriesJson = environment.ADX_PREVIEW_GIT_REPOSITORIES_JSON
-  const serviceId = environment.ADX_PREVIEW_DELIVERY_SERVICE_ID
-  const sourceRoot = selectPreviewCheckout(environment.ADX_PREVIEW_SOURCE_ROOT, environment.ADX_CODING_MODEL_SOURCE_ROOT, environment.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT)
-  const candidateRoot = selectPreviewCheckout(environment.ADX_PREVIEW_CANDIDATE_ROOT, environment.ADX_CODING_MODEL_CANDIDATE_ROOT, environment.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT)
-  if (!providerId && !repositoriesJson && !serviceId && !sourceRoot && !candidateRoot) return { service: null, code: 'GIT_PREVIEW_DELIVERY_NOT_CONFIGURED' }
-  if (!providerId || !repositoriesJson || !serviceId || !sourceRoot || !candidateRoot || !changeCases || !evidenceRepository || !previewDeliveries) return { service: null, code: 'GIT_PREVIEW_DELIVERY_CONFIGURATION_INCOMPLETE' }
-  try { return { service: createPreviewDeliveryService({ providerId, repositories: JSON.parse(repositoriesJson), deliveryRepository: previewDeliveries, evidenceRepository, changeCaseRepository: changeCases, servicePrincipal: { type: 'service', id: serviceId }, sourceRoot, candidateRoot }), code: null } } catch { return { service: null, code: 'GIT_PREVIEW_DELIVERY_CONFIGURATION_INVALID' } }
+function createConfiguredPreviewDeliveryPreparation({
+  changeCases,
+  evidenceRepository,
+  previewDeliveries,
+  storyRepository,
+  environment,
+}) {
+  const providerId = environment.ADX_PREVIEW_GIT_PROVIDER_ID;
+  const repositoriesJson = environment.ADX_PREVIEW_GIT_REPOSITORIES_JSON;
+  const serviceId = environment.ADX_PREVIEW_DELIVERY_SERVICE_ID;
+  const sourceRoot = selectPreviewCheckout(
+    environment.ADX_PREVIEW_SOURCE_ROOT,
+    environment.ADX_CODING_MODEL_SOURCE_ROOT,
+    environment.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT,
+  );
+  const candidateRoot = selectPreviewCheckout(
+    environment.ADX_PREVIEW_CANDIDATE_ROOT,
+    environment.ADX_CODING_MODEL_CANDIDATE_ROOT,
+    environment.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT,
+  );
+  if (
+    !providerId &&
+    !repositoriesJson &&
+    !serviceId &&
+    !sourceRoot &&
+    !candidateRoot
+  )
+    return { service: null, code: "GIT_PREVIEW_DELIVERY_NOT_CONFIGURED" };
+  if (
+    !providerId ||
+    !repositoriesJson ||
+    !serviceId ||
+    !sourceRoot ||
+    !candidateRoot ||
+    !changeCases ||
+    !evidenceRepository ||
+    !previewDeliveries
+  )
+    return {
+      service: null,
+      code: "GIT_PREVIEW_DELIVERY_CONFIGURATION_INCOMPLETE",
+    };
+  try {
+    return {
+      service: createPreviewDeliveryService({
+        providerId,
+        repositories: JSON.parse(repositoriesJson),
+        deliveryRepository: previewDeliveries,
+        evidenceRepository,
+        changeCaseRepository: changeCases,
+        storyRepository,
+        servicePrincipal: { type: "service", id: serviceId },
+        sourceRoot,
+        candidateRoot,
+      }),
+      code: null,
+    };
+  } catch {
+    return {
+      service: null,
+      code: "GIT_PREVIEW_DELIVERY_CONFIGURATION_INVALID",
+    };
+  }
 }
 
-function createConfiguredGitHubDraftPrExecution({ previewDeliveries, previewCi, environment }) {
-  const token = environment.ADX_GITHUB_DRAFT_PR_TOKEN
-  const sourceRoot = environment.ADX_PREVIEW_SOURCE_ROOT
-  const candidateRoot = environment.ADX_PREVIEW_CANDIDATE_ROOT
-  if (!token && !sourceRoot && !candidateRoot) return { service: null, code: 'GITHUB_DRAFT_PR_NOT_CONFIGURED' }
-  if (!token || !sourceRoot || !candidateRoot || !previewDeliveries || !previewCi) return { service: null, code: 'GITHUB_DRAFT_PR_CONFIGURATION_INCOMPLETE' }
-  try { return { service: createGitHubDraftPrExecutionService({ deliveryRepository: previewDeliveries, previewCi, client: createGitHubDraftPrClient({ token }), servicePrincipal: { type: 'service', id: 'adx-github-draft-pr-delivery' }, sourceRoot, candidateRoot }), code: null } } catch { return { service: null, code: 'GITHUB_DRAFT_PR_CONFIGURATION_INVALID' } }
+function featureSpotlightFromEvents(events) {
+  for (const event of [...(events ?? [])].reverse()) {
+    for (const artifact of event?.artifacts ?? []) {
+      if (artifact?.mediaType !== "application/vnd.adx.feature-spotlight+json")
+        continue;
+      const value = artifact.metadata;
+      if (
+        typeof value?.featureId === "string" &&
+        typeof value?.title === "string" &&
+        typeof value?.summary === "string"
+      )
+        return Object.freeze({
+          featureId: value.featureId,
+          title: value.title,
+          summary: value.summary,
+        });
+    }
+  }
+  return null;
+}
+
+function resolveModelPatchProfile(environment) {
+  const profile = String(
+    environment.ADX_CODING_MODEL_EXECUTION_PROFILE ?? "legacy",
+  )
+    .trim()
+    .toLowerCase();
+  if (profile === "health-x")
+    return Object.freeze({
+      id: "health-x",
+      sourceRoot:
+        environment.ADX_HEALTH_X_MODEL_SOURCE_ROOT ??
+        environment.ADX_CODING_MODEL_SOURCE_ROOT,
+      candidateRoot:
+        environment.ADX_HEALTH_X_MODEL_CANDIDATE_ROOT ??
+        environment.ADX_CODING_MODEL_CANDIDATE_ROOT,
+      repositoryId: String(
+        environment.ADX_HEALTH_X_MODEL_REPOSITORY_ID ?? "local:health-x",
+      ).trim(),
+      ref: String(
+        environment.ADX_HEALTH_X_MODEL_REF ?? "refs/heads/main",
+      ).trim(),
+      writePaths: Object.freeze(["apps/health-x/**"]),
+      validationCommand: "npm run verify:health-x",
+      linkSourceDependencies: true,
+    });
+  return Object.freeze({
+    id: "legacy",
+    sourceRoot:
+      environment.ADX_CODING_MODEL_SOURCE_ROOT ??
+      environment.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT,
+    candidateRoot:
+      environment.ADX_CODING_MODEL_CANDIDATE_ROOT ??
+      environment.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT,
+    repositoryId: String(
+      environment.ADX_CODING_MODEL_REPOSITORY_ID ??
+        environment.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ??
+        "",
+    ).trim(),
+    ref: String(
+      environment.ADX_CODING_MODEL_REF ??
+        environment.ADX_LOCAL_CODING_AGENT_REF ??
+        "",
+    ).trim(),
+    writePaths: Object.freeze(
+      String(
+        environment.ADX_CODING_MODEL_WRITE_PATHS ??
+          environment.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ??
+          "",
+      )
+        .split(",")
+        .map((path) => path.trim())
+        .filter(Boolean),
+    ),
+    validationCommand: "node --test",
+    linkSourceDependencies: false,
+  });
+}
+
+function createConfiguredGitHubDraftPrExecution({
+  previewDeliveries,
+  previewCi,
+  environment,
+}) {
+  const token = environment.ADX_GITHUB_DRAFT_PR_TOKEN;
+  const sourceRoot = environment.ADX_PREVIEW_SOURCE_ROOT;
+  const candidateRoot = environment.ADX_PREVIEW_CANDIDATE_ROOT;
+  if (!token && !sourceRoot && !candidateRoot)
+    return { service: null, code: "GITHUB_DRAFT_PR_NOT_CONFIGURED" };
+  if (
+    !token ||
+    !sourceRoot ||
+    !candidateRoot ||
+    !previewDeliveries ||
+    !previewCi
+  )
+    return { service: null, code: "GITHUB_DRAFT_PR_CONFIGURATION_INCOMPLETE" };
+  try {
+    return {
+      service: createGitHubDraftPrExecutionService({
+        deliveryRepository: previewDeliveries,
+        previewCi,
+        client: createGitHubDraftPrClient({ token }),
+        servicePrincipal: {
+          type: "service",
+          id: "adx-github-draft-pr-delivery",
+        },
+        sourceRoot,
+        candidateRoot,
+      }),
+      code: null,
+    };
+  } catch {
+    return { service: null, code: "GITHUB_DRAFT_PR_CONFIGURATION_INVALID" };
+  }
 }
 
 function createConfiguredStoryMilestones({ repository, environment }) {
-  const token = environment.ADX_GITHUB_MILESTONE_TOKEN
-  if (!token) return { service: null, code: 'GITHUB_MILESTONE_NOT_CONFIGURED' }
-  if (!repository) return { service: null, code: 'GITHUB_MILESTONE_CONFIGURATION_INCOMPLETE' }
-  try { return { service: createStoryMilestoneService({ repository, client: createGitHubMilestoneStoryClient({ token }) }), code: null } } catch { return { service: null, code: 'GITHUB_MILESTONE_CONFIGURATION_INVALID' } }
+  const token = environment.ADX_GITHUB_MILESTONE_TOKEN;
+  if (!token) return { service: null, code: "GITHUB_MILESTONE_NOT_CONFIGURED" };
+  if (!repository)
+    return { service: null, code: "GITHUB_MILESTONE_CONFIGURATION_INCOMPLETE" };
+  try {
+    return {
+      service: createStoryMilestoneService({
+        repository,
+        client: createGitHubMilestoneStoryClient({ token }),
+      }),
+      code: null,
+    };
+  } catch {
+    return { service: null, code: "GITHUB_MILESTONE_CONFIGURATION_INVALID" };
+  }
 }
 
 function createConfiguredPrivateGitHubMilestones(environment) {
-  if (!environment.ADX_GITHUB_PRIVATE_READ_TOKEN) return null
-  try { return createPrivateGitHubMilestoneClient({ token: environment.ADX_GITHUB_PRIVATE_READ_TOKEN }) } catch { return null }
+  if (!environment.ADX_GITHUB_PRIVATE_READ_TOKEN) return null;
+  try {
+    return createPrivateGitHubMilestoneClient({
+      token: environment.ADX_GITHUB_PRIVATE_READ_TOKEN,
+    });
+  } catch {
+    return null;
+  }
 }
 
-function write(response, status, body, traceId) { response.statusCode = status; response.setHeader('content-type', 'application/json'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(JSON.stringify({ ...body, traceId })) }
+function write(response, status, body, traceId) {
+  response.statusCode = status;
+  response.setHeader("content-type", "application/json");
+  response.setHeader("cache-control", "no-store");
+  response.setHeader("x-trace-id", traceId);
+  response.end(JSON.stringify({ ...body, traceId }));
+}
 function oidcCallbackFailureReason(error) {
-  if (!(error instanceof Error)) return 'OIDC_TOKEN_VERIFICATION_FAILED'
-  if (['OIDC_CODE_EXCHANGE_FAILED', 'OIDC_ID_TOKEN_MISSING', 'OIDC_CLAIMS_REJECTED'].includes(error.message)) return error.message
-  if (error.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') return 'OIDC_ISSUER_OR_AUDIENCE_REJECTED'
-  if (error.code === 'ERR_JWT_EXPIRED') return 'OIDC_TOKEN_EXPIRED'
-  if (typeof error.code === 'string' && (error.code.startsWith('ERR_JWKS') || error.code.startsWith('ERR_JWS'))) return 'OIDC_JWKS_OR_SIGNATURE_REJECTED'
-  if (typeof error.cause?.code === 'string' && ['ENOTFOUND', 'ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET'].includes(error.cause.code)) return 'OIDC_JWKS_RETRIEVAL_FAILED'
-  return 'OIDC_TOKEN_VERIFICATION_FAILED'
+  if (!(error instanceof Error)) return "OIDC_TOKEN_VERIFICATION_FAILED";
+  if (
+    [
+      "OIDC_CODE_EXCHANGE_FAILED",
+      "OIDC_ID_TOKEN_MISSING",
+      "OIDC_CLAIMS_REJECTED",
+    ].includes(error.message)
+  )
+    return error.message;
+  if (error.code === "ERR_JWT_CLAIM_VALIDATION_FAILED")
+    return "OIDC_ISSUER_OR_AUDIENCE_REJECTED";
+  if (error.code === "ERR_JWT_EXPIRED") return "OIDC_TOKEN_EXPIRED";
+  if (
+    typeof error.code === "string" &&
+    (error.code.startsWith("ERR_JWKS") || error.code.startsWith("ERR_JWS"))
+  )
+    return "OIDC_JWKS_OR_SIGNATURE_REJECTED";
+  if (
+    typeof error.cause?.code === "string" &&
+    ["ENOTFOUND", "ECONNREFUSED", "ETIMEDOUT", "ECONNRESET"].includes(
+      error.cause.code,
+    )
+  )
+    return "OIDC_JWKS_RETRIEVAL_FAILED";
+  return "OIDC_TOKEN_VERIFICATION_FAILED";
 }
 function oidcFailureMetadata(error) {
-  if (!(error instanceof Error)) return { name: typeof error, code: null, causeCode: null }
-  return { name: error.name, code: typeof error.code === 'string' ? error.code : null, causeCode: typeof error.cause?.code === 'string' ? error.cause.code : null }
+  if (!(error instanceof Error))
+    return { name: typeof error, code: null, causeCode: null };
+  return {
+    name: error.name,
+    code: typeof error.code === "string" ? error.code : null,
+    causeCode: typeof error.cause?.code === "string" ? error.cause.code : null,
+  };
 }
-const accessiblePageFoundation = `${adxPageThemeCss}<style id="adx-accessibility-foundation">p,.muted{color:var(--adx-copy)}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:var(--adx-muted)}input,select,textarea{color:var(--adx-ink);background:var(--adx-surface);border-color:var(--adx-line)}input::placeholder,textarea::placeholder{color:var(--adx-muted);opacity:1}.error{color:var(--adx-danger)}.signed-in-indicator{position:fixed;top:12px;right:16px;z-index:10;display:flex;gap:6px;align-items:baseline;max-width:calc(100vw - 32px);padding:6px 10px;background:var(--adx-surface);border:1px solid var(--adx-line);border-radius:8px;box-shadow:0 1px 4px #14213d14;color:var(--adx-copy);font-size:.78rem}.signed-in-indicator strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--adx-ink);font-weight:700}@media (max-width:600px){.signed-in-indicator{position:static;width:max-content;max-width:calc(100% - 32px);margin:10px 16px 0}.signed-in-indicator strong{max-width:14rem}}</style>`
-function signedInIndicator(principal) { const identity = String(principal?.displayName ?? principal?.id?.split(':').at(-1) ?? 'Authenticated user').trim() || 'Authenticated user'; return `<aside class="signed-in-indicator" aria-label="Signed in as ${escapeHtml(identity)}"><span>Signed in</span><strong>${escapeHtml(identity)}</strong></aside>` }
-function writeHtml(response, status, html, traceId, principal = null) { response.statusCode = status; response.setHeader('content-type', 'text/html; charset=utf-8'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-trace-id', traceId); response.end(html.replace('</head>', `${accessiblePageFoundation}</head>`).replace(/<body([^>]*)>/, `<body$1>${principal ? signedInIndicator(principal) : ''}`)) }
+const accessiblePageFoundation = `${adxPageThemeCss}<style id="adx-accessibility-foundation">p,.muted{color:var(--adx-copy)}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:var(--adx-muted)}input,select,textarea{color:var(--adx-ink);background:var(--adx-surface);border-color:var(--adx-line)}input::placeholder,textarea::placeholder{color:var(--adx-muted);opacity:1}.error{color:var(--adx-danger)}.workspace-return-link{position:fixed;top:12px;left:16px;z-index:10;display:inline-block;padding:6px 10px;border:1px solid var(--adx-line);border-radius:8px;background:var(--adx-surface);box-shadow:0 1px 4px #14213d14;color:var(--adx-brand-deep);font-size:.78rem;font-weight:700;text-decoration:none}.workspace-return-link:hover{background:var(--adx-surface-soft)}.signed-in-indicator{position:fixed;top:12px;right:16px;z-index:10;display:flex;gap:6px;align-items:baseline;max-width:calc(100vw - 32px);padding:6px 10px;background:var(--adx-surface);border:1px solid var(--adx-line);border-radius:8px;box-shadow:0 1px 4px #14213d14;color:var(--adx-copy);font-size:.78rem}.signed-in-indicator strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--adx-ink);font-weight:700}@media (max-width:600px){.workspace-return-link,.signed-in-indicator{position:static;width:max-content;max-width:calc(100% - 32px);margin:10px 16px 0}.signed-in-indicator strong{max-width:14rem}}</style>`;
+function signedInIndicator(principal) {
+  const identity =
+    String(
+      principal?.displayName ??
+        principal?.id?.split(":").at(-1) ??
+        "Authenticated user",
+    ).trim() || "Authenticated user";
+  return `<aside class="signed-in-indicator" aria-label="Signed in as ${escapeHtml(identity)}"><span>Signed in</span><strong>${escapeHtml(identity)}</strong></aside>`;
+}
+function authenticatedPageNavigation(principal) {
+  return `<a class="workspace-return-link" href="${escapeHtml(realWorkspaceLocation(process.env.ADX_UI_ORIGIN))}">Return to workspace</a>${signedInIndicator(principal)}`;
+}
+function writeHtml(response, status, html, traceId, principal = null) {
+  response.statusCode = status;
+  response.setHeader("content-type", "text/html; charset=utf-8");
+  response.setHeader("cache-control", "no-store");
+  response.setHeader("x-trace-id", traceId);
+  response.end(
+    html
+      .replace("</head>", `${accessiblePageFoundation}</head>`)
+      .replace(
+        /<body([^>]*)>/,
+        `<body$1>${principal ? authenticatedPageNavigation(principal) : ""}`,
+      ),
+  );
+}
 function storyReviewPage(changeCase, governance) {
-  const factors = governance.assessment?.explanation?.factors ?? []; const stories = governance.stories?.stories ?? []; const approvals = governance.approvals ?? []
-  const nextAction = changeCase.state === 'AWAITING_STORY_APPROVAL' ? 'Review this exact story contract and record an independent decision.' : changeCase.state === 'DESIGN_REVIEW' ? 'Story contract approved. The next governed gate is design review.' : 'Complete the prior intake or risk-classification step before review.'
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Review — ${escapeHtml(changeCase.title)}</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:#52657f}h1{margin:.2rem 0;font-size:2rem}.risk{display:inline-block;background:#fff2d9;color:#7b4600;font-weight:700;padding:5px 10px;border-radius:999px}h2{font-size:1.15rem;margin-top:0}dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}dt{font-weight:700;color:#52657f}ul,ol{padding-left:20px}.scenario{border-left:3px solid #3274c7;padding-left:12px;margin:12px 0}.next{background:#e9f4ff;border-color:#9dcef8}.muted{color:#52657f}code{font-size:.85em;overflow-wrap:anywhere}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span> <span class="muted">State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</span></p></header><section class="card next" aria-labelledby="next-action"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2 id="next-action">${escapeHtml(nextAction)}</h2><p>This screen shows retained facts and the exact story digest under review; it does not infer approval from a visual interaction.</p></section><section class="card"><p class="eyebrow">RETAINED INTENT</p><h2>What is being changed</h2><dl><dt>Outcome</dt><dd>${escapeHtml(governance.intent?.outcome ?? 'Not captured')}</dd><dt>Owner</dt><dd>${escapeHtml(governance.intent?.owner ?? 'Not captured')}</dd><dt>Acceptance criteria</dt><dd>${escapeHtml(governance.intent?.acceptanceCriteria ?? 'Not captured')}</dd><dt>Repository</dt><dd>${escapeHtml(governance.intent?.targetRepository ?? 'Not captured')}</dd><dt>Source</dt><dd>${governance.sources.map((source) => `${escapeHtml(source.sourceName)} <code>${escapeHtml(source.sourceDigest)}</code>`).join('<br>') || 'None retained'}</dd></dl></section><section class="card"><p class="eyebrow">RISK EXPLANATION</p><h2>${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} effective risk</h2><p>${escapeHtml(governance.assessment?.explanation?.rationale ?? 'Classification is pending.')}</p><ul>${factors.map((factor) => `<li>${escapeHtml(factor.asset)} — ${escapeHtml(factor.classification)} (minimum risk weight ${escapeHtml(factor.weight)})</li>`).join('')}</ul></section><section class="card"><p class="eyebrow">BDD STORY CONTRACT · ${escapeHtml(governance.stories?.storyDigest ?? 'not generated')}</p><h2>Reviewable stories</h2>${stories.map((story) => `<article><h3>${escapeHtml(story.key)} — ${escapeHtml(story.title)}</h3><p>${escapeHtml(story.narrative)}</p>${story.scenarios.map((scenario) => `<div class="scenario"><strong>Given</strong> ${escapeHtml(scenario.given)}<br><strong>When</strong> ${escapeHtml(scenario.when)}<br><strong>Then</strong> ${escapeHtml(scenario.then)}</div>`).join('')}</article>`).join('') || '<p>No story revision is ready for review.</p>'}</section><section class="card"><p class="eyebrow">APPROVAL HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((approval) => `<li><strong>${escapeHtml(approval.decision)}</strong> · ${escapeHtml(approval.status)} · <code>${escapeHtml(approval.storyDigest)}</code><br>${escapeHtml(approval.rationale)}</li>`).join('') || '<li>No decision has been recorded.</li>'}</ul></section></main></body></html>`
+  const factors = governance.assessment?.explanation?.factors ?? [];
+  const stories = governance.stories?.stories ?? [];
+  const approvals = governance.approvals ?? [];
+  const nextAction =
+    changeCase.state === "AWAITING_STORY_APPROVAL"
+      ? "Review this exact story contract and record an independent decision."
+      : changeCase.state === "DESIGN_REVIEW"
+        ? "Story contract approved. The next governed gate is design review."
+        : "Complete the prior intake or risk-classification step before review.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Review — ${escapeHtml(changeCase.title)}</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:#52657f}h1{margin:.2rem 0;font-size:2rem}.risk{display:inline-block;background:#fff2d9;color:#7b4600;font-weight:700;padding:5px 10px;border-radius:999px}h2{font-size:1.15rem;margin-top:0}dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}dt{font-weight:700;color:#52657f}ul,ol{padding-left:20px}.scenario{border-left:3px solid #3274c7;padding-left:12px;margin:12px 0}.next{background:#e9f4ff;border-color:#9dcef8}.muted{color:#52657f}code{font-size:.85em;overflow-wrap:anywhere}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span> <span class="muted">State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</span></p></header><section class="card next" aria-labelledby="next-action"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2 id="next-action">${escapeHtml(nextAction)}</h2><p>This screen shows retained facts and the exact story digest under review; it does not infer approval from a visual interaction.</p></section><section class="card"><p class="eyebrow">RETAINED INTENT</p><h2>What is being changed</h2><dl><dt>Outcome</dt><dd>${escapeHtml(governance.intent?.outcome ?? "Not captured")}</dd><dt>Owner</dt><dd>${escapeHtml(governance.intent?.owner ?? "Not captured")}</dd><dt>Acceptance criteria</dt><dd>${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</dd><dt>Repository</dt><dd>${escapeHtml(governance.intent?.targetRepository ?? "Not captured")}</dd><dt>Source</dt><dd>${governance.sources.map((source) => `${escapeHtml(source.sourceName)} <code>${escapeHtml(source.sourceDigest)}</code>`).join("<br>") || "None retained"}</dd></dl></section><section class="card"><p class="eyebrow">RISK EXPLANATION</p><h2>${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} effective risk</h2><p>${escapeHtml(governance.assessment?.explanation?.rationale ?? "Classification is pending.")}</p><ul>${factors.map((factor) => `<li>${escapeHtml(factor.asset)} — ${escapeHtml(factor.classification)} (minimum risk weight ${escapeHtml(factor.weight)})</li>`).join("")}</ul></section><section class="card"><p class="eyebrow">BDD STORY CONTRACT · ${escapeHtml(governance.stories?.storyDigest ?? "not generated")}</p><h2>Reviewable stories</h2>${stories.map((story) => `<article><h3>${escapeHtml(story.key)} — ${escapeHtml(story.title)}</h3><p>${escapeHtml(story.narrative)}</p>${story.scenarios.map((scenario) => `<div class="scenario"><strong>Given</strong> ${escapeHtml(scenario.given)}<br><strong>When</strong> ${escapeHtml(scenario.when)}<br><strong>Then</strong> ${escapeHtml(scenario.then)}</div>`).join("")}</article>`).join("") || "<p>No story revision is ready for review.</p>"}</section><section class="card"><p class="eyebrow">APPROVAL HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((approval) => `<li><strong>${escapeHtml(approval.decision)}</strong> · ${escapeHtml(approval.status)} · <code>${escapeHtml(approval.storyDigest)}</code><br>${escapeHtml(approval.rationale)}</li>`).join("") || "<li>No decision has been recorded.</li>"}</ul></section></main></body></html>`;
 }
-function storyReviewPageV2(changeCase, governance, { canReview, isStoryAuthor, decisionEndpoint, designReviewUrl, releasePlanningUrl, storyWorkshopUrl }) {
-  const factors = governance.assessment?.explanation?.factors ?? []
-  const stories = governance.stories?.stories ?? []
-  const approvals = governance.approvals ?? []
-  const awaitingDecision = changeCase.state === 'AWAITING_STORY_APPROVAL' && Boolean(governance.stories?.storyDigest)
+function storyReviewPageV2(
+  changeCase,
+  governance,
+  {
+    canReview,
+    isStoryAuthor,
+    decisionEndpoint,
+    designReviewUrl,
+    releasePlanningUrl,
+    storyWorkshopUrl,
+  },
+) {
+  const factors = governance.assessment?.explanation?.factors ?? [];
+  const stories = governance.stories?.stories ?? [];
+  const approvals = governance.approvals ?? [];
+  const awaitingDecision =
+    changeCase.state === "AWAITING_STORY_APPROVAL" &&
+    Boolean(governance.stories?.storyDigest);
   const nextAction = awaitingDecision
-    ? isStoryAuthor ? 'You authored this story. Ask an independent decision maker to review it.' : canReview ? 'Choose one decision after reviewing the story contract below.' : 'This story is awaiting an independent decision maker with permission to advance the workflow.'
-    : changeCase.state === 'DESIGN_REVIEW' ? 'Story approved. Continue with the design review.' : 'Complete the prior intake, risk, or story-generation step before review.'
-  const config = htmlScriptConfig({ decisionEndpoint, storyDigest: governance.stories?.storyDigest, expectedVersion: changeCase.projectionVersion, designReviewUrl })
-  const storyMarkup = stories.map((story) => `<article class="story"><h3>${escapeHtml(story.key)} — ${escapeHtml(story.title)}</h3><p>${escapeHtml(story.narrative)}</p>${(story.scenarios ?? []).map((scenario) => `<div class="scenario"><strong>Given</strong> ${escapeHtml(scenario.given)}<br><strong>When</strong> ${escapeHtml(scenario.when)}<br><strong>Then</strong> ${escapeHtml(scenario.then)}</div>`).join('')}</article>`).join('') || '<p>No story revision is ready for review.</p>'
+    ? isStoryAuthor
+      ? "You authored this story. Ask an independent decision maker to review it."
+      : canReview
+        ? "Choose one decision after reviewing the story contract below."
+        : "This story is awaiting an independent decision maker with permission to advance the workflow."
+    : changeCase.state === "DESIGN_REVIEW"
+      ? "Story approved. Continue with the design review."
+      : "Complete the prior intake, risk, or story-generation step before review.";
+  const config = htmlScriptConfig({
+    decisionEndpoint,
+    storyDigest: governance.stories?.storyDigest,
+    expectedVersion: changeCase.projectionVersion,
+    designReviewUrl,
+  });
+  const storyMarkup =
+    stories
+      .map(
+        (story) =>
+          `<article class="story"><h3>${escapeHtml(story.key)} — ${escapeHtml(story.title)}</h3><p>${escapeHtml(story.narrative)}</p>${(story.scenarios ?? []).map((scenario) => `<div class="scenario"><strong>Given</strong> ${escapeHtml(scenario.given)}<br><strong>When</strong> ${escapeHtml(scenario.when)}<br><strong>Then</strong> ${escapeHtml(scenario.then)}</div>`).join("")}</article>`,
+      )
+      .join("") || "<p>No story revision is ready for review.</p>";
   const decisionPanel = !awaitingDecision
-    ? changeCase.state === 'DESIGN_REVIEW' ? `<section class="card success"><p class="eyebrow">GATE B COMPLETE</p><h2>Story contract approved</h2><p>Set the delivery order before completing design review. The ranking remains bound to this independently approved story contract.</p><a class="button" href="${escapeHtml(releasePlanningUrl)}">Plan release order</a> <a class="button" href="${escapeHtml(designReviewUrl)}">Open design review</a></section>` : ''
-    : canReview && !isStoryAuthor ? `<section class="card decision"><p class="eyebrow">GATE B · REVIEW DECISION</p><h2>What is your decision?</h2><p class="muted">Confirm that the user need is clear, the acceptance criteria are observable, and risks or dependencies are represented. Your rationale is retained with this exact story digest.</p><form id="story-decision-form" novalidate><fieldset><legend>Decision <span aria-hidden="true">*</span></legend><label class="choice"><input type="radio" name="decision" value="APPROVED"> <span><strong>Approve story</strong><small>Move this Change Case to design review.</small></span></label><label class="choice"><input type="radio" name="decision" value="REJECTED"> <span><strong>Return for revision</strong><small>Send it back to risk and story refinement.</small></span></label></fieldset><label for="story-rationale">Reviewer rationale <span aria-hidden="true">*</span></label><textarea id="story-rationale" name="rationale" required aria-describedby="rationale-help" placeholder="State what you verified, or what must be revised."></textarea><p id="rationale-help" class="muted">This will be visible in the immutable approval history.</p><p id="decision-status" class="status" role="status" aria-live="polite"></p><button class="button" type="submit">Record decision</button></form></section>`
-    : isStoryAuthor ? `<section class="card notice"><p class="eyebrow">GATE B · INDEPENDENT REVIEW REQUIRED</p><h2>Authors cannot approve their own story</h2><p>You can revise the story, but another authorized decision maker must approve or return this version. This protects the integrity of the gate.</p><a class="button" href="${escapeHtml(storyWorkshopUrl)}">Revise story breakdown</a></section>`
-    : `<section class="card notice"><p class="eyebrow">GATE B · AWAITING REVIEW</p><h2>Read access does not advance a gate</h2><p>You can inspect the retained requirement and story contract. An independent decision maker with workflow permission must record the decision.</p></section>`
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Review — ${escapeHtml(changeCase.title)}</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:auto;padding:32px 20px 56px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:750;color:#52657f;margin:0 0 6px}h1{margin:.2rem 0;font-size:2rem;line-height:1.2}h2{font-size:1.2rem;margin:.1rem 0 .5rem}h3{font-size:1rem;margin:0 0 .45rem}.risk{display:inline-block;background:#fff2d9;color:#7b4600;font-weight:750;padding:5px 10px;border-radius:999px}.muted{color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.decision{border:2px solid #2d74c4}.notice{background:#fff8e9;border-color:#f0cc7b}.success{background:#f0fbf4;border-color:#9bd2ae}dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}dt{font-weight:700;color:#52657f}ul{padding-left:20px}.story+.story{border-top:1px solid #e1e7ef;margin-top:20px;padding-top:20px}.scenario{border-left:3px solid #3274c7;padding-left:12px;margin:12px 0}.choice{display:flex;gap:10px;align-items:flex-start;border:1px solid #cddbeb;border-radius:10px;padding:13px;margin:10px 0;cursor:pointer}.choice:has(input:checked){border:2px solid #2d74c4;background:#edf6ff}.choice input{margin-top:4px}.choice strong,.choice small{display:block}.choice small{color:#52657f}fieldset{border:0;padding:0;margin:0 0 18px}legend{font-weight:750;margin-bottom:8px}textarea{display:block;width:100%;min-height:100px;border:1px solid #8da0b7;border-radius:9px;padding:10px;font:inherit}textarea:focus{outline:3px solid #9dcef8;outline-offset:2px}.status{min-height:1.5em;font-weight:650}.error{color:#a92e2e}.button{display:inline-block;border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button:hover{background:#0d427e}code{font-size:.85em;overflow-wrap:anywhere}@media(max-width:650px){main{padding:18px 14px 40px}header,.card{padding:19px}h1{font-size:1.65rem}dl{grid-template-columns:1fr}}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span> <span class="muted">State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</span></p></header><section class="card next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${escapeHtml(nextAction)}</h2><p>Review is bound to the exact story digest below. A page view alone never grants approval.</p></section>${decisionPanel}<section class="card"><p class="eyebrow">RETAINED INTENT</p><h2>What is being changed</h2><dl><dt>Outcome</dt><dd>${escapeHtml(governance.intent?.outcome ?? 'Not captured')}</dd><dt>Owner</dt><dd>${escapeHtml(governance.intent?.owner ?? 'Not captured')}</dd><dt>Acceptance criteria</dt><dd>${escapeHtml(governance.intent?.acceptanceCriteria ?? 'Not captured')}</dd><dt>Repository</dt><dd>${escapeHtml(governance.intent?.targetRepository ?? 'Not captured')}</dd><dt>Source</dt><dd>${(governance.sources ?? []).map((source) => `${escapeHtml(source.sourceName)} <code>${escapeHtml(source.sourceDigest)}</code>`).join('<br>') || 'None retained'}</dd></dl></section><section class="card"><p class="eyebrow">RISK EXPLANATION</p><h2>${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} effective risk</h2><p>${escapeHtml(governance.assessment?.explanation?.rationale ?? 'Classification is pending.')}</p><ul>${factors.map((factor) => `<li>${escapeHtml(factor.asset)} — ${escapeHtml(factor.classification)} (minimum risk weight ${escapeHtml(factor.weight)})</li>`).join('')}</ul></section><section class="card"><p class="eyebrow">BDD STORY CONTRACT · ${escapeHtml(governance.stories?.storyDigest ?? 'not generated')}</p><h2>Reviewable stories</h2>${storyMarkup}</section><section class="card"><p class="eyebrow">APPROVAL HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((approval) => `<li><strong>${escapeHtml(approval.decision)}</strong> · ${escapeHtml(approval.status)} · <code>${escapeHtml(approval.storyDigest)}</code><br>${escapeHtml(approval.rationale)}</li>`).join('') || '<li>No decision has been recorded.</li>'}</ul></section></main><script>const config=${config};const form=document.getElementById('story-decision-form');form?.addEventListener('submit',async(event)=>{event.preventDefault();const status=document.getElementById('decision-status');const decision=new FormData(form).get('decision');const rationale=document.getElementById('story-rationale').value.trim();status.className='status';if(!decision||!rationale){status.textContent='Choose a decision and enter a rationale before recording it.';status.classList.add('error');return}const button=form.querySelector('button');button.disabled=true;button.textContent='Recording…';try{const response=await fetch(config.decisionEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({storyDigest:config.storyDigest,decision,rationale,expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||body.code||'Unable to record the decision.');status.textContent=decision==='APPROVED'?'Story approved. Opening design review…':'Story returned for revision. Refreshing the review…';window.setTimeout(()=>{window.location.href=decision==='APPROVED'?config.designReviewUrl:window.location.href},500)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Record decision'}});</script></body></html>`
+    ? changeCase.state === "DESIGN_REVIEW"
+      ? `<section class="card success"><p class="eyebrow">GATE B COMPLETE</p><h2>Story contract approved</h2><p>Set the delivery order before completing design review. The ranking remains bound to this independently approved story contract.</p><a class="button" href="${escapeHtml(releasePlanningUrl)}">Plan release order</a> <a class="button" href="${escapeHtml(designReviewUrl)}">Open design review</a></section>`
+      : ""
+    : canReview && !isStoryAuthor
+      ? `<section class="card decision"><p class="eyebrow">GATE B · REVIEW DECISION</p><h2>What is your decision?</h2><p class="muted">Confirm that the user need is clear, the acceptance criteria are observable, and risks or dependencies are represented. Your rationale is retained with this exact story digest.</p><form id="story-decision-form" novalidate><fieldset><legend>Decision <span aria-hidden="true">*</span></legend><label class="choice"><input type="radio" name="decision" value="APPROVED"> <span><strong>Approve story</strong><small>Move this Change Case to design review.</small></span></label><label class="choice"><input type="radio" name="decision" value="REJECTED"> <span><strong>Return for revision</strong><small>Send it back to risk and story refinement.</small></span></label></fieldset><label for="story-rationale">Reviewer rationale <span aria-hidden="true">*</span></label><textarea id="story-rationale" name="rationale" required aria-describedby="rationale-help" placeholder="State what you verified, or what must be revised."></textarea><p id="rationale-help" class="muted">This will be visible in the immutable approval history.</p><p id="decision-status" class="status" role="status" aria-live="polite"></p><button class="button" type="submit">Record decision</button></form></section>`
+      : isStoryAuthor
+        ? `<section class="card notice"><p class="eyebrow">GATE B · INDEPENDENT REVIEW REQUIRED</p><h2>Authors cannot approve their own story</h2><p>You can revise the story, but another authorized decision maker must approve or return this version. This protects the integrity of the gate.</p><a class="button" href="${escapeHtml(storyWorkshopUrl)}">Revise story breakdown</a></section>`
+        : `<section class="card notice"><p class="eyebrow">GATE B · AWAITING REVIEW</p><h2>Read access does not advance a gate</h2><p>You can inspect the retained requirement and story contract. An independent decision maker with workflow permission must record the decision.</p></section>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Review — ${escapeHtml(changeCase.title)}</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:auto;padding:32px 20px 56px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:750;color:#52657f;margin:0 0 6px}h1{margin:.2rem 0;font-size:2rem;line-height:1.2}h2{font-size:1.2rem;margin:.1rem 0 .5rem}h3{font-size:1rem;margin:0 0 .45rem}.risk{display:inline-block;background:#fff2d9;color:#7b4600;font-weight:750;padding:5px 10px;border-radius:999px}.muted{color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.decision{border:2px solid #2d74c4}.notice{background:#fff8e9;border-color:#f0cc7b}.success{background:#f0fbf4;border-color:#9bd2ae}dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}dt{font-weight:700;color:#52657f}ul{padding-left:20px}.story+.story{border-top:1px solid #e1e7ef;margin-top:20px;padding-top:20px}.scenario{border-left:3px solid #3274c7;padding-left:12px;margin:12px 0}.choice{display:flex;gap:10px;align-items:flex-start;border:1px solid #cddbeb;border-radius:10px;padding:13px;margin:10px 0;cursor:pointer}.choice:has(input:checked){border:2px solid #2d74c4;background:#edf6ff}.choice input{margin-top:4px}.choice strong,.choice small{display:block}.choice small{color:#52657f}fieldset{border:0;padding:0;margin:0 0 18px}legend{font-weight:750;margin-bottom:8px}textarea{display:block;width:100%;min-height:100px;border:1px solid #8da0b7;border-radius:9px;padding:10px;font:inherit}textarea:focus{outline:3px solid #9dcef8;outline-offset:2px}.status{min-height:1.5em;font-weight:650}.error{color:#a92e2e}.button{display:inline-block;border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button:hover{background:#0d427e}code{font-size:.85em;overflow-wrap:anywhere}@media(max-width:650px){main{padding:18px 14px 40px}header,.card{padding:19px}h1{font-size:1.65rem}dl{grid-template-columns:1fr}}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span> <span class="muted">State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</span></p></header><section class="card next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${escapeHtml(nextAction)}</h2><p>Review is bound to the exact story digest below. A page view alone never grants approval.</p></section>${decisionPanel}<section class="card"><p class="eyebrow">RETAINED INTENT</p><h2>What is being changed</h2><dl><dt>Outcome</dt><dd>${escapeHtml(governance.intent?.outcome ?? "Not captured")}</dd><dt>Owner</dt><dd>${escapeHtml(governance.intent?.owner ?? "Not captured")}</dd><dt>Acceptance criteria</dt><dd>${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</dd><dt>Repository</dt><dd>${escapeHtml(governance.intent?.targetRepository ?? "Not captured")}</dd><dt>Source</dt><dd>${(governance.sources ?? []).map((source) => `${escapeHtml(source.sourceName)} <code>${escapeHtml(source.sourceDigest)}</code>`).join("<br>") || "None retained"}</dd></dl></section><section class="card"><p class="eyebrow">RISK EXPLANATION</p><h2>${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} effective risk</h2><p>${escapeHtml(governance.assessment?.explanation?.rationale ?? "Classification is pending.")}</p><ul>${factors.map((factor) => `<li>${escapeHtml(factor.asset)} — ${escapeHtml(factor.classification)} (minimum risk weight ${escapeHtml(factor.weight)})</li>`).join("")}</ul></section><section class="card"><p class="eyebrow">BDD STORY CONTRACT · ${escapeHtml(governance.stories?.storyDigest ?? "not generated")}</p><h2>Reviewable stories</h2>${storyMarkup}</section><section class="card"><p class="eyebrow">APPROVAL HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((approval) => `<li><strong>${escapeHtml(approval.decision)}</strong> · ${escapeHtml(approval.status)} · <code>${escapeHtml(approval.storyDigest)}</code><br>${escapeHtml(approval.rationale)}</li>`).join("") || "<li>No decision has been recorded.</li>"}</ul></section></main><script>const config=${config};const form=document.getElementById('story-decision-form');form?.addEventListener('submit',async(event)=>{event.preventDefault();const status=document.getElementById('decision-status');const decision=new FormData(form).get('decision');const rationale=document.getElementById('story-rationale').value.trim();status.className='status';if(!decision||!rationale){status.textContent='Choose a decision and enter a rationale before recording it.';status.classList.add('error');return}const button=form.querySelector('button');button.disabled=true;button.textContent='Recording…';try{const response=await fetch(config.decisionEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({storyDigest:config.storyDigest,decision,rationale,expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||body.code||'Unable to record the decision.');status.textContent=decision==='APPROVED'?'Story approved. Opening design review…':'Story returned for revision. Refreshing the review…';window.setTimeout(()=>{window.location.href=decision==='APPROVED'?config.designReviewUrl:window.location.href},500)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Record decision'}});</script></body></html>`;
 }
-function storyWorkshopPage(changeCase, governance, { canAuthor, storiesEndpoint, storySuggestionsEndpoint, storyReviewUrl, aiStatus }) {
-  const isReady = ['RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW'].includes(changeCase.state)
-  const config = htmlScriptConfig({ storiesEndpoint, storySuggestionsEndpoint, expectedVersion: changeCase.projectionVersion, storyReviewUrl, aiEnabled: aiStatus.configured, aiProvider: aiStatus.provider, aiModel: aiStatus.model })
-  const aiPanel = aiStatus.configured ? `<section class="ai-panel"><p class="eyebrow">AGENTIC STORY DECOMPOSITION · ${escapeHtml(aiStatus.model)}</p><h3>Start with agent-drafted story slices</h3><p>The bounded agent uses only retained Feature context and an approved model. It cannot save, approve, or advance stories; you review and submit any proposal yourself.</p><button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button><p id="suggestion-status" class="status" role="status" aria-live="polite"></p><div id="suggestion-list"></div><button class="button" type="button" id="accept-suggestions" hidden>Accept selected suggestions</button></section>` : `<section class="ai-panel unavailable"><p class="eyebrow">AGENTIC STORY DECOMPOSITION</p><h3>Story decomposition agent is not configured</h3><p>Manual story authoring remains available. An administrator can enable the server-configured model agent; no browser key is used.</p></section>`
-  const guidance = `<section class="card guidance"><p class="eyebrow">HOW TO SPLIT WELL</p><ol><li>Start with the user journey, not technical layers.</li><li>Make each slice independently valuable and small enough to plan.</li><li>Use observable Given / When / Then acceptance examples.</li><li>Keep cross-cutting security, accessibility, and operational needs visible in the relevant story.</li></ol></section>`
-  const editor = !isReady ? `<section class="card notice"><h2>Story shaping opens after risk classification</h2><p>Complete intake and risk classification first. That ensures the stories carry the right risk context into review.</p></section>` : !canAuthor ? `<section class="card notice"><h2>You can view the breakdown, but cannot submit it</h2><p>An authorized contributor must submit a story revision for independent review.</p></section>` : `<section class="card editor"><p class="eyebrow">STEP 2 · DRAFT THE STORY SET</p><h2>Break this feature into user-value slices</h2><p>One feature can become several stories. Do not split by database, API, or UI layer—each story should describe a useful user outcome.</p>${aiPanel}<form id="story-workshop-form"><div id="story-list"></div><template id="story-template"><article class="story-card"><div class="story-head"><strong class="story-number"></strong><button type="button" class="remove">Remove</button></div><label>Story title<input name="title" required placeholder="e.g. Submit a complete authorization request"></label><label>User need<textarea name="narrative" required placeholder="As a …, I want …, so that …"></textarea></label><p class="bdd-title">Acceptance example</p><label>Given<textarea name="given" required></textarea></label><label>When<textarea name="when" required></textarea></label><label>Then<textarea name="then" required></textarea></label></article></template><button class="secondary" type="button" id="add-story">Add another story</button><p id="workshop-status" class="status" role="status" aria-live="polite"></p><button class="button" type="submit">Submit stories for independent review</button></form></section>`
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Breakdown — ${escapeHtml(changeCase.title)}</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:auto;padding:32px 20px 56px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f;margin:0 0 6px}h1{font-size:2rem;margin:.15rem 0}h2{font-size:1.2rem;margin:.1rem 0 .5rem}.muted{color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.guidance{background:#fbfcfe}.notice{background:#fff8e9;border-color:#f0cc7b}.editor{border:2px solid #2d74c4}.ai-panel{border:1px solid #9dcef8;border-radius:12px;padding:18px;background:#f7fbff;margin:18px 0}.ai-panel.unavailable{border-color:#dce3ee;background:#fbfcfe}.suggestion{display:flex;gap:10px;border:1px solid #cddbeb;border-radius:9px;padding:12px;margin:9px 0;background:#fff;cursor:pointer}.suggestion input{margin-top:5px}.suggestion strong,.suggestion small{display:block}.suggestion small{color:#52657f}.story-card{border:1px solid #cddbeb;border-radius:12px;padding:18px;margin:14px 0;background:#fff}.story-head{display:flex;justify-content:space-between;align-items:center}.story-head strong{color:#11519b}.remove{border:0;background:transparent;color:#9b2929;text-decoration:underline;cursor:pointer;font:inherit}.story-card label{display:block;font-weight:700;margin-top:12px}.story-card input,.story-card textarea{display:block;width:100%;margin-top:5px;border:1px solid #8da0b7;border-radius:8px;padding:9px;font:inherit;font-weight:400}.story-card textarea{min-height:68px}.bdd-title{font-weight:750;margin:18px 0 0}.button,.secondary{display:inline-block;border:0;border-radius:9px;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button{background:#11519b;color:#fff;margin-top:12px}.secondary{background:#e9f4ff;color:#11519b}.status{min-height:1.5em;font-weight:650}.error{color:#a92e2e}ol{padding-left:20px}@media(max-width:650px){main{padding:18px 14px 40px}header,.card{padding:19px}h1{font-size:1.65rem}}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY BREAKDOWN</p><h1>${escapeHtml(changeCase.title)}</h1><p class="muted">Feature intent → story generation & curation → independent story approval → design review</p></header><section class="card next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>Generate and curate stories before Gate B</h2><p>Use model-backed suggestions or manual drafting, select the stories that fit the feature, and edit them before submission. ADX retains only the final story revision and sends that exact digest to the independent reviewer.</p></section><section class="card"><p class="eyebrow">PARENT FEATURE / RETAINED INTENT</p><h2>${escapeHtml(governance.intent?.outcome ?? 'Intent has not been captured')}</h2><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? 'Not captured')}</p><p><strong>Risk:</strong> ${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} · <strong>Target repository:</strong> ${escapeHtml(governance.intent?.targetRepository ?? 'Not captured')}</p></section>${guidance}${editor}</main><script>const config=${config};const form=document.getElementById('story-workshop-form');if(form){const list=document.getElementById('story-list');const template=document.getElementById('story-template');const renumber=()=>list.querySelectorAll('.story-card').forEach((card,index)=>card.querySelector('.story-number').textContent='Story '+(index+1));const add=()=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('.remove').onclick=()=>{card.remove();renumber()};renumber()};const fill=(story)=>{add();const card=list.lastElementChild;card.querySelector('[name=title]').value=story.title;card.querySelector('[name=narrative]').value=story.narrative;card.querySelector('[name=given]').value=story.scenarios[0].given;card.querySelector('[name=when]').value=story.scenarios[0].when;card.querySelector('[name=then]').value=story.scenarios[0].then};let suggestions=[];const suggestionStatus=document.getElementById('suggestion-status');const suggestionList=document.getElementById('suggestion-list');const accept=document.getElementById('accept-suggestions');document.getElementById('suggest-stories')?.addEventListener('click',async()=>{const button=document.getElementById('suggest-stories');button.disabled=true;button.textContent='Generating…';suggestionStatus.className='status';suggestionStatus.textContent='Generating a preview. Nothing is being saved.';try{const response=await fetch(config.storySuggestionsEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:'{}'});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to generate suggestions.');suggestions=body.suggestions||[];suggestionList.replaceChildren(...suggestions.map((story,index)=>{const label=document.createElement('label');label.className='suggestion';const input=document.createElement('input');input.type='checkbox';input.value=String(index);const text=document.createElement('span');const title=document.createElement('strong');title.textContent=story.title;const detail=document.createElement('small');detail.textContent=story.narrative;text.append(title,detail);label.append(input,text);return label}));accept.hidden=!suggestions.length;suggestionStatus.textContent=suggestions.length+' suggestions ready. Select one or more to add to your draft.'}catch(error){suggestionStatus.textContent=error.message;suggestionStatus.classList.add('error')}finally{button.disabled=false;button.textContent='Generate AI suggestions'}});accept?.addEventListener('click',()=>{const selected=[...suggestionList.querySelectorAll('input:checked')].map((input)=>suggestions[Number(input.value)]);if(!selected.length){suggestionStatus.textContent='Select at least one suggestion to add.';suggestionStatus.classList.add('error');return}[...list.querySelectorAll('.story-card')].filter((card)=>!['title','narrative','given','when','then'].some((name)=>card.querySelector('[name='+name+']').value.trim())).forEach((card)=>card.remove());selected.forEach(fill);renumber();suggestionStatus.className='status';suggestionStatus.textContent=selected.length+' suggestions added to your editable draft.';accept.hidden=true});document.getElementById('add-story').onclick=add;add();form.addEventListener('submit',async(event)=>{event.preventDefault();const status=document.getElementById('workshop-status');const cards=[...list.querySelectorAll('.story-card')];const stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));status.className='status';if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.textContent='Complete every field in at least one story.';status.classList.add('error');return}const button=form.querySelector('.button');button.disabled=true;button.textContent='Submitting…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,500)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Submit stories for independent review'}})}}</script></body></html>`
+function storyWorkshopPage(
+  changeCase,
+  governance,
+  {
+    canAuthor,
+    storiesEndpoint,
+    storySuggestionsEndpoint,
+    storyReviewUrl,
+    aiStatus,
+  },
+) {
+  const isReady = [
+    "RISK_REVIEW",
+    "AWAITING_STORY_APPROVAL",
+    "DESIGN_REVIEW",
+  ].includes(changeCase.state);
+  const config = htmlScriptConfig({
+    storiesEndpoint,
+    storySuggestionsEndpoint,
+    expectedVersion: changeCase.projectionVersion,
+    storyReviewUrl,
+    aiEnabled: aiStatus.configured,
+    aiProvider: aiStatus.provider,
+    aiModel: aiStatus.model,
+  });
+  const aiPanel = aiStatus.configured
+    ? `<section class="ai-panel"><p class="eyebrow">AGENTIC STORY DECOMPOSITION · ${escapeHtml(aiStatus.model)}</p><h3>Start with agent-drafted story slices</h3><p>The bounded agent uses only retained Feature context and an approved model. It cannot save, approve, or advance stories; you review and submit any proposal yourself.</p><button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button><p id="suggestion-status" class="status" role="status" aria-live="polite"></p><div id="suggestion-list"></div><button class="button" type="button" id="accept-suggestions" hidden>Accept selected suggestions</button></section>`
+    : `<section class="ai-panel unavailable"><p class="eyebrow">AGENTIC STORY DECOMPOSITION</p><h3>Story decomposition agent is not configured</h3><p>Manual story authoring remains available. An administrator can enable the server-configured model agent; no browser key is used.</p></section>`;
+  const guidance = `<section class="card guidance"><p class="eyebrow">HOW TO SPLIT WELL</p><ol><li>Start with the user journey, not technical layers.</li><li>Make each slice independently valuable and small enough to plan.</li><li>Use observable Given / When / Then acceptance examples.</li><li>Keep cross-cutting security, accessibility, and operational needs visible in the relevant story.</li></ol></section>`;
+  const editor = !isReady
+    ? `<section class="card notice"><h2>Story shaping opens after risk classification</h2><p>Complete intake and risk classification first. That ensures the stories carry the right risk context into review.</p></section>`
+    : !canAuthor
+      ? `<section class="card notice"><h2>You can view the breakdown, but cannot submit it</h2><p>An authorized contributor must submit a story revision for independent review.</p></section>`
+      : `<section class="card editor"><p class="eyebrow">STEP 2 · DRAFT THE STORY SET</p><h2>Break this feature into user-value slices</h2><p>One feature can become several stories. Do not split by database, API, or UI layer—each story should describe a useful user outcome.</p>${aiPanel}<form id="story-workshop-form"><div id="story-list"></div><template id="story-template"><article class="story-card"><div class="story-head"><strong class="story-number"></strong><button type="button" class="remove">Remove</button></div><label>Story title<input name="title" required placeholder="e.g. Submit a complete authorization request"></label><label>User need<textarea name="narrative" required placeholder="As a …, I want …, so that …"></textarea></label><p class="bdd-title">Acceptance example</p><label>Given<textarea name="given" required></textarea></label><label>When<textarea name="when" required></textarea></label><label>Then<textarea name="then" required></textarea></label></article></template><button class="secondary" type="button" id="add-story">Add another story</button><p id="workshop-status" class="status" role="status" aria-live="polite"></p><button class="button" type="submit">Submit stories for independent review</button></form></section>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Breakdown — ${escapeHtml(changeCase.title)}</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:auto;padding:32px 20px 56px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f;margin:0 0 6px}h1{font-size:2rem;margin:.15rem 0}h2{font-size:1.2rem;margin:.1rem 0 .5rem}.muted{color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.guidance{background:#fbfcfe}.notice{background:#fff8e9;border-color:#f0cc7b}.editor{border:2px solid #2d74c4}.ai-panel{border:1px solid #9dcef8;border-radius:12px;padding:18px;background:#f7fbff;margin:18px 0}.ai-panel.unavailable{border-color:#dce3ee;background:#fbfcfe}.suggestion{display:flex;gap:10px;border:1px solid #cddbeb;border-radius:9px;padding:12px;margin:9px 0;background:#fff;cursor:pointer}.suggestion input{margin-top:5px}.suggestion strong,.suggestion small{display:block}.suggestion small{color:#52657f}.story-card{border:1px solid #cddbeb;border-radius:12px;padding:18px;margin:14px 0;background:#fff}.story-head{display:flex;justify-content:space-between;align-items:center}.story-head strong{color:#11519b}.remove{border:0;background:transparent;color:#9b2929;text-decoration:underline;cursor:pointer;font:inherit}.story-card label{display:block;font-weight:700;margin-top:12px}.story-card input,.story-card textarea{display:block;width:100%;margin-top:5px;border:1px solid #8da0b7;border-radius:8px;padding:9px;font:inherit;font-weight:400}.story-card textarea{min-height:68px}.bdd-title{font-weight:750;margin:18px 0 0}.button,.secondary{display:inline-block;border:0;border-radius:9px;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button{background:#11519b;color:#fff;margin-top:12px}.secondary{background:#e9f4ff;color:#11519b}.status{min-height:1.5em;font-weight:650}.error{color:#a92e2e}ol{padding-left:20px}@media(max-width:650px){main{padding:18px 14px 40px}header,.card{padding:19px}h1{font-size:1.65rem}}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY BREAKDOWN</p><h1>${escapeHtml(changeCase.title)}</h1><p class="muted">Feature intent → story generation & curation → independent story approval → design review</p></header><section class="card next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>Generate and curate stories before Gate B</h2><p>Use model-backed suggestions or manual drafting, select the stories that fit the feature, and edit them before submission. ADX retains only the final story revision and sends that exact digest to the independent reviewer.</p></section><section class="card"><p class="eyebrow">PARENT FEATURE / RETAINED INTENT</p><h2>${escapeHtml(governance.intent?.outcome ?? "Intent has not been captured")}</h2><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</p><p><strong>Risk:</strong> ${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} · <strong>Target repository:</strong> ${escapeHtml(governance.intent?.targetRepository ?? "Not captured")}</p></section>${guidance}${editor}</main><script>const config=${config};const form=document.getElementById('story-workshop-form');if(form){const list=document.getElementById('story-list');const template=document.getElementById('story-template');const renumber=()=>list.querySelectorAll('.story-card').forEach((card,index)=>card.querySelector('.story-number').textContent='Story '+(index+1));const add=()=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('.remove').onclick=()=>{card.remove();renumber()};renumber()};const fill=(story)=>{add();const card=list.lastElementChild;card.querySelector('[name=title]').value=story.title;card.querySelector('[name=narrative]').value=story.narrative;card.querySelector('[name=given]').value=story.scenarios[0].given;card.querySelector('[name=when]').value=story.scenarios[0].when;card.querySelector('[name=then]').value=story.scenarios[0].then};let suggestions=[];const suggestionStatus=document.getElementById('suggestion-status');const suggestionList=document.getElementById('suggestion-list');const accept=document.getElementById('accept-suggestions');document.getElementById('suggest-stories')?.addEventListener('click',async()=>{const button=document.getElementById('suggest-stories');button.disabled=true;button.textContent='Generating…';suggestionStatus.className='status';suggestionStatus.textContent='Generating a preview. Nothing is being saved.';try{const response=await fetch(config.storySuggestionsEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:'{}'});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to generate suggestions.');suggestions=body.suggestions||[];suggestionList.replaceChildren(...suggestions.map((story,index)=>{const label=document.createElement('label');label.className='suggestion';const input=document.createElement('input');input.type='checkbox';input.value=String(index);const text=document.createElement('span');const title=document.createElement('strong');title.textContent=story.title;const detail=document.createElement('small');detail.textContent=story.narrative;text.append(title,detail);label.append(input,text);return label}));accept.hidden=!suggestions.length;suggestionStatus.textContent=suggestions.length+' suggestions ready. Select one or more to add to your draft.'}catch(error){suggestionStatus.textContent=error.message;suggestionStatus.classList.add('error')}finally{button.disabled=false;button.textContent='Generate AI suggestions'}});accept?.addEventListener('click',()=>{const selected=[...suggestionList.querySelectorAll('input:checked')].map((input)=>suggestions[Number(input.value)]);if(!selected.length){suggestionStatus.textContent='Select at least one suggestion to add.';suggestionStatus.classList.add('error');return}[...list.querySelectorAll('.story-card')].filter((card)=>!['title','narrative','given','when','then'].some((name)=>card.querySelector('[name='+name+']').value.trim())).forEach((card)=>card.remove());selected.forEach(fill);renumber();suggestionStatus.className='status';suggestionStatus.textContent=selected.length+' suggestions added to your editable draft.';accept.hidden=true});document.getElementById('add-story').onclick=add;add();form.addEventListener('submit',async(event)=>{event.preventDefault();const status=document.getElementById('workshop-status');const cards=[...list.querySelectorAll('.story-card')];const stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));status.className='status';if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.textContent='Complete every field in at least one story.';status.classList.add('error');return}const button=form.querySelector('.button');button.disabled=true;button.textContent='Submitting…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,500)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Submit stories for independent review'}})}}</script></body></html>`;
 }
 function storyWorkshopPageWithModelSelector(changeCase, governance, options) {
   // The legacy page bundled competing AI and editor handlers. Keep its markup, but
   // replace that script with the single controllers below.
-  const page = storyWorkshopPage(changeCase, governance, options).replace(/<script>[\s\S]*<\/script><\/body>/, '</body>')
-  const models = options.aiStatus.models ?? []
+  const page = storyWorkshopPage(changeCase, governance, options).replace(
+    /<script>[\s\S]*<\/script><\/body>/,
+    "</body>",
+  );
+  const models = options.aiStatus.models ?? [];
   const style = `<style>
     body{background:linear-gradient(135deg,#f6f9fc 0%,#eef7fd 48%,#f8fbf9 100%)}main{max-width:1100px;padding-top:24px}header{position:relative;overflow:hidden;background:#102b43;color:#f6fbff;border-color:#102b43;box-shadow:0 16px 34px #102a4324}header:after{content:"";position:absolute;width:360px;height:360px;right:-130px;top:-210px;border-radius:50%;background:#4fb9ec33}header .eyebrow,header .muted{color:#bcd8ea}header h1{max-width:760px;letter-spacing:-.035em}.adx-home-link{display:inline-flex;align-items:center;gap:7px;margin-bottom:22px;color:#dcedf8;font-weight:750;text-decoration:none}.adx-home-link:hover{text-decoration:underline}.story-hero-note{position:relative;display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}.story-hero-note span{padding:7px 10px;border:1px solid #5685a4;border-radius:999px;background:#173b58;color:#dcedf8;font-size:.8rem;font-weight:750}.next{background:linear-gradient(120deg,#e4f4ff,#f3fbff);border-color:#9dcef8}.ai-panel{border:0;border-radius:16px;padding:26px;background:linear-gradient(145deg,#102b43,#174a6c);color:#f4fbff;box-shadow:0 16px 30px #102a4320}.ai-panel .eyebrow{color:#a9d9f4}.ai-panel h3{font-size:1.45rem}.ai-panel p{max-width:700px;color:#d6eafa}.ai-panel.unavailable{background:#fff;color:#172033;border:1px solid #dce3ee;box-shadow:none}.ai-panel.unavailable p{color:#52657f}.ai-controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-top:20px}.model-picker{display:grid;gap:5px;min-width:min(100%,280px);font-size:.8rem;font-weight:800;color:#dcedf8}.model-picker small{font-weight:500;color:#bcd8ea}.model-picker select{width:100%;border:1px solid #78a8c3;border-radius:9px;padding:10px;background:#fff;color:#172033;font:inherit}.ai-panel .secondary{background:#75caef;color:#102b43}.ai-panel .secondary:hover{background:#b9e9fb}.ai-panel .button{background:#f4fbff;color:#102b43}.ai-feedback{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center;margin:20px 0 4px;padding:14px 16px;border:1px solid #78b6d5;border-radius:12px;background:#0d3857}.ai-feedback[hidden]{display:none}.ai-feedback-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#8bd5f4;color:#102b43;font-weight:900}.ai-feedback.loading .ai-feedback-icon{animation:adx-pulse 1.1s ease-in-out infinite}.ai-feedback.success{border-color:#82d4aa;background:#103f38}.ai-feedback.success .ai-feedback-icon{background:#a6e7bf}.ai-feedback.error{border-color:#f0a69d;background:#5a2424}.ai-feedback.error .ai-feedback-icon{background:#ffd2cd}.ai-feedback strong,.ai-feedback small{display:block}.ai-feedback small{margin-top:2px;color:#c7dfed}.ai-feedback.error small{color:#ffe0dc}.suggestion-list-title{margin:22px 0 8px;color:#dcedf8;font-size:.82rem;font-weight:800}.suggestion{position:relative;border:1px solid #bed6e7;background:#fff;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}.suggestion:hover{transform:translateY(-2px);border-color:#75caef;box-shadow:0 9px 18px #061d301f}.suggestion:has(input:checked){border:2px solid #2bb57a;background:#f2fff8}.status{margin:14px 0 0;padding:0}.status.error{padding:12px 14px;border-radius:9px;background:#fff2f1;color:#a52620}.editor{border:0;border-radius:16px;box-shadow:0 10px 25px #14213d12}.card{border-radius:16px}.guidance{border-style:dashed}@keyframes adx-pulse{50%{transform:scale(.82);opacity:.55}}@media(max-width:650px){.ai-controls{align-items:stretch}.ai-controls .secondary{width:100%}}
     .suggestion{border-color:#79a9c5}.suggestion strong{color:#102b43;font-size:1rem;line-height:1.35}.suggestion small{color:#234861;font-size:.9rem;line-height:1.45}.suggestion input{accent-color:#087f5b;width:18px;height:18px;flex:0 0 auto}.suggestion:hover{border-color:#1776a8}.suggestion:has(input:checked){border:2px solid #087f5b;background:#eafbf3}
     .editor{background:#f4f9fd;border:2px solid #176fa8}.editor>p{color:#294b63}.editor h2{color:#102b43}.editor form{display:grid;gap:16px;margin-top:22px}.editor #story-list{display:grid;gap:16px}.story-card{border:1px solid #628ba6;background:#fff;box-shadow:0 5px 14px #102a4312}.story-head{padding-bottom:13px;border-bottom:1px solid #c9dbe7}.story-head strong{display:inline-flex;align-items:center;min-height:28px;padding:4px 9px;border-radius:999px;background:#dcefff;color:#063d63;font-size:.84rem}.story-card label{color:#163b55;font-size:.9rem;letter-spacing:.01em}.story-card input,.story-card textarea{color:#102b43;background:#fff;border:2px solid #7998ad;line-height:1.45}.story-card input::placeholder,.story-card textarea::placeholder{color:#526f83;opacity:1}.story-card input:focus,.story-card textarea:focus{outline:3px solid #f5bb43;outline-offset:2px;border-color:#076fa8}.bdd-title{color:#123f5d;border-left:4px solid #1677ad;padding-left:9px}.remove{padding:6px 9px;border:1px solid #b74848;border-radius:7px;background:#fff;color:#8b2020;font-weight:750;text-decoration:none}.remove:hover{background:#fff0f0}.editor #add-story{justify-self:start;border:1px solid #2d75a5;background:#e7f4fd;color:#0d4e78}.editor form>.button{justify-self:start;background:#075f91;color:#fff;box-shadow:0 3px 8px #075f9138}.editor form>.button:hover{background:#06496f}.editor .status{color:#163b55}.editor .status.error{color:#8b2020}
-  </style>`
-  const homeLink = `<a class="adx-home-link" href="${escapeHtml(options.homeUrl)}">← Back to ADX home</a><div class="story-hero-note"><span>1. Choose a model</span><span>2. Review suggestions</span><span>3. Edit before submitting</span></div>`
-  const withHome = page.replace('</style>', style).replace('</header><section class="card next">', `${homeLink}</header><section class="card next">`)
-  const editorConfig = htmlScriptConfig({ storiesEndpoint: options.storiesEndpoint, expectedVersion: changeCase.projectionVersion, storyReviewUrl: options.storyReviewUrl })
-  const editorController = `<script>(function(){const config=${editorConfig},form=document.getElementById('story-workshop-form');if(!form)return;const list=document.getElementById('story-list'),template=document.getElementById('story-template'),status=document.getElementById('workshop-status'),renumber=()=>list.querySelectorAll('.story-card').forEach((card,index)=>card.querySelector('.story-number').textContent='Story '+(index+1)),add=()=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('.remove').addEventListener('click',()=>card.remove());renumber()};document.getElementById('add-story').addEventListener('click',add);if(!list.children.length)add();new MutationObserver(renumber).observe(list,{childList:true});form.addEventListener('submit',async(event)=>{event.preventDefault();const cards=[...list.querySelectorAll('.story-card')],stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));status.className='status';if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.textContent='Complete every field in at least one story.';status.classList.add('error');return}const button=form.querySelector('[type=submit]');button.disabled=true;button.textContent='Submitting…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})}),body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,350)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Submit stories for independent review'}})})()</script>`
-  const submitController = `<script>(function(){const config=${editorConfig},form=document.getElementById('story-workshop-form');if(!form)return;form.addEventListener('submit',async(event)=>{event.preventDefault();event.stopImmediatePropagation();const list=document.getElementById('story-list'),status=document.getElementById('workshop-status'),cards=[...list.querySelectorAll('.story-card')],stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.className='status error';status.textContent='Each story needs a title, user need, and Given / When / Then example.';return}const button=form.querySelector('[type=submit]');button.disabled=true;button.textContent='Submitting…';status.className='status';status.textContent='Saving your story set…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})}),body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,350)}catch(error){status.className='status error';status.textContent=error.message;button.disabled=false;button.textContent='Submit stories for independent review'}},true)})()</script>`
-  const formResetter = `<script>(function(){const original=document.getElementById('story-workshop-form');if(!original)return;const replacement=original.cloneNode(true);original.replaceWith(replacement)})()</script>`
-  const draftSanitizer = `<script>(function(){const form=document.getElementById('story-workshop-form');form?.addEventListener('submit',()=>{const seen=new Set;document.querySelectorAll('#story-list .story-card').forEach((card)=>{const fields=[...card.querySelectorAll('[name]')].map((field)=>field.value.trim()),key=(fields[0]+'|'+fields[1]).toLowerCase();if(!fields.every(Boolean)||seen.has(key))card.remove();else seen.add(key)})},true)})()</script>`
-  const withEditor = withHome.replace('</body>', `${formResetter}${editorController}${draftSanitizer}${submitController}</body>`)
-  if (!options.aiStatus.configured || !models.length) return withEditor
-  const choices = models.map((model) => `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`).join('')
-  const skills = options.aiStatus.skills ?? []
-  const templates = options.aiStatus.templates ?? []
-  const skillChoices = skills.map((skill) => `<option value="${escapeHtml(skill.id)}">${escapeHtml(skill.label)} - ${escapeHtml(skill.description)}</option>`).join('')
-  const templateChoices = templates.map((template) => `<option value="${escapeHtml(template.id)}">${escapeHtml(template.label)} - ${escapeHtml(template.description)}</option>`).join('')
-  const suggestionEndpoint = JSON.stringify(options.storySuggestionsEndpoint)
-  const selector = `<div class="ai-controls"><label for="story-ai-model" class="model-picker">Choose a decomposition model<select id="story-ai-model">${choices}</select><small>Using ${escapeHtml(options.aiStatus.providerLabel)}. Only approved, server-configured models are available.</small></label><label for="story-decomposition-skill" class="model-picker">Choose a reviewed ADX skill<select id="story-decomposition-skill"><option value="">No reviewed skill</option>${skillChoices}</select><small>Skills are repository-controlled guidance recorded in the agent run receipt.</small></label><label for="story-spec-template" class="model-picker">Story specification<select id="story-spec-template"><option value="">Use only retained context</option>${templateChoices}</select><small>One reviewed specification shapes this preview and is bound to its receipt.</small></label><label for="story-template-file" class="model-picker">Optional supplemental notes<input id="story-template-file" type="file" accept=".txt,text/plain" onchange="const file=this.files[0],status=document.getElementById('story-template-status');window.adxStoryTemplateGuidance='';if(!file){status.textContent='Upload a plain-text template, up to 6,000 characters.';return}file.text().then((text)=>{if(file.type&&file.type!=='text/plain'){throw new Error('Choose a plain-text (.txt) template.')}if(text.trim().length>6000){throw new Error('This template exceeds 6,000 characters.')}window.adxStoryTemplateGuidance=text;status.textContent=file.name+' loaded for this preview only.'}).catch((error)=>{this.value='';status.textContent=error.message})"><small id="story-template-status">Optional notes, up to 6,000 characters.</small></label>`
-  const feedback = `<section id="ai-feedback" class="ai-feedback" hidden aria-live="polite"><span class="ai-feedback-icon" id="ai-feedback-icon">✦</span><div><strong id="ai-feedback-title">Preparing suggestions</strong><small id="ai-feedback-detail">ADX is preparing your feature context.</small></div></section><p id="suggestion-list-title" class="suggestion-list-title" hidden>Choose the story slices worth keeping</p>`
-  return withEditor
-    .replace('<button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button>', `${selector}<button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button></div>`)
-    .replace("body:'{}'", "body:JSON.stringify({model:document.getElementById('story-ai-model')?.value,skillId:document.getElementById('story-decomposition-skill')?.value,templateId:document.getElementById('story-spec-template')?.value,templateGuidance:window.adxStoryTemplateGuidance||''})")
-    .replace('<p id="suggestion-status" class="status" role="status" aria-live="polite"></p>', `${feedback}<p id="suggestion-status" class="status" role="status" aria-live="polite"></p>`)
-    .replace('</body>', `<script>(function(){const button=document.getElementById('suggest-stories'),feedback=document.getElementById('ai-feedback'),title=document.getElementById('ai-feedback-title'),detail=document.getElementById('ai-feedback-detail'),list=document.getElementById('suggestion-list'),listTitle=document.getElementById('suggestion-list-title'),status=document.getElementById('suggestion-status');if(!button||!feedback||!list||!status)return;let startedAt=0,timer;const show=(state,heading,message)=>{feedback.hidden=false;feedback.className='ai-feedback '+state;title.textContent=heading;detail.textContent=message};const stop=()=>{if(timer)window.clearInterval(timer);timer=null};button.addEventListener('click',()=>{startedAt=Date.now();listTitle.hidden=true;show('loading','Crafting story options…','Your local model is analysing the feature. This can take a short moment on the first request.');stop();timer=window.setInterval(()=>{const seconds=Math.max(1,Math.round((Date.now()-startedAt)/1000));detail.textContent='Still working — '+seconds+'s elapsed. ADX has not saved or approved anything.'},1000)});const observer=new MutationObserver(()=>{if(status.classList.contains('error')){stop();show('error','Suggestions need attention',status.textContent||'The model could not produce a usable draft.')}else if(list.children.length){stop();listTitle.hidden=false;show('success',list.children.length+' story option'+(list.children.length===1?'':'s')+' ready','Review each option, select the ones that fit, then add them to your editable draft.')}});observer.observe(status,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});observer.observe(list,{childList:true});list.addEventListener('change',()=>{const count=list.querySelectorAll('input:checked').length;if(count)detail.textContent=count+' selected. You can still edit every detail before submission.'})})()</script></body>`)
-    .replace('</script></body>', `</script><script>(function(){const button=document.getElementById('suggest-stories'),accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),listTitle=document.getElementById('suggestion-list-title'),template=document.getElementById('story-template'),status=document.getElementById('suggestion-status'),feedback=document.getElementById('ai-feedback'),feedbackTitle=document.getElementById('ai-feedback-title'),feedbackDetail=document.getElementById('ai-feedback-detail'),model=document.getElementById('story-ai-model');if(!button||!accept||!list||!template||!status)return;let suggestions=[];let timer;const setFeedback=(kind,heading,message)=>{if(!feedback)return;feedback.hidden=false;feedback.className='ai-feedback '+kind;feedbackTitle.textContent=heading;feedbackDetail.textContent=message};const stop=()=>{if(timer)window.clearInterval(timer);timer=null};const fill=(story)=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('[name=title]').value=story.title;card.querySelector('[name=narrative]').value=story.narrative;card.querySelector('[name=given]').value=story.scenarios[0].given;card.querySelector('[name=when]').value=story.scenarios[0].when;card.querySelector('[name=then]').value=story.scenarios[0].then;card.querySelector('.remove').onclick=()=>card.remove()};button.addEventListener('click',async(event)=>{event.preventDefault();event.stopImmediatePropagation();button.disabled=true;button.textContent='Generating…';status.className='status';status.textContent='';listTitle.hidden=true;setFeedback('loading','Crafting story options…','Your local model is analysing the feature. Nothing is being saved.');const started=Date.now();timer=window.setInterval(()=>{setFeedback('loading','Crafting story options…','Still working — '+Math.max(1,Math.round((Date.now()-started)/1000))+'s elapsed. You can safely stay on this page.')},1000);const controller=new AbortController();const timeout=window.setTimeout(()=>controller.abort(),90000);try{const response=await fetch(${suggestionEndpoint},{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({model:model?.value}),signal:controller.signal});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to generate suggestions.');suggestions=body.suggestions||[];if(!suggestions.length)throw new Error('The model returned no usable story options. Try again or draft a story manually.');list.replaceChildren(...suggestions.map((story,index)=>{const label=document.createElement('label');label.className='suggestion';const input=document.createElement('input');input.type='checkbox';input.value=String(index);const text=document.createElement('span');const heading=document.createElement('strong');heading.textContent=story.title;const detail=document.createElement('small');detail.textContent=story.narrative;text.append(heading,detail);label.append(input,text);return label}));listTitle.hidden=false;accept.hidden=false;status.textContent=suggestions.length+' suggestions are ready to review.';setFeedback('success',suggestions.length+' story option'+(suggestions.length===1?'':'s')+' ready','Select the slices that fit your feature, then add them to your editable draft.')}catch(error){const message=error.name==='AbortError'?'This took longer than 90 seconds. The request was stopped; try again or use manual drafting.':error.message;status.textContent=message;status.classList.add('error');setFeedback('error','Suggestions need attention',message)}finally{window.clearTimeout(timeout);stop();button.disabled=false;button.textContent='Generate AI suggestions'}},true);accept.addEventListener('click',(event)=>{event.preventDefault();event.stopImmediatePropagation();const selected=[...list.querySelectorAll('input:checked')].map((input)=>suggestions[Number(input.value)]);if(!selected.length){status.textContent='Select at least one story option first.';status.className='status error';setFeedback('error','Choose a story first','Select one or more options, then add them to your editable draft.');return}[...document.querySelectorAll('#story-list .story-card')].filter((card)=>!['title','narrative','given','when','then'].some((name)=>card.querySelector('[name='+name+']').value.trim())).forEach((card)=>card.remove());selected.forEach(fill);accept.hidden=true;status.className='status';status.textContent=selected.length+' selected suggestion'+(selected.length===1?' was':'s were')+' added to your editable draft.';setFeedback('success','Stories added to your draft','Review and edit every field before submitting for independent approval.')},true)})()</script></body>`)
-    // The legacy page also shipped an AI handler. The enhanced controller above is
-    // the single authority for generation and acceptance, preventing double drafts.
-    .replace("document.getElementById('suggest-stories')?.addEventListener('click',async()=>{", "if(false)document.getElementById('suggest-stories')?.addEventListener('click',async()=>{")
-    .replace("accept?.addEventListener('click',()=>{", "if(false)accept?.addEventListener('click',()=>{")
-    .replaceAll("if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then))", "if(!stories.length)")
-    .replace("list=document.getElementById('suggestion-list'),listTitle", "list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle")
-    .replace("if(!button||!accept||!list||!template||!status)return", "if(!button||!accept||!list||!storyList||!template||!status)return")
-    .replace("const fill=(story)=>{const node=template.content.cloneNode(true);list.append(node);", "const fill=(story)=>{const node=template.content.cloneNode(true);storyList.append(node);")
-    .replace("storyList.append(node);const card=list.lastElementChild;", "storyList.append(node);const card=storyList.lastElementChild;")
-    .replace("list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle", "list=document.getElementById('suggestion-list'),listTitle")
-    .replace("accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),listTitle", "accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle")
+  </style>`;
+  const homeLink = `<a class="adx-home-link" href="${escapeHtml(options.homeUrl)}">← Back to ADX home</a><div class="story-hero-note"><span>1. Choose a model</span><span>2. Review suggestions</span><span>3. Edit before submitting</span></div>`;
+  const withHome = page
+    .replace("</style>", style)
+    .replace(
+      '</header><section class="card next">',
+      `${homeLink}</header><section class="card next">`,
+    );
+  const editorConfig = htmlScriptConfig({
+    storiesEndpoint: options.storiesEndpoint,
+    expectedVersion: changeCase.projectionVersion,
+    storyReviewUrl: options.storyReviewUrl,
+  });
+  const editorController = `<script>(function(){const config=${editorConfig},form=document.getElementById('story-workshop-form');if(!form)return;const list=document.getElementById('story-list'),template=document.getElementById('story-template'),status=document.getElementById('workshop-status'),renumber=()=>list.querySelectorAll('.story-card').forEach((card,index)=>card.querySelector('.story-number').textContent='Story '+(index+1)),add=()=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('.remove').addEventListener('click',()=>card.remove());renumber()};document.getElementById('add-story').addEventListener('click',add);if(!list.children.length)add();new MutationObserver(renumber).observe(list,{childList:true});form.addEventListener('submit',async(event)=>{event.preventDefault();const cards=[...list.querySelectorAll('.story-card')],stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));status.className='status';if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.textContent='Complete every field in at least one story.';status.classList.add('error');return}const button=form.querySelector('[type=submit]');button.disabled=true;button.textContent='Submitting…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})}),body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,350)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Submit stories for independent review'}})})()</script>`;
+  const submitController = `<script>(function(){const config=${editorConfig},form=document.getElementById('story-workshop-form');if(!form)return;form.addEventListener('submit',async(event)=>{event.preventDefault();event.stopImmediatePropagation();const list=document.getElementById('story-list'),status=document.getElementById('workshop-status'),cards=[...list.querySelectorAll('.story-card')],stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.className='status error';status.textContent='Each story needs a title, user need, and Given / When / Then example.';return}const button=form.querySelector('[type=submit]');button.disabled=true;button.textContent='Submitting…';status.className='status';status.textContent='Saving your story set…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})}),body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,350)}catch(error){status.className='status error';status.textContent=error.message;button.disabled=false;button.textContent='Submit stories for independent review'}},true)})()</script>`;
+  const formResetter = `<script>(function(){const original=document.getElementById('story-workshop-form');if(!original)return;const replacement=original.cloneNode(true);original.replaceWith(replacement)})()</script>`;
+  const draftSanitizer = `<script>(function(){const form=document.getElementById('story-workshop-form');form?.addEventListener('submit',()=>{const seen=new Set;document.querySelectorAll('#story-list .story-card').forEach((card)=>{const fields=[...card.querySelectorAll('[name]')].map((field)=>field.value.trim()),key=(fields[0]+'|'+fields[1]).toLowerCase();if(!fields.every(Boolean)||seen.has(key))card.remove();else seen.add(key)})},true)})()</script>`;
+  const withEditor = withHome.replace(
+    "</body>",
+    `${formResetter}${editorController}${draftSanitizer}${submitController}</body>`,
+  );
+  if (!options.aiStatus.configured || !models.length) return withEditor;
+  const choices = models
+    .map(
+      (model) =>
+        `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`,
+    )
+    .join("");
+  const skills = options.aiStatus.skills ?? [];
+  const templates = options.aiStatus.templates ?? [];
+  const skillChoices = skills
+    .map(
+      (skill) =>
+        `<option value="${escapeHtml(skill.id)}">${escapeHtml(skill.label)} - ${escapeHtml(skill.description)}</option>`,
+    )
+    .join("");
+  const templateChoices = templates
+    .map(
+      (template) =>
+        `<option value="${escapeHtml(template.id)}">${escapeHtml(template.label)} - ${escapeHtml(template.description)}</option>`,
+    )
+    .join("");
+  const suggestionEndpoint = JSON.stringify(options.storySuggestionsEndpoint);
+  const selector = `<div class="ai-controls"><label for="story-ai-model" class="model-picker">Choose a decomposition model<select id="story-ai-model">${choices}</select><small>Using ${escapeHtml(options.aiStatus.providerLabel)}. Only approved, server-configured models are available.</small></label><label for="story-decomposition-skill" class="model-picker">Choose a reviewed ADX skill<select id="story-decomposition-skill"><option value="">No reviewed skill</option>${skillChoices}</select><small>Skills are repository-controlled guidance recorded in the agent run receipt.</small></label><label for="story-spec-template" class="model-picker">Story specification<select id="story-spec-template"><option value="">Use only retained context</option>${templateChoices}</select><small>One reviewed specification shapes this preview and is bound to its receipt.</small></label><label for="story-template-file" class="model-picker">Optional supplemental notes<input id="story-template-file" type="file" accept=".txt,text/plain" onchange="const file=this.files[0],status=document.getElementById('story-template-status');window.adxStoryTemplateGuidance='';if(!file){status.textContent='Upload a plain-text template, up to 6,000 characters.';return}file.text().then((text)=>{if(file.type&&file.type!=='text/plain'){throw new Error('Choose a plain-text (.txt) template.')}if(text.trim().length>6000){throw new Error('This template exceeds 6,000 characters.')}window.adxStoryTemplateGuidance=text;status.textContent=file.name+' loaded for this preview only.'}).catch((error)=>{this.value='';status.textContent=error.message})"><small id="story-template-status">Optional notes, up to 6,000 characters.</small></label>`;
+  const feedback = `<section id="ai-feedback" class="ai-feedback" hidden aria-live="polite"><span class="ai-feedback-icon" id="ai-feedback-icon">✦</span><div><strong id="ai-feedback-title">Preparing suggestions</strong><small id="ai-feedback-detail">ADX is preparing your feature context.</small></div></section><p id="suggestion-list-title" class="suggestion-list-title" hidden>Choose the story slices worth keeping</p>`;
+  return (
+    withEditor
+      .replace(
+        '<button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button>',
+        `${selector}<button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button></div>`,
+      )
+      .replace(
+        "body:'{}'",
+        "body:JSON.stringify({model:document.getElementById('story-ai-model')?.value,skillId:document.getElementById('story-decomposition-skill')?.value,templateId:document.getElementById('story-spec-template')?.value,templateGuidance:window.adxStoryTemplateGuidance||''})",
+      )
+      .replace(
+        '<p id="suggestion-status" class="status" role="status" aria-live="polite"></p>',
+        `${feedback}<p id="suggestion-status" class="status" role="status" aria-live="polite"></p>`,
+      )
+      .replace(
+        "</body>",
+        `<script>(function(){const button=document.getElementById('suggest-stories'),feedback=document.getElementById('ai-feedback'),title=document.getElementById('ai-feedback-title'),detail=document.getElementById('ai-feedback-detail'),list=document.getElementById('suggestion-list'),listTitle=document.getElementById('suggestion-list-title'),status=document.getElementById('suggestion-status');if(!button||!feedback||!list||!status)return;let startedAt=0,timer;const show=(state,heading,message)=>{feedback.hidden=false;feedback.className='ai-feedback '+state;title.textContent=heading;detail.textContent=message};const stop=()=>{if(timer)window.clearInterval(timer);timer=null};button.addEventListener('click',()=>{startedAt=Date.now();listTitle.hidden=true;show('loading','Crafting story options…','Your local model is analysing the feature. This can take a short moment on the first request.');stop();timer=window.setInterval(()=>{const seconds=Math.max(1,Math.round((Date.now()-startedAt)/1000));detail.textContent='Still working — '+seconds+'s elapsed. ADX has not saved or approved anything.'},1000)});const observer=new MutationObserver(()=>{if(status.classList.contains('error')){stop();show('error','Suggestions need attention',status.textContent||'The model could not produce a usable draft.')}else if(list.children.length){stop();listTitle.hidden=false;show('success',list.children.length+' story option'+(list.children.length===1?'':'s')+' ready','Review each option, select the ones that fit, then add them to your editable draft.')}});observer.observe(status,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});observer.observe(list,{childList:true});list.addEventListener('change',()=>{const count=list.querySelectorAll('input:checked').length;if(count)detail.textContent=count+' selected. You can still edit every detail before submission.'})})()</script></body>`,
+      )
+      .replace(
+        "</script></body>",
+        `</script><script>(function(){const button=document.getElementById('suggest-stories'),accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),listTitle=document.getElementById('suggestion-list-title'),template=document.getElementById('story-template'),status=document.getElementById('suggestion-status'),feedback=document.getElementById('ai-feedback'),feedbackTitle=document.getElementById('ai-feedback-title'),feedbackDetail=document.getElementById('ai-feedback-detail'),model=document.getElementById('story-ai-model');if(!button||!accept||!list||!template||!status)return;let suggestions=[];let timer;const setFeedback=(kind,heading,message)=>{if(!feedback)return;feedback.hidden=false;feedback.className='ai-feedback '+kind;feedbackTitle.textContent=heading;feedbackDetail.textContent=message};const stop=()=>{if(timer)window.clearInterval(timer);timer=null};const fill=(story)=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('[name=title]').value=story.title;card.querySelector('[name=narrative]').value=story.narrative;card.querySelector('[name=given]').value=story.scenarios[0].given;card.querySelector('[name=when]').value=story.scenarios[0].when;card.querySelector('[name=then]').value=story.scenarios[0].then;card.querySelector('.remove').onclick=()=>card.remove()};button.addEventListener('click',async(event)=>{event.preventDefault();event.stopImmediatePropagation();button.disabled=true;button.textContent='Generating…';status.className='status';status.textContent='';listTitle.hidden=true;setFeedback('loading','Crafting story options…','Your local model is analysing the feature. Nothing is being saved.');const started=Date.now();timer=window.setInterval(()=>{setFeedback('loading','Crafting story options…','Still working — '+Math.max(1,Math.round((Date.now()-started)/1000))+'s elapsed. You can safely stay on this page.')},1000);const controller=new AbortController();const timeout=window.setTimeout(()=>controller.abort(),90000);try{const response=await fetch(${suggestionEndpoint},{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({model:model?.value}),signal:controller.signal});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to generate suggestions.');suggestions=body.suggestions||[];if(!suggestions.length)throw new Error('The model returned no usable story options. Try again or draft a story manually.');list.replaceChildren(...suggestions.map((story,index)=>{const label=document.createElement('label');label.className='suggestion';const input=document.createElement('input');input.type='checkbox';input.value=String(index);const text=document.createElement('span');const heading=document.createElement('strong');heading.textContent=story.title;const detail=document.createElement('small');detail.textContent=story.narrative;text.append(heading,detail);label.append(input,text);return label}));listTitle.hidden=false;accept.hidden=false;status.textContent=suggestions.length+' suggestions are ready to review.';setFeedback('success',suggestions.length+' story option'+(suggestions.length===1?'':'s')+' ready','Select the slices that fit your feature, then add them to your editable draft.')}catch(error){const message=error.name==='AbortError'?'This took longer than 90 seconds. The request was stopped; try again or use manual drafting.':error.message;status.textContent=message;status.classList.add('error');setFeedback('error','Suggestions need attention',message)}finally{window.clearTimeout(timeout);stop();button.disabled=false;button.textContent='Generate AI suggestions'}},true);accept.addEventListener('click',(event)=>{event.preventDefault();event.stopImmediatePropagation();const selected=[...list.querySelectorAll('input:checked')].map((input)=>suggestions[Number(input.value)]);if(!selected.length){status.textContent='Select at least one story option first.';status.className='status error';setFeedback('error','Choose a story first','Select one or more options, then add them to your editable draft.');return}[...document.querySelectorAll('#story-list .story-card')].filter((card)=>!['title','narrative','given','when','then'].some((name)=>card.querySelector('[name='+name+']').value.trim())).forEach((card)=>card.remove());selected.forEach(fill);accept.hidden=true;status.className='status';status.textContent=selected.length+' selected suggestion'+(selected.length===1?' was':'s were')+' added to your editable draft.';setFeedback('success','Stories added to your draft','Review and edit every field before submitting for independent approval.')},true)})()</script></body>`,
+      )
+      // The legacy page also shipped an AI handler. The enhanced controller above is
+      // the single authority for generation and acceptance, preventing double drafts.
+      .replace(
+        "document.getElementById('suggest-stories')?.addEventListener('click',async()=>{",
+        "if(false)document.getElementById('suggest-stories')?.addEventListener('click',async()=>{",
+      )
+      .replace(
+        "accept?.addEventListener('click',()=>{",
+        "if(false)accept?.addEventListener('click',()=>{",
+      )
+      .replaceAll(
+        "if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then))",
+        "if(!stories.length)",
+      )
+      .replace(
+        "list=document.getElementById('suggestion-list'),listTitle",
+        "list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle",
+      )
+      .replace(
+        "if(!button||!accept||!list||!template||!status)return",
+        "if(!button||!accept||!list||!storyList||!template||!status)return",
+      )
+      .replace(
+        "const fill=(story)=>{const node=template.content.cloneNode(true);list.append(node);",
+        "const fill=(story)=>{const node=template.content.cloneNode(true);storyList.append(node);",
+      )
+      .replace(
+        "storyList.append(node);const card=list.lastElementChild;",
+        "storyList.append(node);const card=storyList.lastElementChild;",
+      )
+      .replace(
+        "list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle",
+        "list=document.getElementById('suggestion-list'),listTitle",
+      )
+      .replace(
+        "accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),listTitle",
+        "accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle",
+      )
+  );
 }
 
-function intakeGatePage(changeCase, governance, { canWrite, classifyEndpoint, storyWorkshopUrl }) {
-  const ready = changeCase.state === 'RISK_REVIEW'
-  const action = ready ? `<a class="button" href="${escapeHtml(storyWorkshopUrl)}">Continue to Generate & curate stories</a>` : changeCase.state === 'INTAKE' && canWrite ? `<button class="button" id="classify">Confirm intake and classify risk</button><p id="status" role="status" aria-live="polite"></p>` : `<p>This Change Case must have complete retained intake before ADX can classify risk and open story generation.</p>`
-  const config = htmlScriptConfig({ classifyEndpoint, expectedVersion: changeCase.projectionVersion, storyWorkshopUrl })
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Intake & Risk</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.5 system-ui,sans-serif}main{max-width:760px;margin:auto;padding:32px 20px}section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.button{border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}#status{font-weight:650}.error{color:#a92e2e}</style></head><body><main><section><p class="eyebrow">GATE A · DEFINE THE WORK</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} declared risk</p></section><section class="next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${ready ? 'Risk classification is complete.' : 'Confirm the retained intake before generating stories.'}</h2><p>Story generation starts only after this check, so every suggested or manual story carries the right risk context.</p>${action}</section><section><p class="eyebrow">RETAINED FEATURE INTENT</p><p><strong>Outcome:</strong> ${escapeHtml(governance.intent?.outcome ?? 'Not captured')}</p><p><strong>Owner:</strong> ${escapeHtml(governance.intent?.owner ?? 'Not captured')}</p><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? 'Not captured')}</p></section></main><script>const config=${config};document.getElementById('classify')?.addEventListener('click',async()=>{const button=document.getElementById('classify');const status=document.getElementById('status');button.disabled=true;button.textContent='Classifying…';try{const response=await fetch(config.classifyEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to classify risk.');status.textContent='Risk classified. Opening story generation…';window.setTimeout(()=>window.location.href=config.storyWorkshopUrl,400)}catch(error){status.textContent=error.message;status.className='error';button.disabled=false;button.textContent='Confirm intake and classify risk'}})</script></body></html>`
+function intakeGatePage(
+  changeCase,
+  governance,
+  { canWrite, classifyEndpoint, storyWorkshopUrl },
+) {
+  const ready = changeCase.state === "RISK_REVIEW";
+  const action = ready
+    ? `<a class="button" href="${escapeHtml(storyWorkshopUrl)}">Continue to Generate & curate stories</a>`
+    : changeCase.state === "INTAKE" && canWrite
+      ? `<button class="button" id="classify">Confirm intake and classify risk</button><p id="status" role="status" aria-live="polite"></p>`
+      : `<p>This Change Case must have complete retained intake before ADX can classify risk and open story generation.</p>`;
+  const config = htmlScriptConfig({
+    classifyEndpoint,
+    expectedVersion: changeCase.projectionVersion,
+    storyWorkshopUrl,
+  });
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Intake & Risk</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.5 system-ui,sans-serif}main{max-width:760px;margin:auto;padding:32px 20px}section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.button{border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}#status{font-weight:650}.error{color:#a92e2e}</style></head><body><main><section><p class="eyebrow">GATE A · DEFINE THE WORK</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} declared risk</p></section><section class="next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${ready ? "Risk classification is complete." : "Confirm the retained intake before generating stories."}</h2><p>Story generation starts only after this check, so every suggested or manual story carries the right risk context.</p>${action}</section><section><p class="eyebrow">RETAINED FEATURE INTENT</p><p><strong>Outcome:</strong> ${escapeHtml(governance.intent?.outcome ?? "Not captured")}</p><p><strong>Owner:</strong> ${escapeHtml(governance.intent?.owner ?? "Not captured")}</p><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</p></section></main><script>const config=${config};document.getElementById('classify')?.addEventListener('click',async()=>{const button=document.getElementById('classify');const status=document.getElementById('status');button.disabled=true;button.textContent='Classifying…';try{const response=await fetch(config.classifyEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to classify risk.');status.textContent='Risk classified. Opening story generation…';window.setTimeout(()=>window.location.href=config.storyWorkshopUrl,400)}catch(error){status.textContent=error.message;status.className='error';button.disabled=false;button.textContent='Confirm intake and classify risk'}})</script></body></html>`;
 }
 function designReviewPage(changeCase, view) {
-  const design = view.design; const exceptions = view.exceptions ?? []; const approvals = view.approvals ?? []
-  const expired = exceptions.some((item) => item.status === 'EXPIRED'); const approved = approvals.some((item) => item.designDigest === design?.designDigest && item.decision === 'APPROVED' && item.status === 'ACTIVE')
-  const nextAction = !design ? 'Capture the complete versioned design package before review.' : expired ? 'Resolve the expired exception before recording a design decision.' : approved ? 'Design approval is current; proceed only to the next governed gate.' : 'An independent reviewer should assess this exact design digest and record a decision.'
-  const section = (name, value) => `<article><h3>${escapeHtml(name)}</h3><pre>${escapeHtml(JSON.stringify(value ?? {}, null, 2))}</pre></article>`
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Design Review — ${escapeHtml(changeCase.title)}</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:1040px;margin:auto;padding:32px 20px}header,section,article{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:#52657f}h1{margin:.2rem 0;font-size:2rem}h2{font-size:1.2rem;margin-top:0}h3{font-size:1rem;margin-top:0}.next{background:#e9f4ff;border-color:#9dcef8}.warning{background:#fff3e7;border-color:#f2b56d}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:16px}.grid article{margin:0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.82rem;margin:0}ul{padding-left:20px}code{overflow-wrap:anywhere}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · DESIGN & SECURITY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p>${escapeHtml(changeCase.riskTier)} risk · State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</p></header><section class="next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${escapeHtml(nextAction)}</h2><p>This workbench reports retained package facts and digest-bound decisions; viewing it does not approve a design.</p></section><section><p class="eyebrow">CURRENT DESIGN PACKAGE</p><h2>${design ? `Revision ${escapeHtml(design.revision)} · <code>${escapeHtml(design.designDigest)}</code>` : 'No design package captured'}</h2><p>Author: ${escapeHtml(design?.authoredBy ?? 'Not captured')}</p>${design ? `<div class="grid">${section('Architecture decision',design.artifacts.architectureDecision)}${section('Interface / schema delta',design.artifacts.interfaceDelta)}${section('Migration plan',design.artifacts.migrationPlan)}${section('Threat model & residual risk',design.artifacts.threatModel)}${section('Dependency / license impact',design.artifacts.dependencies)}${section('Test strategy',design.artifacts.testStrategy)}</div>` : ''}</section><section class="${expired ? 'warning' : ''}"><p class="eyebrow">EXCEPTIONS & RESIDUAL RISK</p><h2>${expired ? 'Expired exception blocks approval and execution readiness' : 'Current exceptions and residual risk'}</h2><ul>${exceptions.map((item)=>`<li><strong>${escapeHtml(item.status)}</strong> · expires ${escapeHtml(item.expiresAt)}<br>${escapeHtml(item.reason)}<br><code>${escapeHtml(item.designDigest)}</code></li>`).join('') || '<li>No design exceptions retained.</li>'}</ul></section><section><p class="eyebrow">INDEPENDENT REVIEW HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((item)=>`<li><strong>${escapeHtml(item.decision)}</strong> · ${escapeHtml(item.status)} · ${escapeHtml(item.reviewedBy)}<br><code>${escapeHtml(item.designDigest)}</code><br>${escapeHtml(item.rationale)}</li>`).join('') || '<li>No design decision has been recorded.</li>'}</ul></section></main></body></html>`
+  const design = view.design;
+  const exceptions = view.exceptions ?? [];
+  const approvals = view.approvals ?? [];
+  const expired = exceptions.some((item) => item.status === "EXPIRED");
+  const approved = approvals.some(
+    (item) =>
+      item.designDigest === design?.designDigest &&
+      item.decision === "APPROVED" &&
+      item.status === "ACTIVE",
+  );
+  const nextAction = !design
+    ? "Capture the complete versioned design package before review."
+    : expired
+      ? "Resolve the expired exception before recording a design decision."
+      : approved
+        ? "Design approval is current; proceed only to the next governed gate."
+        : "An independent reviewer should assess this exact design digest and record a decision.";
+  const section = (name, value) =>
+    `<article><h3>${escapeHtml(name)}</h3><pre>${escapeHtml(JSON.stringify(value ?? {}, null, 2))}</pre></article>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Design Review — ${escapeHtml(changeCase.title)}</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:1040px;margin:auto;padding:32px 20px}header,section,article{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:#52657f}h1{margin:.2rem 0;font-size:2rem}h2{font-size:1.2rem;margin-top:0}h3{font-size:1rem;margin-top:0}.next{background:#e9f4ff;border-color:#9dcef8}.warning{background:#fff3e7;border-color:#f2b56d}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));gap:16px}.grid article{margin:0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.82rem;margin:0}ul{padding-left:20px}code{overflow-wrap:anywhere}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · DESIGN & SECURITY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p>${escapeHtml(changeCase.riskTier)} risk · State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</p></header><section class="next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${escapeHtml(nextAction)}</h2><p>This workbench reports retained package facts and digest-bound decisions; viewing it does not approve a design.</p></section><section><p class="eyebrow">CURRENT DESIGN PACKAGE</p><h2>${design ? `Revision ${escapeHtml(design.revision)} · <code>${escapeHtml(design.designDigest)}</code>` : "No design package captured"}</h2><p>Author: ${escapeHtml(design?.authoredBy ?? "Not captured")}</p>${design ? `<div class="grid">${section("Architecture decision", design.artifacts.architectureDecision)}${section("Interface / schema delta", design.artifacts.interfaceDelta)}${section("Migration plan", design.artifacts.migrationPlan)}${section("Threat model & residual risk", design.artifacts.threatModel)}${section("Dependency / license impact", design.artifacts.dependencies)}${section("Test strategy", design.artifacts.testStrategy)}</div>` : ""}</section><section class="${expired ? "warning" : ""}"><p class="eyebrow">EXCEPTIONS & RESIDUAL RISK</p><h2>${expired ? "Expired exception blocks approval and execution readiness" : "Current exceptions and residual risk"}</h2><ul>${exceptions.map((item) => `<li><strong>${escapeHtml(item.status)}</strong> · expires ${escapeHtml(item.expiresAt)}<br>${escapeHtml(item.reason)}<br><code>${escapeHtml(item.designDigest)}</code></li>`).join("") || "<li>No design exceptions retained.</li>"}</ul></section><section><p class="eyebrow">INDEPENDENT REVIEW HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((item) => `<li><strong>${escapeHtml(item.decision)}</strong> · ${escapeHtml(item.status)} · ${escapeHtml(item.reviewedBy)}<br><code>${escapeHtml(item.designDigest)}</code><br>${escapeHtml(item.rationale)}</li>`).join("") || "<li>No design decision has been recorded.</li>"}</ul></section></main></body></html>`;
 }
-function evidenceReviewPage(changeCase, evidence) { const passes = evidence.filter((item) => item.status === 'PASS'); const next = changeCase.state === 'AWAITING_VERIFICATION' ? (passes.length ? 'An independent reviewer may complete Gate D for the candidate digest below.' : 'Independent verifier evidence is required; implementer activity is not a pass.') : 'Review the retained verifier evidence and digest-bound artifacts.'; return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ADX Evidence Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section,article{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.pass{color:#176b42;font-weight:700}.fail{color:#a92e2e;font-weight:700}code{overflow-wrap:anywhere}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · INDEPENDENT EVIDENCE</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} risk</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p><p>Implementer narrative and agent activity are not verifier proof. Only the signed independent bundles below may satisfy Gate D.</p></section><section><h2>Independent verifier evidence</h2>${evidence.map((item) => `<article><p class="${item.status === 'PASS' ? 'pass' : 'fail'}">${escapeHtml(item.status)} · ${escapeHtml(item.verifierId)} ${escapeHtml(item.verifierVersion)}</p><p>Candidate <code>${escapeHtml(item.candidateDigest)}</code><br>Evidence <code>${escapeHtml(item.evidenceDigest)}</code></p><ul>${item.artifacts.map((artifact) => `<li>${escapeHtml(artifact.mediaType)} · ${escapeHtml(artifact.bytes)} bytes · <code>${escapeHtml(artifact.digest)}</code></li>`).join('') || '<li>No retained artifacts.</li>'}</ul></article>`).join('') || '<p>No independent evidence has been retained.</p>'}</section></main></body></html>` }
+function evidenceReviewPage(changeCase, evidence) {
+  const passes = evidence.filter((item) => item.status === "PASS");
+  const next =
+    changeCase.state === "AWAITING_VERIFICATION"
+      ? passes.length
+        ? "An independent reviewer may complete Gate D for the candidate digest below."
+        : "Independent verifier evidence is required; implementer activity is not a pass."
+      : "Review the retained verifier evidence and digest-bound artifacts.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ADX Evidence Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section,article{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.pass{color:#176b42;font-weight:700}.fail{color:#a92e2e;font-weight:700}code{overflow-wrap:anywhere}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · INDEPENDENT EVIDENCE</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} risk</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p><p>Implementer narrative and agent activity are not verifier proof. Only the signed independent bundles below may satisfy Gate D.</p></section><section><h2>Independent verifier evidence</h2>${evidence.map((item) => `<article><p class="${item.status === "PASS" ? "pass" : "fail"}">${escapeHtml(item.status)} · ${escapeHtml(item.verifierId)} ${escapeHtml(item.verifierVersion)}</p><p>Candidate <code>${escapeHtml(item.candidateDigest)}</code><br>Evidence <code>${escapeHtml(item.evidenceDigest)}</code></p><ul>${item.artifacts.map((artifact) => `<li>${escapeHtml(artifact.mediaType)} · ${escapeHtml(artifact.bytes)} bytes · <code>${escapeHtml(artifact.digest)}</code></li>`).join("") || "<li>No retained artifacts.</li>"}</ul></article>`).join("") || "<p>No independent evidence has been retained.</p>"}</section></main></body></html>`;
+}
 function deliveryReviewPage(changeCase, plans, review) {
-  const plan = plans[0]; const ciRuns = review?.ciRuns ?? []; const findings = review?.findings ?? []; const approvals = review?.approvals ?? []
-  const ciPassed = ciRuns.some((item) => item.status === 'PASSED'); const hasErrors = findings.some((item) => item.finding?.severity === 'ERROR')
-  const next = !plan ? 'Retain a preview plan before requesting CI or a reviewer decision.' : !ciPassed ? 'Wait for CI evidence bound to this exact preview commit.' : hasErrors ? 'Resolve or reject error-level review findings before approval.' : 'An independent reviewer may record an approval or rejection for this exact commit.'
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Delivery Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.warn{color:#a92e2e;font-weight:700}code{overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · DELIVERY REVIEW · PREVIEW ONLY</p><h1>${escapeHtml(changeCase.title)}</h1><p>No external branch, pull request, merge, or release is created by this surface.</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p></section>${plan ? `<section><h2>Exact preview under review</h2><p>Branch <code>${escapeHtml(plan.branch)}</code><br>Commit <code>${escapeHtml(plan.commitDigest)}</code><br>Candidate <code>${escapeHtml(plan.candidateDigest)}</code><br>Evidence <code>${escapeHtml(plan.evidenceDigest)}</code></p></section><section><h2>CI and review findings</h2><ul>${ciRuns.map((item) => `<li>${escapeHtml(item.providerId)} · ${escapeHtml(item.status)} · <code>${escapeHtml(item.commitDigest)}</code></li>`).join('') || '<li>No CI status retained.</li>'}</ul><ul>${findings.map((item) => `<li class="${item.finding?.severity === 'ERROR' ? 'warn' : ''}">${escapeHtml(item.finding?.severity)} · ${escapeHtml(item.finding?.ruleId)} — ${escapeHtml(item.finding?.message)}</li>`).join('') || '<li>No review findings retained.</li>'}</ul></section><section><h2>Commit-bound decisions</h2><ul>${approvals.map((item) => `<li><strong>${escapeHtml(item.decision)}</strong> · ${escapeHtml(item.status)} · ${escapeHtml(item.reviewedBy)}<br><code>${escapeHtml(item.commitDigest)}</code><br>${escapeHtml(item.rationale)}</li>`).join('') || '<li>No decision has been recorded.</li>'}</ul></section>` : ''}</main></body></html>`
+  const plan = plans[0];
+  const ciRuns = review?.ciRuns ?? [];
+  const findings = review?.findings ?? [];
+  const approvals = review?.approvals ?? [];
+  const ciPassed = ciRuns.some((item) => item.status === "PASSED");
+  const hasErrors = findings.some((item) => item.finding?.severity === "ERROR");
+  const next = !plan
+    ? "Retain a preview plan before requesting CI or a reviewer decision."
+    : !ciPassed
+      ? "Wait for CI evidence bound to this exact preview commit."
+      : hasErrors
+        ? "Resolve or reject error-level review findings before approval."
+        : "An independent reviewer may record an approval or rejection for this exact commit.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Delivery Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.warn{color:#a92e2e;font-weight:700}code{overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · DELIVERY REVIEW · PREVIEW ONLY</p><h1>${escapeHtml(changeCase.title)}</h1><p>No external branch, pull request, merge, or release is created by this surface.</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p></section>${plan ? `<section><h2>Exact preview under review</h2><p>Branch <code>${escapeHtml(plan.branch)}</code><br>Commit <code>${escapeHtml(plan.commitDigest)}</code><br>Candidate <code>${escapeHtml(plan.candidateDigest)}</code><br>Evidence <code>${escapeHtml(plan.evidenceDigest)}</code></p></section><section><h2>CI and review findings</h2><ul>${ciRuns.map((item) => `<li>${escapeHtml(item.providerId)} · ${escapeHtml(item.status)} · <code>${escapeHtml(item.commitDigest)}</code></li>`).join("") || "<li>No CI status retained.</li>"}</ul><ul>${findings.map((item) => `<li class="${item.finding?.severity === "ERROR" ? "warn" : ""}">${escapeHtml(item.finding?.severity)} · ${escapeHtml(item.finding?.ruleId)} — ${escapeHtml(item.finding?.message)}</li>`).join("") || "<li>No review findings retained.</li>"}</ul></section><section><h2>Commit-bound decisions</h2><ul>${approvals.map((item) => `<li><strong>${escapeHtml(item.decision)}</strong> · ${escapeHtml(item.status)} · ${escapeHtml(item.reviewedBy)}<br><code>${escapeHtml(item.commitDigest)}</code><br>${escapeHtml(item.rationale)}</li>`).join("") || "<li>No decision has been recorded.</li>"}</ul></section>` : ""}</main></body></html>`;
 }
 function outcomeReviewPage(changeCase, records) {
-  const counts = records.reduce((summary, item) => ({ ...summary, [item.outcome]: (summary[item.outcome] ?? 0) + 1 }), {})
-  const next = changeCase.state === 'READY_FOR_DELIVERY' ? 'Retain a final outcome before marking this Change Case complete.' : changeCase.state === 'OUTCOME_RECORDED' ? 'Review the retained outcome and compare it with the frozen evaluation baseline.' : 'A release outcome may be recorded only after delivery readiness.'
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Outcome Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.metric{display:inline-block;margin-right:20px;font-weight:700}code{overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · OUTCOME REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} risk</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p><p>Only retained outcomes count. Activity, transcripts, and unverified release claims are not outcomes.</p></section><section><h2>Outcome summary</h2><p><span class="metric">Success: ${escapeHtml(counts.SUCCESS ?? 0)}</span><span class="metric">Failure: ${escapeHtml(counts.FAILURE ?? 0)}</span><span class="metric">Rolled back: ${escapeHtml(counts.ROLLED_BACK ?? 0)}</span></p></section><section><h2>Immutable outcome history</h2><ul>${records.map((item) => `<li><strong>${escapeHtml(item.outcome)}</strong> · ${escapeHtml(item.taxonomy)}<br>Release candidate: <code>${escapeHtml(item.releaseCandidateId)}</code><br>Outcome: <code>${escapeHtml(item.outcomeDigest)}</code></li>`).join('') || '<li>No retained outcome record.</li>'}</ul></section></main></body></html>`
+  const counts = records.reduce(
+    (summary, item) => ({
+      ...summary,
+      [item.outcome]: (summary[item.outcome] ?? 0) + 1,
+    }),
+    {},
+  );
+  const next =
+    changeCase.state === "READY_FOR_DELIVERY"
+      ? "Retain a final outcome before marking this Change Case complete."
+      : changeCase.state === "OUTCOME_RECORDED"
+        ? "Review the retained outcome and compare it with the frozen evaluation baseline."
+        : "A release outcome may be recorded only after delivery readiness.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Outcome Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.metric{display:inline-block;margin-right:20px;font-weight:700}code{overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · OUTCOME REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} risk</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p><p>Only retained outcomes count. Activity, transcripts, and unverified release claims are not outcomes.</p></section><section><h2>Outcome summary</h2><p><span class="metric">Success: ${escapeHtml(counts.SUCCESS ?? 0)}</span><span class="metric">Failure: ${escapeHtml(counts.FAILURE ?? 0)}</span><span class="metric">Rolled back: ${escapeHtml(counts.ROLLED_BACK ?? 0)}</span></p></section><section><h2>Immutable outcome history</h2><ul>${records.map((item) => `<li><strong>${escapeHtml(item.outcome)}</strong> · ${escapeHtml(item.taxonomy)}<br>Release candidate: <code>${escapeHtml(item.releaseCandidateId)}</code><br>Outcome: <code>${escapeHtml(item.outcomeDigest)}</code></li>`).join("") || "<li>No retained outcome record.</li>"}</ul></section></main></body></html>`;
 }
 function controlPlanePage(principal, workspaces) {
-  const rows = workspaces.flatMap(({ workspaceId, changeCases }) => changeCases.map((changeCase) => changeCaseWorkflowCard(changeCase, workspaceId)))
-  const gateGuide = workflowGates.map((gate) => `<article class="gate-guide"><span class="gate-number">${escapeHtml(gate.id)}</span><div><h2>${escapeHtml(gate.name)}</h2><p>${escapeHtml(gate.purpose)}</p></div></article>`).join('')
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Control Plane</title><style>:root{color:#18243a;background:#f5f7fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:1160px;margin:auto;padding:34px 20px 56px}header,.panel,.case{background:#fff;border:1px solid #dce3ee;border-radius:16px;box-shadow:0 2px 10px #1720330a}header{padding:28px}.panel{padding:22px;margin-top:18px}.case{padding:24px;margin-top:18px}.eyebrow{font-size:.74rem;font-weight:750;letter-spacing:.12em;color:#50627a;margin:0 0 5px}h1{font-size:2rem;line-height:1.2;margin:.15rem 0 .55rem}h2,h3{font-size:1.05rem;margin:0}p{margin:.35rem 0;color:#455870}.lede{max-width:760px}.gate-guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-top:14px}.gate-guide{display:flex;gap:12px;border:1px solid #dce3ee;border-radius:12px;padding:14px;background:#fbfcfe}.gate-guide p{font-size:.9rem}.gate-number{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:50%;background:#e9f4ff;color:#11519b;font-size:.75rem;font-weight:800}.case-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.case-head h2{font-size:1.3rem}.risk{display:inline-block;border-radius:999px;padding:4px 9px;background:#fff2d9;color:#794500;font-size:.8rem;font-weight:750;white-space:nowrap}.case-id{font-size:.82rem;color:#50627a}.workflow{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:8px;margin:20px 0 14px;overflow-x:auto;padding-bottom:2px}.gate{min-width:130px;border:1px solid #dce3ee;border-radius:12px;padding:12px;background:#fff}.gate.complete{border-color:#94d4ad;background:#f1fbf4}.gate.current{border:2px solid #2d74c4;background:#edf6ff}.gate.blocked{background:#fafbfc;color:#66758b}.gate-top{display:flex;justify-content:space-between;align-items:center;gap:6px}.gate-title{font-weight:750;font-size:.9rem;color:#18243a}.status{font-size:.72rem;font-weight:800;letter-spacing:.04em}.complete .status{color:#14733e}.current .status{color:#0c5ca8}.blocked .status{color:#66758b}.gate p{font-size:.79rem;line-height:1.35;margin-top:8px}.agent-picker{border:1px solid #bfd8f4;background:#f7fbff;border-radius:12px;padding:16px;margin:0 0 14px}.agent-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin-top:12px}.agent-option{display:flex;gap:9px;align-items:flex-start;border:1px solid #cddbeb;border-radius:10px;padding:11px;background:#fff;cursor:pointer}.agent-option:has(input:checked){border:2px solid #2d74c4;background:#edf6ff}.agent-option input{margin-top:4px}.agent-option strong,.agent-option small{display:block}.agent-option small,.agent-note{font-size:.82rem;color:#50627a}.agent-note{margin-top:12px}.next{display:flex;align-items:center;justify-content:space-between;gap:16px;border-radius:12px;background:#edf6ff;padding:15px 16px}.next p{margin:0}.next strong{display:block;color:#18243a}.review-link{display:inline-block;background:#11519b;color:white;padding:9px 12px;border-radius:9px;text-decoration:none;font-weight:700;white-space:nowrap}.review-link:hover{background:#0d427e}.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.86rem;color:#50627a}.legend b{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}.done-dot{background:#2c9b59}.current-dot{background:#2d74c4}.waiting-dot{background:#94a1b2}code{overflow-wrap:anywhere}@media(max-width:650px){main{padding:18px 14px 40px}header,.panel,.case{padding:19px}.case-head,.next{align-items:stretch;flex-direction:column}.review-link{text-align:center}.workflow{grid-template-columns:repeat(6,145px)}h1{font-size:1.65rem}}</style></head><body><main><header><p class="eyebrow">AUTHENTICATED ADX CONTROL PLANE</p><h1>Move work through clear gates.</h1><p class="lede">Signed in as ${escapeHtml(principal.displayName ?? principal.id)}. Each gate answers one question before ADX allows the next step. A gate is complete only when its retained evidence says so.</p></header><section class="panel"><p class="eyebrow">THE ADX WORKFLOW</p><div class="gate-guide-grid">${gateGuide}</div><p class="legend"><span><b class="done-dot"></b>Complete</span><span><b class="current-dot"></b>Needs attention now</span><span><b class="waiting-dot"></b>Not reached yet</span></p></section><section class="panel"><p class="eyebrow">YOUR CHANGE CASES</p>${rows.join('') || '<p>No Change Cases are available in your workspaces yet.</p>'}</section></main></body></html>`
+  const rows = workspaces.flatMap(({ workspaceId, changeCases }) =>
+    changeCases.map((changeCase) =>
+      changeCaseWorkflowCard(changeCase, workspaceId),
+    ),
+  );
+  const gateGuide = workflowGates
+    .map(
+      (gate) =>
+        `<article class="gate-guide"><span class="gate-number">${escapeHtml(gate.id)}</span><div><h2>${escapeHtml(gate.name)}</h2><p>${escapeHtml(gate.purpose)}</p></div></article>`,
+    )
+    .join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Control Plane</title><style>:root{color:#18243a;background:#f5f7fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:1160px;margin:auto;padding:34px 20px 56px}header,.panel,.case{background:#fff;border:1px solid #dce3ee;border-radius:16px;box-shadow:0 2px 10px #1720330a}header{padding:28px}.panel{padding:22px;margin-top:18px}.case{padding:24px;margin-top:18px}.eyebrow{font-size:.74rem;font-weight:750;letter-spacing:.12em;color:#50627a;margin:0 0 5px}h1{font-size:2rem;line-height:1.2;margin:.15rem 0 .55rem}h2,h3{font-size:1.05rem;margin:0}p{margin:.35rem 0;color:#455870}.lede{max-width:760px}.gate-guide-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;margin-top:14px}.gate-guide{display:flex;gap:12px;border:1px solid #dce3ee;border-radius:12px;padding:14px;background:#fbfcfe}.gate-guide p{font-size:.9rem}.gate-number{display:grid;place-items:center;flex:0 0 34px;height:34px;border-radius:50%;background:#e9f4ff;color:#11519b;font-size:.75rem;font-weight:800}.case-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.case-head h2{font-size:1.3rem}.risk{display:inline-block;border-radius:999px;padding:4px 9px;background:#fff2d9;color:#794500;font-size:.8rem;font-weight:750;white-space:nowrap}.case-id{font-size:.82rem;color:#50627a}.workflow{display:grid;grid-template-columns:repeat(6,minmax(130px,1fr));gap:8px;margin:20px 0 14px;overflow-x:auto;padding-bottom:2px}.gate{min-width:130px;border:1px solid #dce3ee;border-radius:12px;padding:12px;background:#fff}.gate.complete{border-color:#94d4ad;background:#f1fbf4}.gate.current{border:2px solid #2d74c4;background:#edf6ff}.gate.blocked{background:#fafbfc;color:#66758b}.gate-top{display:flex;justify-content:space-between;align-items:center;gap:6px}.gate-title{font-weight:750;font-size:.9rem;color:#18243a}.status{font-size:.72rem;font-weight:800;letter-spacing:.04em}.complete .status{color:#14733e}.current .status{color:#0c5ca8}.blocked .status{color:#66758b}.gate p{font-size:.79rem;line-height:1.35;margin-top:8px}.agent-picker{border:1px solid #bfd8f4;background:#f7fbff;border-radius:12px;padding:16px;margin:0 0 14px}.agent-options{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:9px;margin-top:12px}.agent-option{display:flex;gap:9px;align-items:flex-start;border:1px solid #cddbeb;border-radius:10px;padding:11px;background:#fff;cursor:pointer}.agent-option:has(input:checked){border:2px solid #2d74c4;background:#edf6ff}.agent-option input{margin-top:4px}.agent-option strong,.agent-option small{display:block}.agent-option small,.agent-note{font-size:.82rem;color:#50627a}.agent-note{margin-top:12px}.next{display:flex;align-items:center;justify-content:space-between;gap:16px;border-radius:12px;background:#edf6ff;padding:15px 16px}.next p{margin:0}.next strong{display:block;color:#18243a}.review-link{display:inline-block;background:#11519b;color:white;padding:9px 12px;border-radius:9px;text-decoration:none;font-weight:700;white-space:nowrap}.review-link:hover{background:#0d427e}.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:.86rem;color:#50627a}.legend b{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}.done-dot{background:#2c9b59}.current-dot{background:#2d74c4}.waiting-dot{background:#94a1b2}code{overflow-wrap:anywhere}@media(max-width:650px){main{padding:18px 14px 40px}header,.panel,.case{padding:19px}.case-head,.next{align-items:stretch;flex-direction:column}.review-link{text-align:center}.workflow{grid-template-columns:repeat(6,145px)}h1{font-size:1.65rem}}</style></head><body><main><header><p class="eyebrow">AUTHENTICATED ADX CONTROL PLANE</p><h1>Move work through clear gates.</h1><p class="lede">Signed in as ${escapeHtml(principal.displayName ?? principal.id)}. Each gate answers one question before ADX allows the next step. A gate is complete only when its retained evidence says so.</p></header><section class="panel"><p class="eyebrow">THE ADX WORKFLOW</p><div class="gate-guide-grid">${gateGuide}</div><p class="legend"><span><b class="done-dot"></b>Complete</span><span><b class="current-dot"></b>Needs attention now</span><span><b class="waiting-dot"></b>Not reached yet</span></p></section><section class="panel"><p class="eyebrow">YOUR CHANGE CASES</p>${rows.join("") || "<p>No Change Cases are available in your workspaces yet.</p>"}</section></main></body></html>`;
 }
-const workflowGates = Object.freeze(workflowContract.gates.map((gate) => Object.freeze({ ...gate })))
+const workflowGates = Object.freeze(
+  workflowContract.gates.map((gate) => Object.freeze({ ...gate })),
+);
 function workflowPosition(state) {
-  return workflowContract.statePositions[state] ?? 0
+  return workflowContract.statePositions[state] ?? 0;
 }
-function gateStatus(index, position) { return position === 7 || index < position ? 'complete' : index === position ? 'current' : 'blocked' }
-function gateLabel(status) { return status === 'complete' ? 'COMPLETE' : status === 'current' ? 'NOW' : 'WAITING' }
+function gateStatus(index, position) {
+  return position === 7 || index < position
+    ? "complete"
+    : index === position
+      ? "current"
+      : "blocked";
+}
+function gateLabel(status) {
+  return status === "complete"
+    ? "COMPLETE"
+    : status === "current"
+      ? "NOW"
+      : "WAITING";
+}
 function changeCaseWorkflowCard(changeCase, workspaceId) {
-  const position = workflowPosition(changeCase.state)
-  const currentGate = workflowGates[Math.min(position, workflowGates.length - 1)]
-  const gateCards = workflowGates.map((gate, index) => { const status = gateStatus(index, position); return `<div class="gate ${status}"><div class="gate-top"><span class="gate-title">Gate ${escapeHtml(gate.id)} · ${escapeHtml(gate.name)}</span><span class="status">${gateLabel(status)}</span></div><p>${escapeHtml(gate.purpose)}</p></div>` }).join('')
-  const href = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCase.id)}/${currentGate.review}`
-  const nextText = position === 7 ? 'All gates are complete. Review the retained outcome for this Change Case.' : changeCase.state === 'PAUSED' ? 'This Change Case is paused. Resolve the pause before advancing the active gate.' : changeCase.state === 'CANCELLED' ? 'This Change Case was cancelled. Its retained history remains available for review.' : `Focus on Gate ${currentGate.id}: ${currentGate.purpose}`
-  return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">Open Gate ${escapeHtml(currentGate.id)} review</a></section></article>`
+  const position = workflowPosition(changeCase.state);
+  const currentGate =
+    workflowGates[Math.min(position, workflowGates.length - 1)];
+  const gateCards = workflowGates
+    .map((gate, index) => {
+      const status = gateStatus(index, position);
+      return `<div class="gate ${status}"><div class="gate-top"><span class="gate-title">Gate ${escapeHtml(gate.id)} · ${escapeHtml(gate.name)}</span><span class="status">${gateLabel(status)}</span></div><p>${escapeHtml(gate.purpose)}</p></div>`;
+    })
+    .join("");
+  const href = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCase.id)}/${currentGate.review}`;
+  const nextText =
+    position === 7
+      ? "All gates are complete. Review the retained outcome for this Change Case."
+      : changeCase.state === "PAUSED"
+        ? "This Change Case is paused. Resolve the pause before advancing the active gate."
+        : changeCase.state === "CANCELLED"
+          ? "This Change Case was cancelled. Its retained history remains available for review."
+          : `Focus on Gate ${currentGate.id}: ${currentGate.purpose}`;
+  return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">Open Gate ${escapeHtml(currentGate.id)} review</a></section></article>`;
 }
-function bearer(request) { const value = request.headers.authorization; if (value?.startsWith('Bearer ')) return value.slice(7); return request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null }
-function uiRedirectLocation(value) { try { const url = new URL(value || 'http://127.0.0.1:4173/'); if (!['http:', 'https:'].includes(url.protocol)) throw new Error('invalid protocol'); return url.toString() } catch { return 'http://127.0.0.1:4173/' } }
-function realWorkspaceLocation(value) { const url = new URL(uiRedirectLocation(value)); url.searchParams.set('mode', 'real'); return url.toString() }
-async function sessionFor(request) {
-  const token = bearer(request); const local = sessions.resolve(token)
-  if (local || !verifyOidc || !token) return local
-  try { return { principal: await verifyOidc(token), memberships: [] } } catch { return null }
+function bearer(request) {
+  const value = request.headers.authorization;
+  if (value?.startsWith("Bearer ")) return value.slice(7);
+  return (
+    request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null
+  );
 }
-function audit(event) { auditEvents.push(Object.freeze({ id: randomUUID(), at: new Date().toISOString(), ...event })) }
-function workspaceResource(workspaceId, organizationId) { return { id: workspaceId, workspaceId, organizationId, type: 'workspace', version: 1, riskTier: 'R0' } }
-function publicResource(resource) { return { id: resource.id, workspaceId: resource.workspaceId, type: resource.type, riskTier: resource.riskTier, version: resource.version, label: resource.label } }
-function readJson(request) { return new Promise((resolve) => { let data = ''; request.on('data', (chunk) => { data += chunk }); request.on('end', () => { try { resolve(data ? JSON.parse(data) : {}) } catch { resolve(null) } }) }) }
-function createLedgerSigner(env) {
-  const keyFile = (file) => readFileSync(isAbsolute(file) ? file : resolve(repositoryRoot, file), 'utf8')
-  const privatePem = env.ADX_LEDGER_SIGNING_PRIVATE_KEY_PEM ?? (env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE ? keyFile(env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE) : null)
-  const publicPem = env.ADX_LEDGER_SIGNING_PUBLIC_KEY_PEM ?? (env.ADX_LEDGER_SIGNING_PUBLIC_KEY_FILE ? keyFile(env.ADX_LEDGER_SIGNING_PUBLIC_KEY_FILE) : null)
-  if (privatePem) {
-    const privateKey = createPrivateKey(privatePem)
-    return { keyId: env.ADX_LEDGER_SIGNING_KEY_ID ?? 'adx-ledger-default', privateKey, publicKey: publicPem ? createPublicKey(publicPem) : createPublicKey(privateKey) }
+function uiRedirectLocation(value) {
+  try {
+    const url = new URL(value || "http://127.0.0.1:4173/");
+    if (!["http:", "https:"].includes(url.protocol))
+      throw new Error("invalid protocol");
+    return url.toString();
+  } catch {
+    return "http://127.0.0.1:4173/";
   }
-  if (env.ADX_TEST_AUTH === '1') { const keys = generateKeyPairSync('ed25519'); return { keyId: 'adx-test-ledger-ed25519', ...keys } }
-  return null
+}
+function realWorkspaceLocation(value) {
+  const url = new URL(uiRedirectLocation(value));
+  url.searchParams.set("mode", "real");
+  return url.toString();
+}
+async function sessionFor(request) {
+  const token = bearer(request);
+  const local = sessions.resolve(token);
+  if (local || !verifyOidc || !token) return local;
+  try {
+    return { principal: await verifyOidc(token), memberships: [] };
+  } catch {
+    return null;
+  }
+}
+function audit(event) {
+  auditEvents.push(
+    Object.freeze({ id: randomUUID(), at: new Date().toISOString(), ...event }),
+  );
+}
+function workspaceResource(workspaceId, organizationId) {
+  return {
+    id: workspaceId,
+    workspaceId,
+    organizationId,
+    type: "workspace",
+    version: 1,
+    riskTier: "R0",
+  };
+}
+function publicResource(resource) {
+  return {
+    id: resource.id,
+    workspaceId: resource.workspaceId,
+    type: resource.type,
+    riskTier: resource.riskTier,
+    version: resource.version,
+    label: resource.label,
+  };
+}
+function readJson(request) {
+  return new Promise((resolve) => {
+    let data = "";
+    request.on("data", (chunk) => {
+      data += chunk;
+    });
+    request.on("end", () => {
+      try {
+        resolve(data ? JSON.parse(data) : {});
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+function createLedgerSigner(env) {
+  const keyFile = (file) =>
+    readFileSync(
+      isAbsolute(file) ? file : resolve(repositoryRoot, file),
+      "utf8",
+    );
+  const privatePem =
+    env.ADX_LEDGER_SIGNING_PRIVATE_KEY_PEM ??
+    (env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE
+      ? keyFile(env.ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE)
+      : null);
+  const publicPem =
+    env.ADX_LEDGER_SIGNING_PUBLIC_KEY_PEM ??
+    (env.ADX_LEDGER_SIGNING_PUBLIC_KEY_FILE
+      ? keyFile(env.ADX_LEDGER_SIGNING_PUBLIC_KEY_FILE)
+      : null);
+  if (privatePem) {
+    const privateKey = createPrivateKey(privatePem);
+    return {
+      keyId: env.ADX_LEDGER_SIGNING_KEY_ID ?? "adx-ledger-default",
+      privateKey,
+      publicKey: publicPem
+        ? createPublicKey(publicPem)
+        : createPublicKey(privateKey),
+    };
+  }
+  if (env.ADX_TEST_AUTH === "1") {
+    const keys = generateKeyPairSync("ed25519");
+    return { keyId: "adx-test-ledger-ed25519", ...keys };
+  }
+  return null;
 }
 function createLocalCodingAgentExecution({ executions, changeCases, broker }) {
-  const provider = String(process.env.ADX_LOCAL_CODING_AGENT_PROVIDER ?? '').trim().toUpperCase()
-  const version = String(process.env.ADX_LOCAL_CODING_AGENT_VERSION ?? '').trim()
-  const repositoryId = String(process.env.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ?? '').trim()
-  const ref = String(process.env.ADX_LOCAL_CODING_AGENT_REF ?? '').trim()
-  const writePaths = String(process.env.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ?? '').split(',').map((path) => path.trim()).filter(Boolean)
-  if (!executions || !changeCases || !broker.configured() || !codingAgentProviders.includes(provider) || !version || !repositoryId || !ref.startsWith('refs/') || !writePaths.length) return null
-  const capabilities = { shell: true, gitRead: true, gitWrite: true, browser: false, network: false, secrets: false, deploy: false }
-  const adapter = createCodingAgentAdapter({ provider, version, capabilities, enabled: true })
+  const provider = String(process.env.ADX_LOCAL_CODING_AGENT_PROVIDER ?? "")
+    .trim()
+    .toUpperCase();
+  const version = String(
+    process.env.ADX_LOCAL_CODING_AGENT_VERSION ?? "",
+  ).trim();
+  const repositoryId = String(
+    process.env.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ?? "",
+  ).trim();
+  const ref = String(process.env.ADX_LOCAL_CODING_AGENT_REF ?? "").trim();
+  const writePaths = String(
+    process.env.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ?? "",
+  )
+    .split(",")
+    .map((path) => path.trim())
+    .filter(Boolean);
+  if (
+    !executions ||
+    !changeCases ||
+    !broker.configured() ||
+    !codingAgentProviders.includes(provider) ||
+    !version ||
+    !repositoryId ||
+    !ref.startsWith("refs/") ||
+    !writePaths.length
+  )
+    return null;
+  const capabilities = {
+    shell: true,
+    gitRead: true,
+    gitWrite: true,
+    browser: false,
+    network: false,
+    secrets: false,
+    deploy: false,
+  };
+  const adapter = createCodingAgentAdapter({
+    provider,
+    version,
+    capabilities,
+    enabled: true,
+  });
   const policy = {
-    version: 'adx-local-coding-agent-v1',
+    version: "adx-local-coding-agent-v1",
     agentPrincipal: { id: `agent:${adapter.adapterId}` },
     repository: { repositoryId, ref, writePaths },
     capabilities,
-    limits: { maxDurationSeconds: 900, maxToolCalls: 100, maxCostUsd: 0, maxNetworkBytes: 0, maxOutputBytes: 64 * 1024, maxWorkspaceBytes: 64 * 1024 * 1024 },
+    limits: {
+      maxDurationSeconds: 900,
+      maxToolCalls: 100,
+      maxCostUsd: 0,
+      maxNetworkBytes: 0,
+      maxOutputBytes: 64 * 1024,
+      maxWorkspaceBytes: 64 * 1024 * 1024,
+    },
     durationSeconds: 900,
-    taskFor: (changeCase) => ({ objective: changeCase.title, changeDigest: sha256({ changeCaseId: changeCase.id, projectionVersion: changeCase.projectionVersion }), allowedCommands: ['node --test'] })
-  }
-  const service = new CodingAgentExecutionService({ executionRepository: executions, changeCaseRepository: changeCases, broker, resolveAdapter: (requestedProvider) => {
-    if (requestedProvider !== provider) throw new ChangeCaseError('CODING_AGENT_PROVIDER_NOT_ENABLED', 'The requested coding-agent provider is not enabled on this ADX server.')
-    return adapter
-  }, policy })
-  return Object.freeze({ service, provider: Object.freeze({ id: provider, label: provider === 'CLAUDE_CODE' ? 'Claude Code CLI' : provider === 'GITHUB_COPILOT' ? 'GitHub Copilot CLI' : 'Codex CLI', description: 'Server-configured CLI implementation runner. ADX issues a signed lease and produces a disposable candidate.' }) })
+    taskFor: (changeCase) => ({
+      objective: changeCase.title,
+      changeDigest: sha256({
+        changeCaseId: changeCase.id,
+        projectionVersion: changeCase.projectionVersion,
+      }),
+      allowedCommands: ["node --test"],
+    }),
+  };
+  const service = new CodingAgentExecutionService({
+    executionRepository: executions,
+    changeCaseRepository: changeCases,
+    broker,
+    resolveAdapter: (requestedProvider) => {
+      if (requestedProvider !== provider)
+        throw new ChangeCaseError(
+          "CODING_AGENT_PROVIDER_NOT_ENABLED",
+          "The requested coding-agent provider is not enabled on this ADX server.",
+        );
+      return adapter;
+    },
+    policy,
+  });
+  return Object.freeze({
+    service,
+    provider: Object.freeze({
+      id: provider,
+      label:
+        provider === "CLAUDE_CODE"
+          ? "Claude Code CLI"
+          : provider === "GITHUB_COPILOT"
+            ? "GitHub Copilot CLI"
+            : "Codex CLI",
+      description:
+        "Server-configured CLI implementation runner. ADX issues a signed lease and produces a disposable candidate.",
+    }),
+  });
 }
-function createUhgModelCodingExecution({ executions, changeCases, broker, gateway }) {
-  const provider = 'UHG_AZURE_OPENAI'
-  const version = String(process.env.ADX_CODING_MODEL_VERSION ?? '').trim()
-  const repositoryId = String(process.env.ADX_CODING_MODEL_REPOSITORY_ID ?? process.env.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ?? '').trim()
-  const ref = String(process.env.ADX_CODING_MODEL_REF ?? process.env.ADX_LOCAL_CODING_AGENT_REF ?? '').trim()
-  const writePaths = String(process.env.ADX_CODING_MODEL_WRITE_PATHS ?? process.env.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ?? '').split(',').map((path) => path.trim()).filter(Boolean)
-  if (!executions || !changeCases || !broker.configured() || !gateway?.status?.().configured || !version || !repositoryId || !ref.startsWith('refs/') || !writePaths.length) return null
-  const capabilities = { shell: true, gitRead: true, gitWrite: true, browser: false, network: false, secrets: false, deploy: false }
-  const adapter = createCodingAgentAdapter({ provider, version, capabilities, enabled: true })
+function createUhgModelCodingExecution({
+  executions,
+  changeCases,
+  broker,
+  gateway,
+}) {
+  const provider = "UHG_AZURE_OPENAI";
+  const version = String(process.env.ADX_CODING_MODEL_VERSION ?? "").trim();
+  const {
+    repositoryId,
+    ref,
+    writePaths,
+    validationCommand,
+    id: profileId,
+  } = modelPatchProfile;
+  if (
+    !executions ||
+    !changeCases ||
+    !broker.configured() ||
+    !gateway?.status?.().configured ||
+    !version ||
+    !repositoryId ||
+    !ref.startsWith("refs/") ||
+    !writePaths.length
+  )
+    return null;
+  const capabilities = {
+    shell: true,
+    gitRead: true,
+    gitWrite: true,
+    browser: false,
+    network: false,
+    secrets: false,
+    deploy: false,
+  };
+  const adapter = createCodingAgentAdapter({
+    provider,
+    version,
+    capabilities,
+    enabled: true,
+  });
   const policy = {
-    version: 'adx-uhg-model-patch-v1',
+    version: `adx-uhg-model-patch-${profileId}-v1`,
     agentPrincipal: { id: `agent:${adapter.adapterId}` },
     repository: { repositoryId, ref, writePaths },
     capabilities,
-    limits: { maxDurationSeconds: 900, maxToolCalls: 2, maxCostUsd: 0, maxNetworkBytes: 0, maxOutputBytes: 64 * 1024, maxWorkspaceBytes: 64 * 1024 * 1024 },
+    limits: {
+      maxDurationSeconds: 900,
+      maxToolCalls: 2,
+      maxCostUsd: 0,
+      maxNetworkBytes: 0,
+      maxOutputBytes: 64 * 1024,
+      maxWorkspaceBytes: 64 * 1024 * 1024,
+    },
     durationSeconds: 900,
-    taskFor: (changeCase) => ({ objective: changeCase.title, changeDigest: sha256({ changeCaseId: changeCase.id, projectionVersion: changeCase.projectionVersion }), allowedCommands: ['node --test'] })
-  }
-  const service = new CodingAgentExecutionService({ executionRepository: executions, changeCaseRepository: changeCases, broker, resolveAdapter: (requestedProvider) => {
-    if (requestedProvider !== provider) throw new ChangeCaseError('CODING_AGENT_PROVIDER_NOT_ENABLED', 'The requested coding-agent provider is not enabled on this ADX server.')
-    return adapter
-  }, policy })
-  const model = gateway.status().model ?? 'UHG model'
-  return Object.freeze({ service, provider: Object.freeze({ id: provider, label: `${model} (UHG)`, description: 'Server-owned bounded model-patch runner. ADX validates allowed paths, applies a disposable candidate, and runs approved tests.' }) })
+    taskFor: (changeCase) => ({
+      objective: changeCase.title,
+      changeDigest: sha256({
+        changeCaseId: changeCase.id,
+        projectionVersion: changeCase.projectionVersion,
+      }),
+      allowedCommands: [validationCommand],
+    }),
+  };
+  const service = new CodingAgentExecutionService({
+    executionRepository: executions,
+    changeCaseRepository: changeCases,
+    broker,
+    resolveAdapter: (requestedProvider) => {
+      if (requestedProvider !== provider)
+        throw new ChangeCaseError(
+          "CODING_AGENT_PROVIDER_NOT_ENABLED",
+          "The requested coding-agent provider is not enabled on this ADX server.",
+        );
+      return adapter;
+    },
+    policy,
+  });
+  const model = gateway.status().model ?? "UHG model";
+  return Object.freeze({
+    service,
+    validationCommand,
+    provider: Object.freeze({
+      id: provider,
+      label: `${model} (UHG)`,
+      description: `Health-X bounded runner · validates with ${validationCommand}.`,
+    }),
+  });
 }
 function codingAgentProvidersForUi() {
-  if (!codingAgentExecution?.configured() || !configuredCoding?.provider) return []
-  return [{ ...configuredCoding.provider, enabled: true }]
+  if (!codingAgentExecution?.configured() || !configuredCoding?.provider)
+    return [];
+  return [{ ...configuredCoding.provider, enabled: true }];
 }
 function executionTask(changeCase, governance, templateId) {
-  const intent = governance?.intent
-  if (!intent?.outcome || !intent?.acceptanceCriteria) throw new ChangeCaseError('CODING_AGENT_INTENT_REQUIRED', 'A retained outcome and acceptance criteria are required for bounded implementation.')
-  const template = resolveAgentSpecTemplate('coding', templateId)
-  return { objective: `${changeCase.title}\n\nOutcome: ${intent.outcome}\n\nAcceptance criteria: ${intent.acceptanceCriteria}${template ? `\n\nReviewed coding specification: ${template.label} (v${template.version})\n${template.guidance}` : ''}`, changeDigest: sha256({ changeCaseId: changeCase.id, projectionVersion: changeCase.projectionVersion, intentDigest: intent.intentDigest, template: template ? { id: template.id, version: template.version, digest: template.digest } : null }), allowedCommands: ['node --test'], template: template ? { id: template.id, version: template.version, digest: template.digest } : null }
+  const intent = governance?.intent;
+  if (!intent?.outcome || !intent?.acceptanceCriteria)
+    throw new ChangeCaseError(
+      "CODING_AGENT_INTENT_REQUIRED",
+      "A retained outcome and acceptance criteria are required for bounded implementation.",
+    );
+  const template = resolveAgentSpecTemplate("coding", templateId);
+  return {
+    objective: `${changeCase.title}\n\nOutcome: ${intent.outcome}\n\nAcceptance criteria: ${intent.acceptanceCriteria}${template ? `\n\nReviewed coding specification: ${template.label} (v${template.version})\n${template.guidance}` : ""}`,
+    changeDigest: sha256({
+      changeCaseId: changeCase.id,
+      projectionVersion: changeCase.projectionVersion,
+      intentDigest: intent.intentDigest,
+      template: template
+        ? {
+            id: template.id,
+            version: template.version,
+            digest: template.digest,
+          }
+        : null,
+    }),
+    allowedCommands: [configuredCoding?.validationCommand ?? "node --test"],
+    template: template
+      ? { id: template.id, version: template.version, digest: template.digest }
+      : null,
+  };
 }
-function changeCaseResource(changeCase, scope) { return { id: changeCase.id, organizationId: scope.organizationId, workspaceId: scope.workspaceId, type: 'change-case', version: changeCase.projectionVersion, riskTier: changeCase.riskTier } }
+function changeCaseResource(changeCase, scope) {
+  return {
+    id: changeCase.id,
+    organizationId: scope.organizationId,
+    workspaceId: scope.workspaceId,
+    type: "change-case",
+    version: changeCase.projectionVersion,
+    riskTier: changeCase.riskTier,
+  };
+}
 function commandError(response, error, traceId) {
-  if (error instanceof ChangeCaseError) return write(response, error.code === 'CHANGE_CASE_NOT_FOUND' ? 404 : error.code === 'VERSION_CONFLICT' || error.code === 'IDEMPOTENCY_KEY_REUSED' ? 409 : 400, { error: { code: error.code, message: error.message, retryable: error.retryable, severity: error.severity, correlationId: traceId, details: error.details } }, traceId)
-  return write(response, 500, { error: { code: 'CHANGE_CASE_COMMAND_FAILED', message: 'The Change Case command could not be completed.', retryable: true, severity: 'error', correlationId: traceId, ...(process.env.ADX_TEST_AUTH === '1' ? { details: { cause: error instanceof Error ? error.message : String(error) } } : {}) } }, traceId)
+  if (error instanceof ChangeCaseError)
+    return write(
+      response,
+      error.code === "CHANGE_CASE_NOT_FOUND"
+        ? 404
+        : error.code === "VERSION_CONFLICT" ||
+            error.code === "IDEMPOTENCY_KEY_REUSED"
+          ? 409
+          : 400,
+      {
+        error: {
+          code: error.code,
+          message: error.message,
+          retryable: error.retryable,
+          severity: error.severity,
+          correlationId: traceId,
+          details: error.details,
+        },
+      },
+      traceId,
+    );
+  return write(
+    response,
+    500,
+    {
+      error: {
+        code: "CHANGE_CASE_COMMAND_FAILED",
+        message: "The Change Case command could not be completed.",
+        retryable: true,
+        severity: "error",
+        correlationId: traceId,
+        ...(process.env.ADX_TEST_AUTH === "1"
+          ? {
+              details: {
+                cause: error instanceof Error ? error.message : String(error),
+              },
+            }
+          : {}),
+      },
+    },
+    traceId,
+  );
 }
 
 function importFeatureKey(importId, featureId, operation) {
-  return `feature-import:${sha256({ importId, featureId, operation }).slice(7, 55)}`
+  return `feature-import:${sha256({ importId, featureId, operation }).slice(7, 55)}`;
 }
 
 function validatedImportedFeature(feature) {
-  if (!feature || typeof feature !== 'object') throw new ChangeCaseError('FEATURE_IMPORT_ROW_INVALID', 'Each imported feature must be an object.')
-  const required = ['featureId', 'title', 'description', 'owner', 'targetRepository', 'acceptanceCriteria', 'riskTier', 'raw']
-  if (required.some((key) => typeof feature[key] !== 'string' || !feature[key].trim())) throw new ChangeCaseError('FEATURE_IMPORT_ROW_INVALID', 'Each imported feature needs retained identity, intent, ownership, repository, acceptance criteria, risk tier, and source content.')
-  if (!['R0', 'R1', 'R2', 'R3', 'R4'].includes(feature.riskTier)) throw new ChangeCaseError('FEATURE_IMPORT_ROW_INVALID', 'Imported feature risk tier must be R0 through R4.')
-  return { featureId: feature.featureId.trim(), title: feature.title.trim(), description: feature.description.trim(), owner: feature.owner.trim(), targetRepository: feature.targetRepository.trim(), acceptanceCriteria: feature.acceptanceCriteria.trim(), riskTier: feature.riskTier, sourceUrl: typeof feature.sourceUrl === 'string' ? feature.sourceUrl.trim() : '', raw: feature.raw }
+  if (!feature || typeof feature !== "object")
+    throw new ChangeCaseError(
+      "FEATURE_IMPORT_ROW_INVALID",
+      "Each imported feature must be an object.",
+    );
+  const required = [
+    "featureId",
+    "title",
+    "description",
+    "owner",
+    "targetRepository",
+    "acceptanceCriteria",
+    "riskTier",
+    "raw",
+  ];
+  if (
+    required.some(
+      (key) => typeof feature[key] !== "string" || !feature[key].trim(),
+    )
+  )
+    throw new ChangeCaseError(
+      "FEATURE_IMPORT_ROW_INVALID",
+      "Each imported feature needs retained identity, intent, ownership, repository, acceptance criteria, risk tier, and source content.",
+    );
+  if (!["R0", "R1", "R2", "R3", "R4"].includes(feature.riskTier))
+    throw new ChangeCaseError(
+      "FEATURE_IMPORT_ROW_INVALID",
+      "Imported feature risk tier must be R0 through R4.",
+    );
+  return {
+    featureId: feature.featureId.trim(),
+    title: feature.title.trim(),
+    description: feature.description.trim(),
+    owner: feature.owner.trim(),
+    targetRepository: feature.targetRepository.trim(),
+    acceptanceCriteria: feature.acceptanceCriteria.trim(),
+    riskTier: feature.riskTier,
+    sourceUrl:
+      typeof feature.sourceUrl === "string" ? feature.sourceUrl.trim() : "",
+    raw: feature.raw,
+  };
 }
 
-async function importFeatureBatch({ scope, principal, importId, features, correlationId }) {
-  if (typeof importId !== 'string' || !/^[0-9a-f-]{16,64}$/i.test(importId)) throw new ChangeCaseError('FEATURE_IMPORT_ID_INVALID', 'A UUID-like import identifier is required.')
-  if (!Array.isArray(features) || !features.length || features.length > 100) throw new ChangeCaseError('FEATURE_IMPORT_BATCH_INVALID', 'An import must contain between 1 and 100 features.')
-  const seen = new Set(); const results = []
+function importedGitHubSourceMilestone(raw) {
+  try {
+    const source = JSON.parse(raw);
+    const [owner, repository, ...rest] = String(source?.repository ?? "")
+      .trim()
+      .split("/");
+    const number = Number(source?.milestone?.number);
+    if (
+      !owner ||
+      !repository ||
+      rest.length ||
+      !Number.isInteger(number) ||
+      number < 1
+    )
+      return null;
+    return {
+      owner,
+      repository,
+      number,
+      title:
+        String(source.milestone?.title ?? `Milestone ${number}`).trim() ||
+        `Milestone ${number}`,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function importFeatureBatch({
+  scope,
+  principal,
+  importId,
+  features,
+  correlationId,
+}) {
+  if (typeof importId !== "string" || !/^[0-9a-f-]{16,64}$/i.test(importId))
+    throw new ChangeCaseError(
+      "FEATURE_IMPORT_ID_INVALID",
+      "A UUID-like import identifier is required.",
+    );
+  if (!Array.isArray(features) || !features.length || features.length > 100)
+    throw new ChangeCaseError(
+      "FEATURE_IMPORT_BATCH_INVALID",
+      "An import must contain between 1 and 100 features.",
+    );
+  const seen = new Set();
+  const results = [];
   for (const rawFeature of features) {
-    let feature
+    let feature;
     try {
-      feature = validatedImportedFeature(rawFeature)
-      if (seen.has(feature.featureId)) throw new ChangeCaseError('FEATURE_IMPORT_DUPLICATE_ID', `Feature ${feature.featureId} appears more than once in this import.`)
-      seen.add(feature.featureId)
-      const created = await changeCases.create({ scope, principal, title: feature.title, riskTier: feature.riskTier, idempotencyKey: importFeatureKey(importId, feature.featureId, 'create'), correlationId })
-      const transitioned = await changeCases.transition({ scope, principal, changeCaseId: created.changeCaseId, toState: 'INTAKE', expectedVersion: created.projectionVersion, idempotencyKey: importFeatureKey(importId, feature.featureId, 'intake-transition'), correlationId })
-      const intake = await changeCases.captureIntent({ scope, principal, changeCaseId: created.changeCaseId, expectedVersion: transitioned.projectionVersion, idempotencyKey: importFeatureKey(importId, feature.featureId, 'capture-intent'), correlationId, intent: { outcome: feature.description, owner: feature.owner, acceptanceCriteria: feature.acceptanceCriteria, targetRepository: feature.targetRepository, assets: [], sourceName: feature.sourceUrl || feature.featureId, sourceContent: feature.raw } })
+      feature = validatedImportedFeature(rawFeature);
+      if (seen.has(feature.featureId))
+        throw new ChangeCaseError(
+          "FEATURE_IMPORT_DUPLICATE_ID",
+          `Feature ${feature.featureId} appears more than once in this import.`,
+        );
+      seen.add(feature.featureId);
+      const created = await changeCases.create({
+        scope,
+        principal,
+        title: feature.title,
+        riskTier: feature.riskTier,
+        idempotencyKey: importFeatureKey(importId, feature.featureId, "create"),
+        correlationId,
+      });
+      const transitioned = await changeCases.transition({
+        scope,
+        principal,
+        changeCaseId: created.changeCaseId,
+        toState: "INTAKE",
+        expectedVersion: created.projectionVersion,
+        idempotencyKey: importFeatureKey(
+          importId,
+          feature.featureId,
+          "intake-transition",
+        ),
+        correlationId,
+      });
+      const intake = await changeCases.captureIntent({
+        scope,
+        principal,
+        changeCaseId: created.changeCaseId,
+        expectedVersion: transitioned.projectionVersion,
+        idempotencyKey: importFeatureKey(
+          importId,
+          feature.featureId,
+          "capture-intent",
+        ),
+        correlationId,
+        intent: {
+          outcome: feature.description,
+          owner: feature.owner,
+          acceptanceCriteria: feature.acceptanceCriteria,
+          targetRepository: feature.targetRepository,
+          assets: [],
+          sourceName: feature.sourceUrl || feature.featureId,
+          sourceContent: feature.raw,
+        },
+      });
+      const sourceMilestone = importedGitHubSourceMilestone(feature.raw);
+      if (sourceMilestone && storyMilestones)
+        await storyMilestones.recordSourceMilestone({
+          scope,
+          principal,
+          changeCaseId: created.changeCaseId,
+          source: sourceMilestone,
+        });
       if (intake.ambiguityCount) {
-        results.push({ featureId: feature.featureId, title: feature.title, changeCaseId: created.changeCaseId, status: 'REQUIRES_CLARIFICATION', message: 'Intake retained open ambiguities; resolve them before story breakdown.' })
-        continue
+        results.push({
+          featureId: feature.featureId,
+          title: feature.title,
+          changeCaseId: created.changeCaseId,
+          status: "REQUIRES_CLARIFICATION",
+          message:
+            "Intake retained open ambiguities; resolve them before story breakdown.",
+        });
+        continue;
       }
-      await changeCases.classifyIntake({ scope, principal, changeCaseId: created.changeCaseId, expectedVersion: intake.projectionVersion, idempotencyKey: importFeatureKey(importId, feature.featureId, 'classify-risk'), correlationId })
-      results.push({ featureId: feature.featureId, title: feature.title, changeCaseId: created.changeCaseId, status: 'IMPORTED' })
+      await changeCases.classifyIntake({
+        scope,
+        principal,
+        changeCaseId: created.changeCaseId,
+        expectedVersion: intake.projectionVersion,
+        idempotencyKey: importFeatureKey(
+          importId,
+          feature.featureId,
+          "classify-risk",
+        ),
+        correlationId,
+      });
+      results.push({
+        featureId: feature.featureId,
+        title: feature.title,
+        changeCaseId: created.changeCaseId,
+        status: "IMPORTED",
+      });
     } catch (error) {
-      results.push({ featureId: feature?.featureId ?? 'unknown', title: feature?.title ?? 'Invalid feature', status: 'FAILED', message: error instanceof ChangeCaseError ? error.message : 'The feature could not be imported.' })
+      results.push({
+        featureId: feature?.featureId ?? "unknown",
+        title: feature?.title ?? "Invalid feature",
+        status: "FAILED",
+        message:
+          error instanceof ChangeCaseError
+            ? error.message
+            : "The feature could not be imported.",
+      });
     }
   }
-  return { importId, policy: 'PARTIAL_SUCCESS_RESUMABLE', results }
+  return { importId, policy: "PARTIAL_SUCCESS_RESUMABLE", results };
 }
 
 function decisionFor({ session, resource, action }) {
-  const decision = authorize({ principal: session.principal, memberships: session.memberships, resource, action })
-  const membership = decision.membership ?? session.memberships.find((item) => item.workspaceId === resource.workspaceId && item.organizationId === resource.organizationId)
-  const snapshot = createAuthorizationSnapshot({ principal: session.principal, membership, resource, action, decision })
-  audit({ type: 'authorization.decision', snapshot })
-  return decision
+  const decision = authorize({
+    principal: session.principal,
+    memberships: session.memberships,
+    resource,
+    action,
+  });
+  const membership =
+    decision.membership ??
+    session.memberships.find(
+      (item) =>
+        item.workspaceId === resource.workspaceId &&
+        item.organizationId === resource.organizationId,
+    );
+  const snapshot = createAuthorizationSnapshot({
+    principal: session.principal,
+    membership,
+    resource,
+    action,
+    decision,
+  });
+  audit({ type: "authorization.decision", snapshot });
+  return decision;
 }
 
 const server = createServer(async (request, response) => {
-  const traceId = request.headers['x-trace-id'] || randomUUID()
-  const url = new URL(request.url, 'http://adx.local')
-  if (url.pathname === '/healthz') return write(response, 200, { status: 'ok', service: 'adx-api' }, traceId)
-  if (url.pathname === '/readyz') return write(response, 200, { status: 'ready', dependencies: ['postgres', 'object-store', 'identity-provider'] }, traceId)
-  if (request.method === 'GET' && url.pathname === '/auth/login') {
-    if (!process.env.ADX_OIDC_AUDIENCE || !process.env.ADX_OIDC_REDIRECT_URI) return write(response, 503, { code: 'OIDC_NOT_CONFIGURED' }, traceId)
-    const transaction = createPkceTransaction(); oauthTransactions.set(transaction.state, { ...transaction, expiresAt: Date.now() + 10 * 60_000 })
-    response.statusCode = 302; response.setHeader('location', googleAuthorizationUrl({ clientId: process.env.ADX_OIDC_AUDIENCE, redirectUri: process.env.ADX_OIDC_REDIRECT_URI, transaction })); return response.end()
+  const traceId = request.headers["x-trace-id"] || randomUUID();
+  const url = new URL(request.url, "http://adx.local");
+  if (url.pathname === "/healthz")
+    return write(response, 200, { status: "ok", service: "adx-api" }, traceId);
+  if (url.pathname === "/readyz")
+    return write(
+      response,
+      200,
+      {
+        status: "ready",
+        dependencies: ["postgres", "object-store", "identity-provider"],
+      },
+      traceId,
+    );
+  if (request.method === "GET" && url.pathname === "/auth/login") {
+    if (!process.env.ADX_OIDC_AUDIENCE || !process.env.ADX_OIDC_REDIRECT_URI)
+      return write(response, 503, { code: "OIDC_NOT_CONFIGURED" }, traceId);
+    const transaction = createPkceTransaction();
+    oauthTransactions.set(transaction.state, {
+      ...transaction,
+      expiresAt: Date.now() + 10 * 60_000,
+    });
+    response.statusCode = 302;
+    response.setHeader(
+      "location",
+      googleAuthorizationUrl({
+        clientId: process.env.ADX_OIDC_AUDIENCE,
+        redirectUri: process.env.ADX_OIDC_REDIRECT_URI,
+        transaction,
+      }),
+    );
+    return response.end();
   }
-  if (request.method === 'GET' && url.pathname === '/auth/callback') {
-    const state = url.searchParams.get('state'); const code = url.searchParams.get('code'); const transaction = oauthTransactions.get(state)
-    oauthTransactions.delete(state)
-    if (!state || !code || !transaction || transaction.expiresAt < Date.now()) return write(response, 400, { code: 'OIDC_STATE_REJECTED' }, traceId)
-    let principal
+  if (request.method === "GET" && url.pathname === "/auth/callback") {
+    const state = url.searchParams.get("state");
+    const code = url.searchParams.get("code");
+    const transaction = oauthTransactions.get(state);
+    oauthTransactions.delete(state);
+    if (!state || !code || !transaction || transaction.expiresAt < Date.now())
+      return write(response, 400, { code: "OIDC_STATE_REJECTED" }, traceId);
+    let principal;
     try {
-      const tokens = await exchangeGoogleCode({ code, verifier: transaction.verifier, clientId: process.env.ADX_OIDC_AUDIENCE, clientSecret: process.env.ADX_OIDC_CLIENT_SECRET, redirectUri: process.env.ADX_OIDC_REDIRECT_URI })
-      principal = verifyOidc ? await verifyOidc(tokens.id_token) : null
+      const tokens = await exchangeGoogleCode({
+        code,
+        verifier: transaction.verifier,
+        clientId: process.env.ADX_OIDC_AUDIENCE,
+        clientSecret: process.env.ADX_OIDC_CLIENT_SECRET,
+        redirectUri: process.env.ADX_OIDC_REDIRECT_URI,
+      });
+      principal = verifyOidc ? await verifyOidc(tokens.id_token) : null;
     } catch (error) {
-      const reason = oidcCallbackFailureReason(error)
-      const diagnostic = oidcFailureMetadata(error)
-      console.error(JSON.stringify({ service: 'adx-api', event: 'oidc.callback.rejected', traceId, reason, failure: diagnostic }))
-      return write(response, 401, { code: 'OIDC_CALLBACK_REJECTED', reason, diagnostic }, traceId)
+      const reason = oidcCallbackFailureReason(error);
+      const diagnostic = oidcFailureMetadata(error);
+      console.error(
+        JSON.stringify({
+          service: "adx-api",
+          event: "oidc.callback.rejected",
+          traceId,
+          reason,
+          failure: diagnostic,
+        }),
+      );
+      return write(
+        response,
+        401,
+        { code: "OIDC_CALLBACK_REJECTED", reason, diagnostic },
+        traceId,
+      );
     }
-    if (!principal) return write(response, 401, { code: 'OIDC_TOKEN_REJECTED' }, traceId)
-    let knownMemberships
-    try { knownMemberships = postgres ? await postgres.memberships(principal.id) : principal.id === alice.id ? memberships.alice : principal.id === bob.id ? memberships.bob : [] } catch (error) {
-      const diagnostic = oidcFailureMetadata(error)
-      console.error(JSON.stringify({ service: 'adx-api', event: 'identity.memberships.unavailable', traceId, principalId: principal.id, failure: diagnostic }))
-      return write(response, 503, { code: 'IDENTITY_MEMBERSHIP_STORE_UNAVAILABLE', diagnostic }, traceId)
+    if (!principal)
+      return write(response, 401, { code: "OIDC_TOKEN_REJECTED" }, traceId);
+    let knownMemberships;
+    try {
+      knownMemberships = postgres
+        ? await postgres.memberships(principal.id)
+        : principal.id === alice.id
+          ? memberships.alice
+          : principal.id === bob.id
+            ? memberships.bob
+            : [];
+    } catch (error) {
+      const diagnostic = oidcFailureMetadata(error);
+      console.error(
+        JSON.stringify({
+          service: "adx-api",
+          event: "identity.memberships.unavailable",
+          traceId,
+          principalId: principal.id,
+          failure: diagnostic,
+        }),
+      );
+      return write(
+        response,
+        503,
+        { code: "IDENTITY_MEMBERSHIP_STORE_UNAVAILABLE", diagnostic },
+        traceId,
+      );
     }
-    const token = sessions.create(principal, knownMemberships); audit({ type: 'session.login', principalId: principal.id, provider: 'google' })
-    response.statusCode = 302; response.setHeader('set-cookie', `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`); response.setHeader('location', realWorkspaceLocation(process.env.ADX_UI_ORIGIN)); return response.end()
+    const token = sessions.create(principal, knownMemberships);
+    audit({
+      type: "session.login",
+      principalId: principal.id,
+      provider: "google",
+    });
+    response.statusCode = 302;
+    response.setHeader(
+      "set-cookie",
+      `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`,
+    );
+    response.setHeader(
+      "location",
+      realWorkspaceLocation(process.env.ADX_UI_ORIGIN),
+    );
+    return response.end();
   }
-  if (process.env.ADX_TEST_AUTH === '1' && url.pathname === '/__test/session') {
-    const actor = url.searchParams.get('as'); const principal = actor === 'alice' ? alice : actor === 'approver' ? approver : actor === 'designReviewer' ? designReviewer : actor === 'designAuthorReviewer' ? designAuthorReviewer : actor === 'bob' ? bob : null
-    if (!principal) return write(response, 400, { code: 'UNKNOWN_TEST_PRINCIPAL' }, traceId)
-    const token = sessions.create(principal, memberships[actor]); audit({ type: 'session.login', principalId: principal.id, testOnly: true })
-    return write(response, 201, { token, principal: { id: principal.id, type: principal.type } }, traceId)
+  if (process.env.ADX_TEST_AUTH === "1" && url.pathname === "/__test/session") {
+    const actor = url.searchParams.get("as");
+    const principal =
+      actor === "alice"
+        ? alice
+        : actor === "approver"
+          ? approver
+          : actor === "designReviewer"
+            ? designReviewer
+            : actor === "designAuthorReviewer"
+              ? designAuthorReviewer
+              : actor === "bob"
+                ? bob
+                : null;
+    if (!principal)
+      return write(response, 400, { code: "UNKNOWN_TEST_PRINCIPAL" }, traceId);
+    const token = sessions.create(principal, memberships[actor]);
+    audit({ type: "session.login", principalId: principal.id, testOnly: true });
+    return write(
+      response,
+      201,
+      { token, principal: { id: principal.id, type: principal.type } },
+      traceId,
+    );
   }
-  const session = await sessionFor(request)
-  if (!session) return write(response, 401, { code: 'AUTHENTICATION_REQUIRED', message: 'A valid OIDC-backed session is required.' }, traceId)
-  if (request.method === 'GET' && url.pathname === '/v1/me') return write(response, 200, { principal: session.principal, memberships: session.memberships.map(({ organizationId, workspaceId, roles }) => ({ organizationId, workspaceId, roles })) }, traceId)
-  if (request.method === 'GET' && url.pathname === '/control-plane') { if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId); const workspaces = []; for (const membership of session.memberships) { const decision = decisionFor({ session, resource: workspaceResource(membership.workspaceId, membership.organizationId), action: 'workspace.read' }); if (decision.outcome === 'ALLOW') workspaces.push({ workspaceId: membership.workspaceId, changeCases: await changeCases.list({ organizationId: membership.organizationId, workspaceId: membership.workspaceId }) }) } return writeHtml(response, 200, controlPlanePage(session.principal, workspaces), traceId, session.principal) }
+  const session = await sessionFor(request);
+  if (!session)
+    return write(
+      response,
+      401,
+      {
+        code: "AUTHENTICATION_REQUIRED",
+        message: "A valid OIDC-backed session is required.",
+      },
+      traceId,
+    );
+  if (request.method === "GET" && url.pathname === "/v1/me")
+    return write(
+      response,
+      200,
+      {
+        principal: session.principal,
+        memberships: session.memberships.map(
+          ({ organizationId, workspaceId, roles }) => ({
+            organizationId,
+            workspaceId,
+            roles,
+          }),
+        ),
+      },
+      traceId,
+    );
+  if (request.method === "GET" && url.pathname === "/control-plane") {
+    if (!changeCases)
+      return write(
+        response,
+        503,
+        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
+        traceId,
+      );
+    const workspaces = [];
+    for (const membership of session.memberships) {
+      const decision = decisionFor({
+        session,
+        resource: workspaceResource(
+          membership.workspaceId,
+          membership.organizationId,
+        ),
+        action: "workspace.read",
+      });
+      if (decision.outcome === "ALLOW")
+        workspaces.push({
+          workspaceId: membership.workspaceId,
+          changeCases: await changeCases.list({
+            organizationId: membership.organizationId,
+            workspaceId: membership.workspaceId,
+          }),
+        });
+    }
+    return writeHtml(
+      response,
+      200,
+      controlPlanePage(session.principal, workspaces),
+      traceId,
+      session.principal,
+    );
+  }
 
-  const projectMatch = matchProjectRoute(url.pathname)
+  const projectMatch = matchProjectRoute(url.pathname);
   if (projectMatch) {
-    const [, workspaceId, projectId, operation, recordId] = projectMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!projects) return write(response, 503, { code: 'PROJECT_CATALOG_NOT_CONFIGURED' }, traceId)
-    const action = projectAuthorizationAction(request.method)
-    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
-    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    if (!projectId) return write(response, 200, { projects: await projects.list(scope) }, traceId)
+    const [, workspaceId, projectId, operation, recordId] = projectMatch;
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!projects)
+      return write(
+        response,
+        503,
+        { code: "PROJECT_CATALOG_NOT_CONFIGURED" },
+        traceId,
+      );
+    const action = projectAuthorizationAction(request.method);
+    if (!action)
+      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const decision = decisionFor({
+      session,
+      resource: workspaceResource(workspaceId, membership.organizationId),
+      action,
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
+    if (!projectId)
+      return write(
+        response,
+        200,
+        { projects: await projects.list(scope) },
+        traceId,
+      );
     if (!operation) {
-      const project = await projects.getProject(scope, projectId)
-      return project ? write(response, 200, { project }, traceId) : write(response, 404, { code: 'PROJECT_NOT_FOUND' }, traceId)
+      const project = await projects.getProject(scope, projectId);
+      return project
+        ? write(response, 200, { project }, traceId)
+        : write(response, 404, { code: "PROJECT_NOT_FOUND" }, traceId);
     }
-    if (operation === 'installations' && !recordId) return write(response, 200, { installations: await projects.listInstallations(scope, projectId) }, traceId)
-    if (operation === 'installations') {
-      const installation = await projects.getInstallation(scope, projectId, recordId)
-      return installation ? write(response, 200, { installation }, traceId) : write(response, 404, { code: 'PROJECT_INSTALLATION_NOT_FOUND' }, traceId)
+    if (operation === "installations" && !recordId)
+      return write(
+        response,
+        200,
+        { installations: await projects.listInstallations(scope, projectId) },
+        traceId,
+      );
+    if (operation === "installations") {
+      const installation = await projects.getInstallation(
+        scope,
+        projectId,
+        recordId,
+      );
+      return installation
+        ? write(response, 200, { installation }, traceId)
+        : write(
+            response,
+            404,
+            { code: "PROJECT_INSTALLATION_NOT_FOUND" },
+            traceId,
+          );
     }
-    if (operation === 'snapshots' && recordId) {
-      const snapshot = await projects.getSnapshot(scope, projectId, recordId)
-      return snapshot ? write(response, 200, { snapshot }, traceId) : write(response, 404, { code: 'PASSPORT_SNAPSHOT_NOT_FOUND' }, traceId)
+    if (operation === "snapshots" && recordId) {
+      const snapshot = await projects.getSnapshot(scope, projectId, recordId);
+      return snapshot
+        ? write(response, 200, { snapshot }, traceId)
+        : write(
+            response,
+            404,
+            { code: "PASSPORT_SNAPSHOT_NOT_FOUND" },
+            traceId,
+          );
     }
-    return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
+    return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
   }
 
-  const changeCaseListMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases$/i)
+  const changeCaseListMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases$/i,
+  );
   if (changeCaseListMatch) {
-    const workspaceId = changeCaseListMatch[1]; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
-    const action = request.method === 'GET' ? 'workspace.read' : request.method === 'POST' ? 'workspace.manage' : null
-    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
-    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    if (request.method === 'GET') return write(response, 200, { changeCases: await changeCases.list(scope, { state: url.searchParams.get('state') ?? undefined, riskTier: url.searchParams.get('riskTier') ?? undefined }) }, traceId)
-    const body = await readJson(request); const idempotencyKey = request.headers['idempotency-key']
-    if (typeof body?.title !== 'string' || !body.title.trim() || !['R0','R1','R2','R3','R4'].includes(body.riskTier)) return write(response, 400, { error: { code: 'CHANGE_CASE_CREATE_INVALID', message: 'title and riskTier are required.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
-    try { const result = await changeCases.create({ scope, principal: session.principal, title: body.title.trim(), riskTier: body.riskTier, idempotencyKey, correlationId: traceId }); return write(response, result.deduplicated ? 200 : 201, result, traceId) } catch (error) { return commandError(response, error, traceId) }
+    const workspaceId = changeCaseListMatch[1];
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!changeCases)
+      return write(
+        response,
+        503,
+        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
+        traceId,
+      );
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const action =
+      request.method === "GET"
+        ? "workspace.read"
+        : request.method === "POST"
+          ? "workspace.manage"
+          : null;
+    if (!action)
+      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
+    const decision = decisionFor({
+      session,
+      resource: workspaceResource(workspaceId, membership.organizationId),
+      action,
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
+    if (request.method === "GET")
+      return write(
+        response,
+        200,
+        {
+          changeCases: await changeCases.list(scope, {
+            state: url.searchParams.get("state") ?? undefined,
+            riskTier: url.searchParams.get("riskTier") ?? undefined,
+          }),
+        },
+        traceId,
+      );
+    const body = await readJson(request);
+    const idempotencyKey = request.headers["idempotency-key"];
+    if (
+      typeof body?.title !== "string" ||
+      !body.title.trim() ||
+      !["R0", "R1", "R2", "R3", "R4"].includes(body.riskTier)
+    )
+      return write(
+        response,
+        400,
+        {
+          error: {
+            code: "CHANGE_CASE_CREATE_INVALID",
+            message: "title and riskTier are required.",
+            retryable: false,
+            severity: "warning",
+            correlationId: traceId,
+          },
+        },
+        traceId,
+      );
+    try {
+      const result = await changeCases.create({
+        scope,
+        principal: session.principal,
+        title: body.title.trim(),
+        riskTier: body.riskTier,
+        idempotencyKey,
+        correlationId: traceId,
+      });
+      return write(response, result.deduplicated ? 200 : 201, result, traceId);
+    } catch (error) {
+      return commandError(response, error, traceId);
+    }
   }
 
-  const featureImportMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/feature-imports$/i)
+  const featureImportMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/feature-imports$/i,
+  );
   if (featureImportMatch) {
-    const workspaceId = featureImportMatch[1]; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
-    if (request.method !== 'POST') return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
-    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action: 'workspace.manage' })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    const workspaceId = featureImportMatch[1];
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!changeCases)
+      return write(
+        response,
+        503,
+        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
+        traceId,
+      );
+    if (request.method !== "POST")
+      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const decision = decisionFor({
+      session,
+      resource: workspaceResource(workspaceId, membership.organizationId),
+      action: "workspace.manage",
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
     try {
-      const body = await readJson(request)
-      return write(response, 200, await importFeatureBatch({ scope, principal: session.principal, importId: body?.importId, features: body?.features, correlationId: traceId }), traceId)
-    } catch (error) { return commandError(response, error, traceId) }
+      const body = await readJson(request);
+      return write(
+        response,
+        200,
+        await importFeatureBatch({
+          scope,
+          principal: session.principal,
+          importId: body?.importId,
+          features: body?.features,
+          correlationId: traceId,
+        }),
+        traceId,
+      );
+    } catch (error) {
+      return commandError(response, error, traceId);
+    }
   }
 
-  const publicGitHubMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/github-public\/(milestones|milestone-import)$/i)
+  const publicGitHubMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/github-public\/(milestones|milestone-import)$/i,
+  );
   if (publicGitHubMatch) {
-    const [, workspaceId, operation] = publicGitHubMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
-    const action = operation === 'milestones' && request.method === 'GET' ? 'workspace.read' : operation === 'milestone-import' && request.method === 'POST' ? 'workspace.manage' : null
-    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
-    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    const [, workspaceId, operation] = publicGitHubMatch;
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!changeCases)
+      return write(
+        response,
+        503,
+        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
+        traceId,
+      );
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const action =
+      operation === "milestones" && request.method === "GET"
+        ? "workspace.read"
+        : operation === "milestone-import" && request.method === "POST"
+          ? "workspace.manage"
+          : null;
+    if (!action)
+      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
+    const decision = decisionFor({
+      session,
+      resource: workspaceResource(workspaceId, membership.organizationId),
+      action,
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
     try {
-      if (operation === 'milestones') return write(response, 200, { milestones: await publicGitHubMilestones.listMilestones({ owner: url.searchParams.get('owner'), repository: url.searchParams.get('repository') }) }, traceId)
-      const body = await readJson(request)
-      const features = await publicGitHubMilestones.featuresFromMilestone({ owner: body?.owner, repository: body?.repository, milestone: body?.milestone, featureOwner: body?.featureOwner, targetRepository: body?.targetRepository, riskTier: body?.riskTier })
-      return write(response, 200, await importFeatureBatch({ scope, principal: session.principal, importId: body?.importId, features, correlationId: traceId }), traceId)
-    } catch (error) { return commandError(response, error, traceId) }
+      if (operation === "milestones")
+        return write(
+          response,
+          200,
+          {
+            milestones: await publicGitHubMilestones.listMilestones({
+              owner: url.searchParams.get("owner"),
+              repository: url.searchParams.get("repository"),
+            }),
+          },
+          traceId,
+        );
+      const body = await readJson(request);
+      const features = await publicGitHubMilestones.featuresFromMilestone({
+        owner: body?.owner,
+        repository: body?.repository,
+        milestone: body?.milestone,
+        featureOwner: body?.featureOwner,
+        targetRepository: body?.targetRepository,
+        riskTier: body?.riskTier,
+      });
+      return write(
+        response,
+        200,
+        await importFeatureBatch({
+          scope,
+          principal: session.principal,
+          importId: body?.importId,
+          features,
+          correlationId: traceId,
+        }),
+        traceId,
+      );
+    } catch (error) {
+      return commandError(response, error, traceId);
+    }
   }
 
-  const privateGitHubMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/github-private\/(milestones|milestone-import)$/i)
+  const privateGitHubMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/github-private\/(milestones|milestone-import)$/i,
+  );
   if (privateGitHubMatch) {
-    const [, workspaceId, operation] = privateGitHubMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
-    if (!privateGitHubMilestones) return write(response, 503, { code: 'GITHUB_PRIVATE_REPOSITORY_READ_NOT_CONFIGURED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
-    const action = operation === 'milestones' && request.method === 'GET' ? 'workspace.read' : operation === 'milestone-import' && request.method === 'POST' ? 'workspace.manage' : null
-    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
-    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
+    const [, workspaceId, operation] = privateGitHubMatch;
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!changeCases)
+      return write(
+        response,
+        503,
+        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
+        traceId,
+      );
+    if (!privateGitHubMilestones)
+      return write(
+        response,
+        503,
+        { code: "GITHUB_PRIVATE_REPOSITORY_READ_NOT_CONFIGURED" },
+        traceId,
+      );
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const action =
+      operation === "milestones" && request.method === "GET"
+        ? "workspace.read"
+        : operation === "milestone-import" && request.method === "POST"
+          ? "workspace.manage"
+          : null;
+    if (!action)
+      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
+    const decision = decisionFor({
+      session,
+      resource: workspaceResource(workspaceId, membership.organizationId),
+      action,
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
     try {
-      if (operation === 'milestones') return write(response, 200, { milestones: await privateGitHubMilestones.listMilestones({ owner: url.searchParams.get('owner'), repository: url.searchParams.get('repository') }) }, traceId)
-      const body = await readJson(request)
-      if (['token', 'accessToken', 'githubToken'].some((key) => Object.hasOwn(body ?? {}, key))) throw new ChangeCaseError('GITHUB_PRIVATE_BROWSER_CREDENTIAL_REJECTED', 'GitHub credentials must remain server-side and cannot be supplied by the browser.', { retryable: false, severity: 'warning' })
-      const features = await privateGitHubMilestones.featuresFromMilestone({ owner: body?.owner, repository: body?.repository, milestone: body?.milestone, featureOwner: body?.featureOwner, targetRepository: body?.targetRepository, riskTier: body?.riskTier })
-      return write(response, 200, await importFeatureBatch({ scope, principal: session.principal, importId: body?.importId, features, correlationId: traceId }), traceId)
-    } catch (error) { return commandError(response, error, traceId) }
+      if (operation === "milestones")
+        return write(
+          response,
+          200,
+          {
+            milestones: await privateGitHubMilestones.listMilestones({
+              owner: url.searchParams.get("owner"),
+              repository: url.searchParams.get("repository"),
+            }),
+          },
+          traceId,
+        );
+      const body = await readJson(request);
+      if (
+        ["token", "accessToken", "githubToken"].some((key) =>
+          Object.hasOwn(body ?? {}, key),
+        )
+      )
+        throw new ChangeCaseError(
+          "GITHUB_PRIVATE_BROWSER_CREDENTIAL_REJECTED",
+          "GitHub credentials must remain server-side and cannot be supplied by the browser.",
+          { retryable: false, severity: "warning" },
+        );
+      const features = await privateGitHubMilestones.featuresFromMilestone({
+        owner: body?.owner,
+        repository: body?.repository,
+        milestone: body?.milestone,
+        featureOwner: body?.featureOwner,
+        targetRepository: body?.targetRepository,
+        riskTier: body?.riskTier,
+      });
+      return write(
+        response,
+        200,
+        await importFeatureBatch({
+          scope,
+          principal: session.principal,
+          importId: body?.importId,
+          features,
+          correlationId: traceId,
+        }),
+        traceId,
+      );
+    } catch (error) {
+      return commandError(response, error, traceId);
+    }
   }
 
-  const executionMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?|\/(dispatch))?$/i)
+  const executionMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?|\/(dispatch))?$/i,
+  );
   if (executionMatch) {
-    const [, workspaceId, changeCaseId, collection, leaseId, command, dispatch] = executionMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!changeCases || !executions) return write(response, 503, { code: 'EXECUTION_GOVERNANCE_NOT_CONFIGURED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }; const current = await changeCases.get(scope, changeCaseId)
-    if (!current) return write(response, 404, { code: 'CHANGE_CASE_NOT_FOUND' }, traceId)
-    const action = request.method === 'GET' ? 'resource.read' : 'resource.write'; const decision = decisionFor({ session, resource: changeCaseResource(current, scope), action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    if (request.method === 'GET' && !collection) return write(response, 200, await executions.view(scope, changeCaseId), traceId)
-    const body = await readJson(request)
+    const [
+      ,
+      workspaceId,
+      changeCaseId,
+      collection,
+      leaseId,
+      command,
+      dispatch,
+    ] = executionMatch;
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!changeCases || !executions)
+      return write(
+        response,
+        503,
+        { code: "EXECUTION_GOVERNANCE_NOT_CONFIGURED" },
+        traceId,
+      );
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const current = await changeCases.get(scope, changeCaseId);
+    if (!current)
+      return write(response, 404, { code: "CHANGE_CASE_NOT_FOUND" }, traceId);
+    const action =
+      request.method === "GET" ? "resource.read" : "resource.write";
+    const decision = decisionFor({
+      session,
+      resource: changeCaseResource(current, scope),
+      action,
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
+    if (request.method === "GET" && !collection)
+      return write(
+        response,
+        200,
+        await executions.view(scope, changeCaseId),
+        traceId,
+      );
+    const body = await readJson(request);
     try {
-      if (request.method === 'POST' && dispatch === 'dispatch') {
-        if (!codingAgentExecution) throw new ChangeCaseError('CODING_AGENT_EXECUTOR_NOT_CONFIGURED', 'Coding-agent execution is not configured for this ADX server.')
-        const governance = await changeCases.intakeView(scope, changeCaseId)
-        return write(response, 202, await codingAgentExecution.start({ scope, principal: session.principal, changeCase: current, provider: body?.provider, task: executionTask(current, governance, body?.templateId), expectedVersion: body?.expectedVersion, idempotencyKey: request.headers['idempotency-key'] }), traceId)
+      if (request.method === "POST" && dispatch === "dispatch") {
+        if (!codingAgentExecution)
+          throw new ChangeCaseError(
+            "CODING_AGENT_EXECUTOR_NOT_CONFIGURED",
+            "Coding-agent execution is not configured for this ADX server.",
+          );
+        const governance = await changeCases.intakeView(scope, changeCaseId);
+        return write(
+          response,
+          202,
+          await codingAgentExecution.start({
+            scope,
+            principal: session.principal,
+            changeCase: current,
+            provider: body?.provider,
+            task: executionTask(current, governance, body?.templateId),
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey: request.headers["idempotency-key"],
+          }),
+          traceId,
+        );
       }
-      if (request.method === 'POST' && collection === 'leases' && !leaseId) return write(response, 201, await executions.issueLease({ scope, principal: session.principal, changeCaseId, request: body }), traceId)
-      if (request.method === 'POST' && collection === 'leases' && leaseId && command === 'revoke') return write(response, 200, await executions.revokeLease({ scope, principal: session.principal, leaseId, reason: body?.reason }), traceId)
-      return write(response, 400, { error: { code: 'EXECUTION_COMMAND_INVALID', message: 'The execution governance command is invalid.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
-    } catch (error) { return commandError(response, error, traceId) }
+      if (request.method === "POST" && collection === "leases" && !leaseId)
+        return write(
+          response,
+          201,
+          await executions.issueLease({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            request: body,
+          }),
+          traceId,
+        );
+      if (
+        request.method === "POST" &&
+        collection === "leases" &&
+        leaseId &&
+        command === "revoke"
+      )
+        return write(
+          response,
+          200,
+          await executions.revokeLease({
+            scope,
+            principal: session.principal,
+            leaseId,
+            reason: body?.reason,
+          }),
+          traceId,
+        );
+      return write(
+        response,
+        400,
+        {
+          error: {
+            code: "EXECUTION_COMMAND_INVALID",
+            message: "The execution governance command is invalid.",
+            retryable: false,
+            severity: "warning",
+            correlationId: traceId,
+          },
+        },
+        traceId,
+      );
+    } catch (error) {
+      return commandError(response, error, traceId);
+    }
   }
 
-  const changeCaseMatch = matchChangeCaseRoute(url.pathname)
+  const changeCaseMatch = matchChangeCaseRoute(url.pathname);
   if (changeCaseMatch) {
-    const [, workspaceId, changeCaseId, operation] = changeCaseMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    if (!changeCases) return write(response, 503, { code: 'CHANGE_CASE_LEDGER_NOT_CONFIGURED' }, traceId)
-    const scope = { organizationId: membership.organizationId, workspaceId: membership.workspaceId }
-    const current = await changeCases.get(scope, changeCaseId)
-    if (!current) return write(response, 404, { code: 'CHANGE_CASE_NOT_FOUND' }, traceId)
-    const action = authorizationAction(request.method, operation)
-    const decision = decisionFor({ session, resource: changeCaseResource(current, scope), action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    if (request.method === 'GET' && !operation) return write(response, 200, { changeCase: current }, traceId)
-    if (request.method === 'GET' && operation === 'timeline') return write(response, 200, { events: await changeCases.timeline(scope, changeCaseId) }, traceId)
-    if (request.method === 'GET' && operation === 'governance') return write(response, 200, await changeCases.intakeView(scope, changeCaseId), traceId)
-    if (request.method === 'GET' && operation === 'design') return write(response, 200, await changeCases.designView(scope, changeCaseId), traceId)
-    if (request.method === 'GET' && operation === 'evidence') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, { evidence: await evidenceRepository.list(scope, changeCaseId) }, traceId) }
-    if (request.method === 'GET' && operation === 'application-preview') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`; return writeHtml(response, 200, renderApplicationPreviewPage(current, { profiles: [...localPreviewManager.profiles.values()].map(({ id, label }) => ({ id, label })), evidence: await evidenceRepository.list(scope, changeCaseId), previews: localPreviewManager.list().filter((preview) => preview.changeCaseId === changeCaseId), canManage: writeDecision.outcome === 'ALLOW', startEndpoint: `${base}/application-preview-start`, stopEndpoint: `${base}/application-preview-stop` }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'delivery-preview') { if (!previewDeliveries) return write(response, 503, { code: 'GIT_PREVIEW_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, { previewPlans: await previewDeliveries.list(scope, changeCaseId) }, traceId) }
-    if (request.method === 'GET' && operation === 'outcomes') { if (!outcomes) return write(response, 503, { code: 'OUTCOME_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, { outcomes: await outcomes.list(scope, changeCaseId) }, traceId) }
-    if (request.method === 'GET' && operation === 'outcome-review') { if (!outcomes) return write(response, 503, { code: 'OUTCOME_REPOSITORY_NOT_CONFIGURED' }, traceId); return writeHtml(response, 200, outcomeReviewPage(current, await outcomes.list(scope, changeCaseId)), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'delivery-review') { if (!previewDeliveries || !previewCi) return write(response, 503, { code: 'GIT_PREVIEW_REVIEW_NOT_CONFIGURED' }, traceId); const plans = await previewDeliveries.list(scope, changeCaseId); const review = plans[0] ? { ...(await previewCi.view(scope, plans[0].id)), approvals: await previewDeliveries.approvals(scope, plans[0].id), execution: await previewDeliveries.execution(scope, plans[0].id) } : null; const reviewDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.review' }); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`; return writeHtml(response, 200, renderDeliveryReviewPage(current, plans, review, { canReview: reviewDecision.outcome === 'ALLOW', canPrepare: Boolean(previewDeliveryPreparation.service) && writeDecision.outcome === 'ALLOW', canExecute: Boolean(githubDraftPrExecution.service) && writeDecision.outcome === 'ALLOW', prepareEndpoint: `${base}/delivery-preview-prepare`, executeEndpoint: `${base}/delivery-draft-pr`, ciRefreshEndpoint: `${base}/delivery-ci-refresh`, decisionEndpoint: `${base}/delivery-decision`, outcomeReviewUrl: `${base}/outcome-review` }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'execution-handoff') { const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const dispatchEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution/dispatch`; const statusEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution`; const evidenceReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`; const candidateUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`; return writeHtml(response, 200, renderExecutionHandoffPage(current, { canSubmit: writeDecision.outcome === 'ALLOW', signedInRoles: membership.roles, dispatchEndpoint, statusEndpoint, evidenceReviewUrl, candidateUrl, providers: codingAgentProvidersForUi(), templates: listAgentSpecTemplates('coding') }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'generated-candidate') return writeHtml(response, 200, await renderCandidateBrowserPage({ candidateRoot, baseUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`, requestedPath: url.searchParams.get('path') ?? '' }), traceId, session.principal)
-    if (request.method === 'GET' && operation === 'evidence-review') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const reviewDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.review' }); const handoffUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution-handoff`; const runEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-run`; const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-decision`; const previewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/application-preview`; const verifierReadiness = localIndependentVerifier ? await localIndependentVerifier.readiness() : { ready: false, code: 'LOCAL_VERIFIER_NOT_CONFIGURED' }; return writeHtml(response, 200, renderVerificationReviewPage(current, await evidenceRepository.list(scope, changeCaseId), { canRun: writeDecision.outcome === 'ALLOW', canReview: reviewDecision.outcome === 'ALLOW', handoffUrl, runEndpoint, decisionEndpoint, previewUrl, verifierConfigured: verifierReadiness.ready, verifierIssue: verifierReadiness.code }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'intake-workshop') {
-      const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' })
-      const classifyEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/classify`
-      const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`
-      return writeHtml(response, 200, intakeGatePage(current, await changeCases.intakeView(scope, changeCaseId), { canWrite: writeDecision.outcome === 'ALLOW', classifyEndpoint, storyWorkshopUrl }), traceId, session.principal)
+    const [, workspaceId, changeCaseId, operation] = changeCaseMatch;
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    if (!changeCases)
+      return write(
+        response,
+        503,
+        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
+        traceId,
+      );
+    const scope = {
+      organizationId: membership.organizationId,
+      workspaceId: membership.workspaceId,
+    };
+    const current = await changeCases.get(scope, changeCaseId);
+    if (!current)
+      return write(response, 404, { code: "CHANGE_CASE_NOT_FOUND" }, traceId);
+    const action = authorizationAction(request.method, operation);
+    const decision = decisionFor({
+      session,
+      resource: changeCaseResource(current, scope),
+      action,
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
+    if (request.method === "GET" && !operation)
+      return write(response, 200, { changeCase: current }, traceId);
+    if (request.method === "GET" && operation === "timeline")
+      return write(
+        response,
+        200,
+        { events: await changeCases.timeline(scope, changeCaseId) },
+        traceId,
+      );
+    if (request.method === "GET" && operation === "governance")
+      return write(
+        response,
+        200,
+        await changeCases.intakeView(scope, changeCaseId),
+        traceId,
+      );
+    if (request.method === "GET" && operation === "design")
+      return write(
+        response,
+        200,
+        await changeCases.designView(scope, changeCaseId),
+        traceId,
+      );
+    if (request.method === "GET" && operation === "evidence") {
+      if (!evidenceRepository)
+        return write(
+          response,
+          503,
+          { code: "EVIDENCE_REPOSITORY_NOT_CONFIGURED" },
+          traceId,
+        );
+      return write(
+        response,
+        200,
+        { evidence: await evidenceRepository.list(scope, changeCaseId) },
+        traceId,
+      );
     }
-    if (request.method === 'GET' && operation === 'story-workshop') {
-      const authorDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' })
-      const governance = await changeCases.intakeView(scope, changeCaseId)
-      const storiesEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/stories`
-      const storySuggestionsEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-suggestions`
-      const storyReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-review`
-      return writeHtml(response, 200, storyWorkshopPageWithModelSelector(current, governance, { canAuthor: authorDecision.outcome === 'ALLOW', storiesEndpoint, storySuggestionsEndpoint, storyReviewUrl, aiStatus: storyDecompositionAgent.status(), homeUrl: uiRedirectLocation(process.env.ADX_UI_ORIGIN) }), traceId, session.principal)
+    if (request.method === "GET" && operation === "application-preview") {
+      if (!evidenceRepository)
+        return write(
+          response,
+          503,
+          { code: "EVIDENCE_REPOSITORY_NOT_CONFIGURED" },
+          traceId,
+        );
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`;
+      return writeHtml(
+        response,
+        200,
+        renderApplicationPreviewPage(current, {
+          profiles: [...localPreviewManager.profiles.values()].map(
+            ({ id, label }) => ({ id, label }),
+          ),
+          evidence: await evidenceRepository.list(scope, changeCaseId),
+          previews: localPreviewManager
+            .list()
+            .filter((preview) => preview.changeCaseId === changeCaseId),
+          spotlight: executions
+            ? featureSpotlightFromEvents(
+                (await executions.view(scope, changeCaseId)).events,
+              )
+            : null,
+          canManage: writeDecision.outcome === "ALLOW",
+          startEndpoint: `${base}/application-preview-start`,
+          stopEndpoint: `${base}/application-preview-stop`,
+        }),
+        traceId,
+        session.principal,
+      );
     }
-    if (request.method === 'GET' && operation === 'story-review') {
-      const reviewDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' })
-      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-decision`
-      const designReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-review`
-      const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`
-      const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`
-      const governance = await changeCases.intakeView(scope, changeCaseId)
-      return writeHtml(response, 200, renderStoryReviewPage(current, governance, { canReview: reviewDecision.outcome === 'ALLOW', isStoryAuthor: governance.stories?.authoredBy === session.principal.id, decisionEndpoint, designReviewUrl, releasePlanningUrl, storyWorkshopUrl }), traceId, session.principal)
+    if (request.method === "GET" && operation === "delivery-preview") {
+      if (!previewDeliveries)
+        return write(
+          response,
+          503,
+          { code: "GIT_PREVIEW_REPOSITORY_NOT_CONFIGURED" },
+          traceId,
+        );
+      return write(
+        response,
+        200,
+        { previewPlans: await previewDeliveries.list(scope, changeCaseId) },
+        traceId,
+      );
     }
-    if (request.method === 'GET' && operation === 'story-release-planning') { if (!storyMilestones) return write(response, 503, { code: 'STORY_RELEASE_PLANNING_NOT_CONFIGURED' }, traceId); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`; const view = await storyMilestones.view(scope, changeCaseId); return writeHtml(response, 200, renderStoryReleasePlanningPage(current, view, { canPlan: writeDecision.outcome === 'ALLOW', publisherConfigured: Boolean(configuredStoryMilestones.service), endpoints: { priorityEndpoint: `${base}/story-priority-plan`, milestonesEndpoint: `${base}/story-milestones`, publishEndpoint: `${base}/story-milestone-publish`, storyDigest: view.approvedStories?.storyDigest ?? null } }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'story-milestones') { if (!configuredStoryMilestones.service) return write(response, 503, { code: configuredStoryMilestones.code }, traceId); return write(response, 200, { milestones: await configuredStoryMilestones.service.listMilestones({ owner: url.searchParams.get('owner'), repository: url.searchParams.get('repository') }) }, traceId) }
-    if (request.method === 'GET' && operation === 'design-workbench') { const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const designEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design`; const designReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-review`; return writeHtml(response, 200, renderDesignCapturePage(current, { canWrite: writeDecision.outcome === 'ALLOW', designEndpoint, designReviewUrl }), traceId, session.principal) }
-    if (request.method === 'GET' && operation === 'design-review') { const view = await changeCases.designView(scope, changeCaseId); const reviewDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.review' }); const writeDecision = decisionFor({ session, resource: changeCaseResource(current, scope), action: 'resource.write' }); const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-decision`; const designCaptureUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-workbench`; const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`; return writeHtml(response, 200, renderDesignReviewPage(current, view, { canReview: reviewDecision.outcome === 'ALLOW', canWrite: writeDecision.outcome === 'ALLOW', isDesignAuthor: view.design?.authoredBy === session.principal.id, decisionEndpoint, designCaptureUrl, releasePlanningUrl }), traceId, session.principal) }
-    const body = await readJson(request); const idempotencyKey = request.headers['idempotency-key']
+    if (request.method === "GET" && operation === "outcomes") {
+      if (!outcomes)
+        return write(
+          response,
+          503,
+          { code: "OUTCOME_REPOSITORY_NOT_CONFIGURED" },
+          traceId,
+        );
+      return write(
+        response,
+        200,
+        { outcomes: await outcomes.list(scope, changeCaseId) },
+        traceId,
+      );
+    }
+    if (request.method === "GET" && operation === "outcome-review") {
+      if (!outcomes)
+        return write(
+          response,
+          503,
+          { code: "OUTCOME_REPOSITORY_NOT_CONFIGURED" },
+          traceId,
+        );
+      return writeHtml(
+        response,
+        200,
+        outcomeReviewPage(current, await outcomes.list(scope, changeCaseId)),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "delivery-review") {
+      if (!previewDeliveries || !previewCi)
+        return write(
+          response,
+          503,
+          { code: "GIT_PREVIEW_REVIEW_NOT_CONFIGURED" },
+          traceId,
+        );
+      const plans = await previewDeliveries.list(scope, changeCaseId);
+      const review = plans[0]
+        ? {
+            ...(await previewCi.view(scope, plans[0].id)),
+            approvals: await previewDeliveries.approvals(scope, plans[0].id),
+            execution: await previewDeliveries.execution(scope, plans[0].id),
+          }
+        : null;
+      const reviewDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.review",
+      });
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`;
+      return writeHtml(
+        response,
+        200,
+        renderDeliveryReviewPage(current, plans, review, {
+          canReview: reviewDecision.outcome === "ALLOW",
+          canPrepare:
+            Boolean(previewDeliveryPreparation.service) &&
+            writeDecision.outcome === "ALLOW",
+          canExecute:
+            Boolean(githubDraftPrExecution.service) &&
+            writeDecision.outcome === "ALLOW",
+          prepareEndpoint: `${base}/delivery-preview-prepare`,
+          executeEndpoint: `${base}/delivery-draft-pr`,
+          ciRefreshEndpoint: `${base}/delivery-ci-refresh`,
+          decisionEndpoint: `${base}/delivery-decision`,
+          outcomeReviewUrl: `${base}/outcome-review`,
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "execution-handoff") {
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const dispatchEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution/dispatch`;
+      const statusEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution`;
+      const evidenceReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`;
+      const candidateUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`;
+      return writeHtml(
+        response,
+        200,
+        renderExecutionHandoffPage(current, {
+          canSubmit: writeDecision.outcome === "ALLOW",
+          signedInRoles: membership.roles,
+          dispatchEndpoint,
+          statusEndpoint,
+          evidenceReviewUrl,
+          candidateUrl,
+          providers: codingAgentProvidersForUi(),
+          templates: listAgentSpecTemplates("coding"),
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "generated-candidate")
+      return writeHtml(
+        response,
+        200,
+        await renderCandidateBrowserPage({
+          candidateRoot,
+          baseUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`,
+          requestedPath: url.searchParams.get("path") ?? "",
+        }),
+        traceId,
+        session.principal,
+      );
+    if (request.method === "GET" && operation === "evidence-review") {
+      if (!evidenceRepository)
+        return write(
+          response,
+          503,
+          { code: "EVIDENCE_REPOSITORY_NOT_CONFIGURED" },
+          traceId,
+        );
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const reviewDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.review",
+      });
+      const handoffUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution-handoff`;
+      const runEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-run`;
+      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-decision`;
+      const previewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/application-preview`;
+      const verifierReadiness = localIndependentVerifier
+        ? await localIndependentVerifier.readiness()
+        : { ready: false, code: "LOCAL_VERIFIER_NOT_CONFIGURED" };
+      return writeHtml(
+        response,
+        200,
+        renderVerificationReviewPage(
+          current,
+          await evidenceRepository.list(scope, changeCaseId),
+          {
+            canRun: writeDecision.outcome === "ALLOW",
+            canReview: reviewDecision.outcome === "ALLOW",
+            handoffUrl,
+            runEndpoint,
+            decisionEndpoint,
+            previewUrl,
+            verifierConfigured: verifierReadiness.ready,
+            verifierIssue: verifierReadiness.code,
+          },
+        ),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "intake-workshop") {
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const classifyEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/classify`;
+      const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`;
+      return writeHtml(
+        response,
+        200,
+        intakeGatePage(
+          current,
+          await changeCases.intakeView(scope, changeCaseId),
+          {
+            canWrite: writeDecision.outcome === "ALLOW",
+            classifyEndpoint,
+            storyWorkshopUrl,
+          },
+        ),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "story-workshop") {
+      const authorDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const governance = await changeCases.intakeView(scope, changeCaseId);
+      const storiesEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/stories`;
+      const storySuggestionsEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-suggestions`;
+      const storyReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-review`;
+      return writeHtml(
+        response,
+        200,
+        storyWorkshopPageWithModelSelector(current, governance, {
+          canAuthor: authorDecision.outcome === "ALLOW",
+          storiesEndpoint,
+          storySuggestionsEndpoint,
+          storyReviewUrl,
+          aiStatus: storyDecompositionAgent.status(),
+          homeUrl: uiRedirectLocation(process.env.ADX_UI_ORIGIN),
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "story-review") {
+      const reviewDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-decision`;
+      const designReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-review`;
+      const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`;
+      const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`;
+      const governance = await changeCases.intakeView(scope, changeCaseId);
+      return writeHtml(
+        response,
+        200,
+        renderStoryReviewPage(current, governance, {
+          canReview: reviewDecision.outcome === "ALLOW",
+          isStoryAuthor:
+            governance.stories?.authoredBy === session.principal.id,
+          decisionEndpoint,
+          designReviewUrl,
+          releasePlanningUrl,
+          storyWorkshopUrl,
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "story-release-planning") {
+      if (!storyMilestones)
+        return write(
+          response,
+          503,
+          { code: "STORY_RELEASE_PLANNING_NOT_CONFIGURED" },
+          traceId,
+        );
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`;
+      const view = await storyMilestones.workspaceView(scope);
+      return writeHtml(
+        response,
+        200,
+        renderStoryReleasePlanningPage(current, view, {
+          canPlan: writeDecision.outcome === "ALLOW",
+          publisherConfigured: Boolean(configuredStoryMilestones.service),
+          designReviewUrl: `${base}/design-review`,
+          endpoints: {
+            priorityEndpoint: `${base}/story-priority-plan`,
+            milestonesEndpoint: `${base}/story-milestones`,
+            publishEndpoint: `${base}/story-milestone-publish`,
+            storyDigest: "workspace",
+          },
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "story-milestones") {
+      if (!configuredStoryMilestones.service)
+        return write(
+          response,
+          503,
+          { code: configuredStoryMilestones.code },
+          traceId,
+        );
+      return write(
+        response,
+        200,
+        {
+          milestones: await configuredStoryMilestones.service.listMilestones({
+            owner: url.searchParams.get("owner"),
+            repository: url.searchParams.get("repository"),
+          }),
+        },
+        traceId,
+      );
+    }
+    if (request.method === "GET" && operation === "design-workbench") {
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const designEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design`;
+      const designReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-review`;
+      return writeHtml(
+        response,
+        200,
+        renderDesignCapturePage(current, {
+          canWrite: writeDecision.outcome === "ALLOW",
+          designEndpoint,
+          designReviewUrl,
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    if (request.method === "GET" && operation === "design-review") {
+      const view = await changeCases.designView(scope, changeCaseId);
+      const reviewDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.review",
+      });
+      const writeDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.write",
+      });
+      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-decision`;
+      const designCaptureUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-workbench`;
+      const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`;
+      return writeHtml(
+        response,
+        200,
+        renderDesignReviewPage(current, view, {
+          canReview: reviewDecision.outcome === "ALLOW",
+          canWrite: writeDecision.outcome === "ALLOW",
+          isDesignAuthor: view.design?.authoredBy === session.principal.id,
+          decisionEndpoint,
+          designCaptureUrl,
+          releasePlanningUrl,
+        }),
+        traceId,
+        session.principal,
+      );
+    }
+    const body = await readJson(request);
+    const idempotencyKey = request.headers["idempotency-key"];
     try {
-      if (request.method === 'POST' && operation === 'draft' && typeof body?.title === 'string') return write(response, 200, await changeCases.editDraft({ scope, principal: session.principal, changeCaseId, title: body.title.trim(), expectedVersion: body.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'transitions' && typeof body?.toState === 'string') return write(response, 200, await changeCases.transition({ scope, principal: session.principal, changeCaseId, toState: body.toState, expectedVersion: body.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'intake') return write(response, 200, await changeCases.captureIntent({ scope, principal: session.principal, changeCaseId, intent: body?.intent, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'classify') return write(response, 200, await changeCases.classifyIntake({ scope, principal: session.principal, changeCaseId, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'story-suggestions') return write(response, 200, await storyDecompositionAgent.run({ changeCase: current, governance: await changeCases.intakeView(scope, changeCaseId), correlationId: traceId, model: body?.model, skillId: body?.skillId, templateId: body?.templateId, templateGuidance: body?.templateGuidance }), traceId)
-      if (request.method === 'POST' && operation === 'stories') return write(response, 200, await changeCases.generateStories({ scope, principal: session.principal, changeCaseId, stories: body?.stories, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'story-decision') return write(response, 200, await changeCases.decideStories({ scope, principal: session.principal, changeCaseId, storyDigest: body?.storyDigest, decision: body?.decision, rationale: body?.rationale, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'story-priority-plan') { if (!storyMilestones) return write(response, 503, { code: 'STORY_RELEASE_PLANNING_NOT_CONFIGURED' }, traceId); return write(response, 200, await storyMilestones.prioritize({ scope, principal: session.principal, changeCaseId, storyDigest: body?.storyDigest, priorities: body?.priorities, expectedVersion: body?.expectedVersion }), traceId) }
-      if (request.method === 'POST' && operation === 'story-milestone-publish') { if (!configuredStoryMilestones.service) return write(response, 503, { code: configuredStoryMilestones.code }, traceId); return write(response, 201, await configuredStoryMilestones.service.publish({ scope, principal: session.principal, changeCaseId, owner: body?.owner, repository: body?.repository, milestoneNumber: body?.milestoneNumber, expectedVersion: body?.expectedVersion }), traceId) }
-      if (request.method === 'POST' && operation === 'design') return write(response, 200, await changeCases.captureDesign({ scope, principal: session.principal, changeCaseId, design: body?.design, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'design-exception') return write(response, 200, await changeCases.recordDesignException({ scope, principal: session.principal, changeCaseId, designDigest: body?.designDigest, reason: body?.reason, expiresAt: body?.expiresAt, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'design-decision') return write(response, 200, await changeCases.decideDesign({ scope, principal: session.principal, changeCaseId, designDigest: body?.designDigest, decision: body?.decision, rationale: body?.rationale, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'verification-run') { if (!localIndependentVerifier) return write(response, 503, { code: 'LOCAL_VERIFIER_NOT_CONFIGURED' }, traceId); if (current.state !== 'AWAITING_VERIFICATION') throw new ChangeCaseError('VERIFICATION_NOT_AWAITED', 'The Change Case is not awaiting independent verification.'); if (body?.expectedVersion !== current.projectionVersion) throw new ChangeCaseError('VERSION_CONFLICT', 'The Change Case changed before verification started.'); return write(response, 200, await localIndependentVerifier.verify({ scope, changeCaseId }), traceId) }
-      if (request.method === 'POST' && operation === 'application-preview-start') { if (!evidenceRepository) return write(response, 503, { code: 'EVIDENCE_REPOSITORY_NOT_CONFIGURED' }, traceId); if (current.state !== 'AWAITING_VERIFICATION') throw new ChangeCaseError('PREVIEW_NOT_AVAILABLE', 'A manual preview may be started only while this Change Case awaits verification.'); if (body?.expectedVersion !== current.projectionVersion) throw new ChangeCaseError('VERSION_CONFLICT', 'The Change Case changed before preview deployment started.'); const evidence = await evidenceRepository.list(scope, changeCaseId); if (!evidence.some((item) => item.status === 'PASS' && item.candidateDigest === body?.candidateDigest)) throw new ChangeCaseError('PREVIEW_EVIDENCE_REQUIRED', 'A retained passing independent evidence bundle is required for this candidate preview.'); return write(response, 201, await localPreviewManager.start({ profileId: body?.profileId, candidateDigest: body?.candidateDigest, changeCaseId }), traceId) }
-      if (request.method === 'POST' && operation === 'application-preview-stop') { const preview = localPreviewManager.list().find((item) => item.id === body?.previewId && item.changeCaseId === changeCaseId); if (!preview) throw new ChangeCaseError('LOCAL_PREVIEW_NOT_FOUND', 'The requested local preview does not belong to this Change Case.'); return write(response, 200, await localPreviewManager.stop(preview.id), traceId) }
-      if (request.method === 'POST' && operation === 'verification-decision') return write(response, 200, await changeCases.completeVerification({ scope, principal: session.principal, changeCaseId, candidateDigest: body?.candidateDigest, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'delivery-preview-prepare') { if (!previewDeliveryPreparation.service) return write(response, 503, { code: previewDeliveryPreparation.code }, traceId); return write(response, 201, await previewDeliveryPreparation.service.prepare({ scope, changeCase: current, timeline: await changeCases.timeline(scope, changeCaseId) }), traceId) }
-      if (request.method === 'POST' && operation === 'delivery-draft-pr') { if (!githubDraftPrExecution.service) return write(response, 503, { code: githubDraftPrExecution.code }, traceId); return write(response, 201, await githubDraftPrExecution.service.execute({ scope, previewPlanId: body?.previewPlanId }), traceId) }
-      if (request.method === 'POST' && operation === 'delivery-ci-refresh') { if (!githubDraftPrExecution.service) return write(response, 503, { code: githubDraftPrExecution.code }, traceId); return write(response, 200, await githubDraftPrExecution.service.refreshCi({ scope, previewPlanId: body?.previewPlanId }), traceId) }
-      if (request.method === 'POST' && operation === 'outcome-completion') return write(response, 200, await changeCases.completeOutcome({ scope, principal: session.principal, changeCaseId, outcomeDigest: body?.outcomeDigest, expectedVersion: body?.expectedVersion, idempotencyKey, correlationId: traceId }), traceId)
-      if (request.method === 'POST' && operation === 'delivery-decision') { if (!previewDeliveries) return write(response, 503, { code: 'GIT_PREVIEW_REPOSITORY_NOT_CONFIGURED' }, traceId); return write(response, 200, await previewDeliveries.decide({ scope, principal: session.principal, previewPlanId: body?.previewPlanId, commitDigest: body?.commitDigest, decision: body?.decision, rationale: body?.rationale }), traceId) }
-      return write(response, 400, { error: { code: 'CHANGE_CASE_COMMAND_INVALID', message: 'The Change Case command is invalid.', retryable: false, severity: 'warning', correlationId: traceId } }, traceId)
-    } catch (error) { return commandError(response, error, traceId) }
+      if (
+        request.method === "POST" &&
+        operation === "draft" &&
+        typeof body?.title === "string"
+      )
+        return write(
+          response,
+          200,
+          await changeCases.editDraft({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            title: body.title.trim(),
+            expectedVersion: body.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (
+        request.method === "POST" &&
+        operation === "transitions" &&
+        typeof body?.toState === "string"
+      )
+        return write(
+          response,
+          200,
+          await changeCases.transition({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            toState: body.toState,
+            expectedVersion: body.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "intake")
+        return write(
+          response,
+          200,
+          await changeCases.captureIntent({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            intent: body?.intent,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "classify")
+        return write(
+          response,
+          200,
+          await changeCases.classifyIntake({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "story-suggestions")
+        return write(
+          response,
+          200,
+          await storyDecompositionAgent.run({
+            changeCase: current,
+            governance: await changeCases.intakeView(scope, changeCaseId),
+            correlationId: traceId,
+            model: body?.model,
+            skillId: body?.skillId,
+            templateId: body?.templateId,
+            templateGuidance: body?.templateGuidance,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "stories")
+        return write(
+          response,
+          200,
+          await changeCases.generateStories({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            stories: body?.stories,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "story-decision")
+        return write(
+          response,
+          200,
+          await changeCases.decideStories({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            storyDigest: body?.storyDigest,
+            decision: body?.decision,
+            rationale: body?.rationale,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "story-priority-plan") {
+        if (!storyMilestones)
+          return write(
+            response,
+            503,
+            { code: "STORY_RELEASE_PLANNING_NOT_CONFIGURED" },
+            traceId,
+          );
+        return write(
+          response,
+          200,
+          await storyMilestones.prioritize({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            storyDigest: body?.storyDigest,
+            priorities: body?.priorities,
+            expectedVersion: body?.expectedVersion,
+          }),
+          traceId,
+        );
+      }
+      if (
+        request.method === "POST" &&
+        operation === "story-milestone-publish"
+      ) {
+        if (!configuredStoryMilestones.service)
+          return write(
+            response,
+            503,
+            { code: configuredStoryMilestones.code },
+            traceId,
+          );
+        return write(
+          response,
+          201,
+          await configuredStoryMilestones.service.publish({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            owner: body?.owner,
+            repository: body?.repository,
+            milestoneNumber: body?.milestoneNumber,
+            expectedVersion: body?.expectedVersion,
+            sourceMilestoneOverride: body?.sourceMilestoneOverride,
+          }),
+          traceId,
+        );
+      }
+      if (request.method === "POST" && operation === "design")
+        return write(
+          response,
+          200,
+          await changeCases.captureDesign({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            design: body?.design,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "design-exception")
+        return write(
+          response,
+          200,
+          await changeCases.recordDesignException({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            designDigest: body?.designDigest,
+            reason: body?.reason,
+            expiresAt: body?.expiresAt,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "design-decision")
+        return write(
+          response,
+          200,
+          await changeCases.decideDesign({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            designDigest: body?.designDigest,
+            decision: body?.decision,
+            rationale: body?.rationale,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "verification-run") {
+        if (!localIndependentVerifier)
+          return write(
+            response,
+            503,
+            { code: "LOCAL_VERIFIER_NOT_CONFIGURED" },
+            traceId,
+          );
+        if (current.state !== "AWAITING_VERIFICATION")
+          throw new ChangeCaseError(
+            "VERIFICATION_NOT_AWAITED",
+            "The Change Case is not awaiting independent verification.",
+          );
+        if (body?.expectedVersion !== current.projectionVersion)
+          throw new ChangeCaseError(
+            "VERSION_CONFLICT",
+            "The Change Case changed before verification started.",
+          );
+        return write(
+          response,
+          200,
+          await localIndependentVerifier.verify({ scope, changeCaseId }),
+          traceId,
+        );
+      }
+      if (
+        request.method === "POST" &&
+        operation === "application-preview-start"
+      ) {
+        if (!evidenceRepository)
+          return write(
+            response,
+            503,
+            { code: "EVIDENCE_REPOSITORY_NOT_CONFIGURED" },
+            traceId,
+          );
+        if (current.state !== "AWAITING_VERIFICATION")
+          throw new ChangeCaseError(
+            "PREVIEW_NOT_AVAILABLE",
+            "A manual preview may be started only while this Change Case awaits verification.",
+          );
+        if (body?.expectedVersion !== current.projectionVersion)
+          throw new ChangeCaseError(
+            "VERSION_CONFLICT",
+            "The Change Case changed before preview deployment started.",
+          );
+        const evidence = await evidenceRepository.list(scope, changeCaseId);
+        if (
+          !evidence.some(
+            (item) =>
+              item.status === "PASS" &&
+              item.candidateDigest === body?.candidateDigest,
+          )
+        )
+          throw new ChangeCaseError(
+            "PREVIEW_EVIDENCE_REQUIRED",
+            "A retained passing independent evidence bundle is required for this candidate preview.",
+          );
+        return write(
+          response,
+          201,
+          await localPreviewManager.start({
+            profileId: body?.profileId,
+            candidateDigest: body?.candidateDigest,
+            changeCaseId,
+          }),
+          traceId,
+        );
+      }
+      if (
+        request.method === "POST" &&
+        operation === "application-preview-stop"
+      ) {
+        const preview = localPreviewManager
+          .list()
+          .find(
+            (item) =>
+              item.id === body?.previewId && item.changeCaseId === changeCaseId,
+          );
+        if (!preview)
+          throw new ChangeCaseError(
+            "LOCAL_PREVIEW_NOT_FOUND",
+            "The requested local preview does not belong to this Change Case.",
+          );
+        return write(
+          response,
+          200,
+          await localPreviewManager.stop(preview.id),
+          traceId,
+        );
+      }
+      if (request.method === "POST" && operation === "verification-decision")
+        return write(
+          response,
+          200,
+          await changeCases.completeVerification({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            candidateDigest: body?.candidateDigest,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (
+        request.method === "POST" &&
+        operation === "delivery-preview-prepare"
+      ) {
+        if (!previewDeliveryPreparation.service)
+          return write(
+            response,
+            503,
+            { code: previewDeliveryPreparation.code },
+            traceId,
+          );
+        return write(
+          response,
+          201,
+          await previewDeliveryPreparation.service.prepare({
+            scope,
+            changeCase: current,
+            timeline: await changeCases.timeline(scope, changeCaseId),
+          }),
+          traceId,
+        );
+      }
+      if (request.method === "POST" && operation === "delivery-draft-pr") {
+        if (!githubDraftPrExecution.service)
+          return write(
+            response,
+            503,
+            { code: githubDraftPrExecution.code },
+            traceId,
+          );
+        return write(
+          response,
+          201,
+          await githubDraftPrExecution.service.execute({
+            scope,
+            previewPlanId: body?.previewPlanId,
+          }),
+          traceId,
+        );
+      }
+      if (request.method === "POST" && operation === "delivery-ci-refresh") {
+        if (!githubDraftPrExecution.service)
+          return write(
+            response,
+            503,
+            { code: githubDraftPrExecution.code },
+            traceId,
+          );
+        return write(
+          response,
+          200,
+          await githubDraftPrExecution.service.refreshCi({
+            scope,
+            previewPlanId: body?.previewPlanId,
+          }),
+          traceId,
+        );
+      }
+      if (request.method === "POST" && operation === "outcome-completion")
+        return write(
+          response,
+          200,
+          await changeCases.completeOutcome({
+            scope,
+            principal: session.principal,
+            changeCaseId,
+            outcomeDigest: body?.outcomeDigest,
+            expectedVersion: body?.expectedVersion,
+            idempotencyKey,
+            correlationId: traceId,
+          }),
+          traceId,
+        );
+      if (request.method === "POST" && operation === "delivery-decision") {
+        if (!previewDeliveries)
+          return write(
+            response,
+            503,
+            { code: "GIT_PREVIEW_REPOSITORY_NOT_CONFIGURED" },
+            traceId,
+          );
+        return write(
+          response,
+          200,
+          await previewDeliveries.decide({
+            scope,
+            principal: session.principal,
+            previewPlanId: body?.previewPlanId,
+            commitDigest: body?.commitDigest,
+            decision: body?.decision,
+            rationale: body?.rationale,
+          }),
+          traceId,
+        );
+      }
+      return write(
+        response,
+        400,
+        {
+          error: {
+            code: "CHANGE_CASE_COMMAND_INVALID",
+            message: "The Change Case command is invalid.",
+            retryable: false,
+            severity: "warning",
+            correlationId: traceId,
+          },
+        },
+        traceId,
+      );
+    } catch (error) {
+      return commandError(response, error, traceId);
+    }
   }
 
-  const listMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/resources$/i)
-  if (request.method === 'GET' && listMatch) {
-    const workspaceId = listMatch[1]; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    const decision = decisionFor({ session, resource: workspaceResource(workspaceId, membership.organizationId), action: 'workspace.read' })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    const scopedResources = postgres ? await postgres.listResources(membership) : resources.listScoped(membership).map(publicResource)
-    return write(response, 200, { resources: scopedResources }, traceId)
+  const listMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/resources$/i,
+  );
+  if (request.method === "GET" && listMatch) {
+    const workspaceId = listMatch[1];
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    const decision = decisionFor({
+      session,
+      resource: workspaceResource(workspaceId, membership.organizationId),
+      action: "workspace.read",
+    });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
+    const scopedResources = postgres
+      ? await postgres.listResources(membership)
+      : resources.listScoped(membership).map(publicResource);
+    return write(response, 200, { resources: scopedResources }, traceId);
   }
-  const resourceMatch = url.pathname.match(/^\/v1\/workspaces\/([0-9a-f-]+)\/resources\/([0-9a-f-]+)$/i)
+  const resourceMatch = url.pathname.match(
+    /^\/v1\/workspaces\/([0-9a-f-]+)\/resources\/([0-9a-f-]+)$/i,
+  );
   if (resourceMatch) {
-    const [, workspaceId, resourceId] = resourceMatch; const membership = session.memberships.find((item) => item.workspaceId === workspaceId)
-    if (!membership) return write(response, 403, { code: 'WORKSPACE_ACCESS_DENIED' }, traceId)
-    const resource = resources.getScoped(resourceId, membership)
-    if (!resource) return write(response, 404, { code: 'RESOURCE_NOT_FOUND' }, traceId)
-    const action = request.method === 'GET' ? 'resource.read' : request.method === 'PATCH' ? 'resource.write' : null
-    if (!action) return write(response, 405, { code: 'METHOD_NOT_ALLOWED' }, traceId)
-    const decision = decisionFor({ session, resource, action })
-    if (decision.outcome !== 'ALLOW') return write(response, 403, { code: decision.reason }, traceId)
-    if (action === 'resource.read') return write(response, 200, { resource: publicResource(resource) }, traceId)
-    const body = await readJson(request); if (typeof body?.label !== 'string' || !body.label.trim()) return write(response, 400, { code: 'LABEL_REQUIRED' }, traceId)
-    const updated = { ...resource, label: body.label.trim(), version: resource.version + 1 }; resources.put(updated)
-    audit({ type: 'resource.updated', resourceId: resource.id, authorization: createAuthorizationSnapshot({ principal: session.principal, membership: decision.membership, resource: updated, action, decision }) })
-    return write(response, 200, { resource: publicResource(updated) }, traceId)
+    const [, workspaceId, resourceId] = resourceMatch;
+    const membership = session.memberships.find(
+      (item) => item.workspaceId === workspaceId,
+    );
+    if (!membership)
+      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
+    const resource = resources.getScoped(resourceId, membership);
+    if (!resource)
+      return write(response, 404, { code: "RESOURCE_NOT_FOUND" }, traceId);
+    const action =
+      request.method === "GET"
+        ? "resource.read"
+        : request.method === "PATCH"
+          ? "resource.write"
+          : null;
+    if (!action)
+      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
+    const decision = decisionFor({ session, resource, action });
+    if (decision.outcome !== "ALLOW")
+      return write(response, 403, { code: decision.reason }, traceId);
+    if (action === "resource.read")
+      return write(
+        response,
+        200,
+        { resource: publicResource(resource) },
+        traceId,
+      );
+    const body = await readJson(request);
+    if (typeof body?.label !== "string" || !body.label.trim())
+      return write(response, 400, { code: "LABEL_REQUIRED" }, traceId);
+    const updated = {
+      ...resource,
+      label: body.label.trim(),
+      version: resource.version + 1,
+    };
+    resources.put(updated);
+    audit({
+      type: "resource.updated",
+      resourceId: resource.id,
+      authorization: createAuthorizationSnapshot({
+        principal: session.principal,
+        membership: decision.membership,
+        resource: updated,
+        action,
+        decision,
+      }),
+    });
+    return write(response, 200, { resource: publicResource(updated) }, traceId);
   }
-  return write(response, 404, { code: 'NOT_FOUND' }, traceId)
-})
+  return write(response, 404, { code: "NOT_FOUND" }, traceId);
+});
 
-server.listen(process.env.PORT || 3100, '127.0.0.1', () => console.log(JSON.stringify({ service: 'adx-api', event: 'listening', traceId: randomUUID() })))
+server.listen(process.env.PORT || 3100, "127.0.0.1", () =>
+  console.log(
+    JSON.stringify({
+      service: "adx-api",
+      event: "listening",
+      traceId: randomUUID(),
+    }),
+  ),
+);
