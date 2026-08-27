@@ -17,7 +17,8 @@ export async function createCandidateGitExport({ sourceRoot, candidateRoot, cand
   const scope = normalizeProjectPath(projectPath)
   const source = await repositoryRoot(sourceRoot, 'GIT_EXPORT_SOURCE_REQUIRED')
   const candidate = await repositoryRoot(candidateRoot, 'GIT_EXPORT_CANDIDATE_REQUIRED')
-  if (await digestCandidateTree(candidate) !== candidateDigest) throw new ChangeCaseError('GIT_EXPORT_CANDIDATE_MISMATCH', 'The server-owned candidate no longer matches the independently verified candidate digest.')
+  const actualCandidateDigest = await digestCandidateTree(candidate)
+  if (actualCandidateDigest !== candidateDigest) throw new ChangeCaseError('GIT_EXPORT_CANDIDATE_MISMATCH', 'The server-owned candidate changed after Gate D verification. Restore its verified contents or run independent verification again before preparing a preview plan.', { retryable: true, details: { expectedCandidateDigest: candidateDigest, actualCandidateDigest } })
   const [status, baseCommit, remote] = await Promise.all([
     runGit(source, scope ? ['status', '--porcelain', '--', scope] : ['status', '--porcelain']),
     runGit(source, ['rev-parse', 'HEAD']),
