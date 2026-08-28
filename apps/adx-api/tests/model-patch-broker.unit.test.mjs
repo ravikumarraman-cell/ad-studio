@@ -180,6 +180,7 @@ test("model-patch broker classifies a failed validation command", async () => {
       timedOut: false,
       outputBytes: 27,
       outputDigest: "sha256:test",
+      outputExcerpt: "test failure summary\n",
     }),
   });
   const result = await broker.execute({ adapter, task, repository });
@@ -192,6 +193,8 @@ test("model-patch broker classifies a failed validation command", async () => {
     failureStage: "VALIDATION",
     validationCommand: "node --test",
     validationCategory: "CHECK_FAILED",
+    validationOutputExcerpt: "test failure summary\n",
+    validationFailureReason: null,
   });
   assert.equal(
     await readFile(join(source, "src", "marker.js"), "utf8"),
@@ -270,6 +273,41 @@ test("standalone Health-X permits only its production verifier and links read-on
     () => stat(join(candidate, ".output")),
     { code: "ENOENT" },
   );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker emits a fallback reason when validation is silent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: gateway({
+      schema: "adx-model-patch-response-v1",
+      patches: [{ path: "src/marker.js", content: 'export const marker = "after"\n' }],
+    }),
+    validate: async () => ({
+      code: 1,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+      outputExcerpt: null,
+    }),
+  });
+  const result = await broker.execute({ adapter, task, repository });
+  assert.equal(result.errorCode, "MODEL_PATCH_VALIDATION_FAILED");
+  assert.deepEqual(result.errorDetails, {
+    failureStage: "VALIDATION",
+    validationCommand: "node --test",
+    validationCategory: "CHECK_FAILED",
+    validationOutputExcerpt: null,
+    validationFailureReason: "Validation exited with code 1 and produced no output.",
+  });
   await rm(root, { recursive: true, force: true });
 });
 

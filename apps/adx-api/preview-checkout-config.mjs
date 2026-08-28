@@ -11,6 +11,17 @@ export async function validatePreviewCheckoutPaths({ sourceRoot, candidateRoot }
   return Object.freeze({ configured: true, sourceRoot: source, candidateRoot: candidate })
 }
 
+export async function validateReadableFilePath(value, code) {
+  const configuredPath = typeof value === 'string' ? value.trim() : ''
+  if (!configuredPath) throw new Error(`${code}_MISSING`)
+  const path = await realpath(configuredPath).catch(() => null)
+  if (!path) throw new Error(`${code}_UNAVAILABLE`)
+  const metadata = await stat(path).catch(() => null)
+  if (!metadata?.isFile()) throw new Error(`${code}_NOT_FILE`)
+  await access(path, constants.R_OK).catch(() => { throw new Error(`${code}_UNREADABLE`) })
+  return path
+}
+
 async function readableDirectory(value, code) {
   const path = await realpath(value).catch(() => null)
   if (!path) throw new Error(`${code}_UNAVAILABLE`)

@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, readFile } from "node:fs/promises";
 import { ChangeCaseError } from "./change-case-ledger.mjs";
+import { validateReadableFilePath } from "./preview-checkout-config.mjs";
 
 const previewLabel = "com.adx.preview";
 
@@ -60,7 +61,10 @@ export class LocalPreviewManager {
       );
     });
     if (profile.npmrcSecretPath)
-      await access(profile.npmrcSecretPath).catch(() => {
+      await validateReadableFilePath(
+        profile.npmrcSecretPath,
+        "PREVIEW_NPMRC_FILE",
+      ).catch(() => {
         throw new ChangeCaseError(
           "LOCAL_PREVIEW_NPM_CREDENTIALS_REQUIRED",
           "The server-configured npm credential file is unavailable.",

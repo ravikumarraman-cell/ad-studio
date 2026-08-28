@@ -4,6 +4,7 @@ import { access } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { loadLocalEnv } from './load-local-env.mjs'
 import { validatePreviewCheckoutPaths } from '../apps/adx-api/preview-checkout-config.mjs'
+import { validateModelPatchRuntimeConfiguration, validateReadableFilePath } from '../apps/adx-api/runtime-config.mjs'
 
 if (process.argv.includes('--help')) {
   console.log('Usage: npm run api:start\n\nLoads .env.local, verifies governed API prerequisites, checks the configured PORT (default 3100), then starts the ADX API. Environment variables already set in the shell take precedence over .env.local.')
@@ -27,6 +28,37 @@ try {
   await validatePreviewCheckoutPaths({ sourceRoot: process.env.ADX_PREVIEW_SOURCE_ROOT, candidateRoot: process.env.ADX_PREVIEW_CANDIDATE_ROOT })
 } catch (error) {
   throw new Error(`API_START_${error?.message ?? 'PREVIEW_CHECKOUT_INVALID'}: Configure ADX_PREVIEW_SOURCE_ROOT and ADX_PREVIEW_CANDIDATE_ROOT as readable server-owned checkout directories.`)
+}
+
+if (process.env.ADX_PREVIEW_SOURCE_ROOT?.trim() || process.env.ADX_PREVIEW_CANDIDATE_ROOT?.trim()) {
+  try {
+    await validateReadableFilePath(process.env.ADX_PREVIEW_NPMRC_FILE, 'PREVIEW_NPMRC_FILE')
+  } catch {
+    throw new Error('API_START_PREVIEW_NPMRC_FILE_REQUIRED: Configure ADX_PREVIEW_NPMRC_FILE as a readable server-owned file before starting the API.')
+  }
+}
+
+await validateModelPatchRuntimeConfiguration({
+  enabled: process.env.ADX_CODING_MODEL_EXECUTOR_ENABLED === '1',
+  profile: {
+    sourceRoot: process.env.ADX_CODING_MODEL_EXECUTION_PROFILE?.trim()?.toLowerCase() === 'health-x'
+      ? (process.env.ADX_HEALTH_X_MODEL_SOURCE_ROOT ?? process.env.ADX_CODING_MODEL_SOURCE_ROOT)
+      : (process.env.ADX_CODING_MODEL_SOURCE_ROOT ?? process.env.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT),
+    candidateRoot: process.env.ADX_CODING_MODEL_EXECUTION_PROFILE?.trim()?.toLowerCase() === 'health-x'
+      ? (process.env.ADX_HEALTH_X_MODEL_CANDIDATE_ROOT ?? process.env.ADX_CODING_MODEL_CANDIDATE_ROOT)
+      : (process.env.ADX_CODING_MODEL_CANDIDATE_ROOT ?? process.env.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT),
+    validationCommand: process.env.ADX_CODING_MODEL_EXECUTION_PROFILE?.trim()?.toLowerCase() === 'health-x'
+      ? 'npm run verify:production'
+      : 'node --test',
+  },
+})
+
+if (process.env.ADX_PREVIEW_NPMRC_FILE?.trim()) {
+  try {
+    await validateReadableFilePath(process.env.ADX_PREVIEW_NPMRC_FILE, 'PREVIEW_NPMRC_FILE')
+  } catch {
+    throw new Error('API_START_PREVIEW_NPMRC_FILE_UNAVAILABLE: Configure ADX_PREVIEW_NPMRC_FILE as a readable server-owned file before starting the API.')
+  }
 }
 
 const port = Number(process.env.PORT ?? 3100)

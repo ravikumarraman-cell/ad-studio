@@ -173,6 +173,8 @@ export class ModelPatchBroker {
               : validation.signal
                 ? "SIGNALED"
                 : "CHECK_FAILED",
+            validationOutputExcerpt: validation.outputExcerpt ?? null,
+            validationFailureReason: validationFailureReason(validation),
           },
           candidateDigest: null,
           timings: finalizedTimings(timings, startedAt),
@@ -217,6 +219,16 @@ async function reportProgress(onProgress, phase) {
 
 function elapsed(startedAt) {
   return Math.max(0, Math.round(Date.now() - startedAt));
+}
+
+function validationFailureReason(validation) {
+  if (!validation || typeof validation !== "object") return null;
+  if (typeof validation.outputExcerpt === "string" && validation.outputExcerpt.trim())
+    return null;
+  if (validation.timedOut) return "Validation timed out without output.";
+  if (validation.signal) return `Validation exited on ${validation.signal} without output.`;
+  const code = Number.isInteger(validation.code) ? validation.code : 1;
+  return `Validation exited with code ${code} and produced no output.`;
 }
 function finalizedTimings(timings, startedAt) {
   return Object.freeze({
@@ -625,8 +637,10 @@ function runValidation({ cwd, allowedCommands, timeoutMs }) {
       shell: false,
     });
     let outputBytes = 0;
+    let outputExcerpt = "";
     const capture = (chunk) => {
       outputBytes += chunk.length;
+      outputExcerpt = appendOutputExcerpt(outputExcerpt, chunk);
     };
     let timedOut = false;
     const timeout = setTimeout(() => {
@@ -648,10 +662,18 @@ function runValidation({ cwd, allowedCommands, timeoutMs }) {
             signal,
             outputBytes: Math.min(outputBytes, 64 * 1024),
           }),
+            outputExcerpt: outputExcerpt || null,
         }),
       );
     });
   });
+}
+
+function appendOutputExcerpt(current, chunk) {
+  const next = `${current}${chunk.toString("utf8")}`;
+  const maxExcerptBytes = 4096;
+  if (Buffer.byteLength(next) <= maxExcerptBytes) return next;
+  return next.slice(-maxExcerptBytes);
 }
 
 async function linkSourceDependencies(source, workspace) {

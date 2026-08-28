@@ -51,27 +51,24 @@ import {
 import { createUhgAzureOpenAiStoryGateway } from "./uhg-azure-openai-story-gateway.mjs";
 import { createUhgAzureOpenAiExecutionGateway } from "./uhg-azure-openai-execution-gateway.mjs";
 import { createUhgClaudeStoryGateway } from "./uhg-claude-story-gateway.mjs";
-import { renderDesignCapturePage } from "./design-capture-page.mjs";
-import { renderDesignReviewPage } from "./design-review-workbench.mjs";
 import { LocalIndependentVerifier } from "./local-independent-verifier.mjs";
 import { digestCandidateTree } from "./verification-evidence.mjs";
 import { createApplicationPreviewProfiles } from "./application-preview-profiles.mjs";
 import { LocalPreviewManager } from "./local-preview-manager.mjs";
-import { renderApplicationPreviewPage } from "./application-preview-page.mjs";
-import { renderVerificationReviewPage } from "./verification-review-page.mjs";
-import { renderExecutionHandoffPage } from "./execution-handoff-page.mjs";
-import { renderStoryReleasePlanningPage } from "./story-release-planning-page.mjs";
-import { renderCandidateBrowserPage } from "./candidate-browser-page.mjs";
 import { renderDeliveryReviewPage } from "./delivery-review-page.mjs";
+import { changeCaseBasePath, changeCaseResource } from "./change-case-route-utils.mjs";
+import { handleExecutionHandoffRoute } from "./execution-handoff-route.mjs";
+import { handleEvidenceReviewRoute } from "./evidence-review-route.mjs";
+import { handleIntakeWorkshopRoute, handleStoryWorkshopRoute } from "./intake-story-workshop-route.mjs";
+import { handleStoryReviewRoute, handleStoryReleasePlanningRoute } from "./story-review-planning-route.mjs";
+import { handleDesignWorkbenchRoute, handleDesignReviewRoute } from "./design-route.mjs";
+import { handleGeneratedCandidateRoute } from "./generated-candidate-route.mjs";
+import { handleApplicationPreviewRoute } from "./preview-route.mjs";
 import { selectPreviewCheckout } from "./preview-checkout-selection.mjs";
 import { createPublicGitHubMilestoneClient } from "./github-public-milestones.mjs";
 import { createPrivateGitHubMilestoneClient } from "./github-private-milestones.mjs";
-import { adxPageThemeCss } from "./adx-page-theme.mjs";
-import { renderStoryReviewPage } from "./story-review-page.mjs";
 import workflowContract from "../../packages/domain/src/change-case-workflow.json" with { type: "json" };
 import { escapeHtml, htmlScriptConfig } from "./review-page-utils.mjs";
-import { intakeGatePage } from "./intake-gate-page.mjs";
-import { storyWorkshopPageWithModelSelector } from "./story-workshop-page.mjs";
 import { outcomeReviewPage } from "./outcome-review-page.mjs";
 import {
   authorizationAction,
@@ -81,6 +78,12 @@ import {
   authorizationAction as projectAuthorizationAction,
   matchProjectRoute,
 } from "./project-routes.mjs";
+import {
+  validateModelPatchRuntimeConfiguration,
+  validateReadableFilePath,
+} from "./runtime-config.mjs";
+import { write, writeHtml, uiRedirectLocation, realWorkspaceLocation } from "./response-utils.mjs";
+import { createDecisionFor } from "./authorization-decision.mjs";
 
 const ids = Object.freeze({
   orgA: "11111111-1111-4111-8111-111111111111",
@@ -224,6 +227,10 @@ const uhgAzureOpenAiExecutionGateway = createUhgAzureOpenAiExecutionGateway(
   process.env,
 );
 const modelPatchProfile = resolveModelPatchProfile(process.env);
+await validateModelPatchRuntimeConfiguration({
+  enabled: process.env.ADX_CODING_MODEL_EXECUTOR_ENABLED === "1",
+  profile: modelPatchProfile,
+});
 const modelPatchBroker = new ModelPatchBroker({
   enabled: process.env.ADX_CODING_MODEL_EXECUTOR_ENABLED === "1",
   sourceRoot: modelPatchProfile.sourceRoot,
@@ -233,12 +240,14 @@ const modelPatchBroker = new ModelPatchBroker({
   gateway: uhgAzureOpenAiExecutionGateway,
 });
 const candidateRoot = modelPatchBroker.candidateRoot;
+const previewProfiles = createApplicationPreviewProfiles({
+  sourceRoot: modelPatchProfile.sourceRoot,
+  candidateRoot,
+  dockerfilePath: process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE,
+});
+await validatePreviewRuntimeConfiguration(previewProfiles);
 const localPreviewManager = new LocalPreviewManager({
-  profiles: createApplicationPreviewProfiles({
-    sourceRoot: modelPatchProfile.sourceRoot,
-    candidateRoot,
-    dockerfilePath: process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE,
-  }),
+  profiles: previewProfiles,
   digestCandidate: digestCandidateTree,
 });
 const configuredModelCoding = createUhgModelCodingExecution({
@@ -390,27 +399,6 @@ function createConfiguredPreviewDeliveryPreparation({
   }
 }
 
-function featureSpotlightFromEvents(events) {
-  for (const event of [...(events ?? [])].reverse()) {
-    for (const artifact of event?.artifacts ?? []) {
-      if (artifact?.mediaType !== "application/vnd.adx.feature-spotlight+json")
-        continue;
-      const value = artifact.metadata;
-      if (
-        typeof value?.featureId === "string" &&
-        typeof value?.title === "string" &&
-        typeof value?.summary === "string"
-      )
-        return Object.freeze({
-          featureId: value.featureId,
-          title: value.title,
-          summary: value.summary,
-        });
-    }
-  }
-  return null;
-}
-
 function resolveModelPatchProfile(environment) {
   const profile = String(
     environment.ADX_CODING_MODEL_EXECUTION_PROFILE ?? "legacy",
@@ -476,6 +464,18 @@ function configuredWritePaths(value, fallback) {
       .map((path) => path.trim())
       .filter(Boolean),
   );
+}
+
+async function validatePreviewRuntimeConfiguration(previewProfiles) {
+  if (!(previewProfiles instanceof Map) || previewProfiles.size === 0) return;
+  for (const profile of previewProfiles.values()) {
+    if (!profile?.npmrcSecretRequired) continue;
+    if (typeof profile.npmrcSecretPath !== "string" || !profile.npmrcSecretPath.trim())
+      throw new Error("API_START_PREVIEW_NPMRC_FILE_MISSING: Configure ADX_PREVIEW_NPMRC_FILE as a readable server-owned file before starting preview-enabled profiles.");
+    await validateReadableFilePath(profile.npmrcSecretPath, "PREVIEW_NPMRC_FILE").catch(() => {
+      throw new Error("API_START_PREVIEW_NPMRC_FILE_UNAVAILABLE: The configured ADX_PREVIEW_NPMRC_FILE path is unreadable or missing.");
+    });
+  }
 }
 
 function createConfiguredGitHubDraftPrExecution({
@@ -545,13 +545,6 @@ function createConfiguredPrivateGitHubMilestones(environment) {
   }
 }
 
-function write(response, status, body, traceId) {
-  response.statusCode = status;
-  response.setHeader("content-type", "application/json");
-  response.setHeader("cache-control", "no-store");
-  response.setHeader("x-trace-id", traceId);
-  response.end(JSON.stringify({ ...body, traceId }));
-}
 function oidcCallbackFailureReason(error) {
   if (!(error instanceof Error)) return "OIDC_TOKEN_VERIFICATION_FAILED";
   if (
@@ -587,33 +580,6 @@ function oidcFailureMetadata(error) {
     code: typeof error.code === "string" ? error.code : null,
     causeCode: typeof error.cause?.code === "string" ? error.cause.code : null,
   };
-}
-const accessiblePageFoundation = `${adxPageThemeCss}<style id="adx-accessibility-foundation">p,.muted{color:var(--adx-copy)}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:700;color:var(--adx-muted)}input,select,textarea{color:var(--adx-ink);background:var(--adx-surface);border-color:var(--adx-line)}input::placeholder,textarea::placeholder{color:var(--adx-muted);opacity:1}.error{color:var(--adx-danger)}.workspace-return-link{position:fixed;top:12px;left:16px;z-index:10;display:inline-block;padding:6px 10px;border:1px solid var(--adx-line);border-radius:8px;background:var(--adx-surface);box-shadow:0 1px 4px #14213d14;color:var(--adx-brand-deep);font-size:.78rem;font-weight:700;text-decoration:none}.workspace-return-link:hover{background:var(--adx-surface-soft)}.signed-in-indicator{position:fixed;top:12px;right:16px;z-index:10;display:flex;gap:6px;align-items:baseline;max-width:calc(100vw - 32px);padding:6px 10px;background:var(--adx-surface);border:1px solid var(--adx-line);border-radius:8px;box-shadow:0 1px 4px #14213d14;color:var(--adx-copy);font-size:.78rem}.signed-in-indicator strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--adx-ink);font-weight:700}@media (max-width:600px){.workspace-return-link,.signed-in-indicator{position:static;width:max-content;max-width:calc(100% - 32px);margin:10px 16px 0}.signed-in-indicator strong{max-width:14rem}}</style>`;
-function signedInIndicator(principal) {
-  const identity =
-    String(
-      principal?.displayName ??
-        principal?.id?.split(":").at(-1) ??
-        "Authenticated user",
-    ).trim() || "Authenticated user";
-  return `<aside class="signed-in-indicator" aria-label="Signed in as ${escapeHtml(identity)}"><span>Signed in</span><strong>${escapeHtml(identity)}</strong></aside>`;
-}
-function authenticatedPageNavigation(principal) {
-  return `<a class="workspace-return-link" href="${escapeHtml(realWorkspaceLocation(process.env.ADX_UI_ORIGIN))}">Return to workspace</a>${signedInIndicator(principal)}`;
-}
-function writeHtml(response, status, html, traceId, principal = null) {
-  response.statusCode = status;
-  response.setHeader("content-type", "text/html; charset=utf-8");
-  response.setHeader("cache-control", "no-store");
-  response.setHeader("x-trace-id", traceId);
-  response.end(
-    html
-      .replace("</head>", `${accessiblePageFoundation}</head>`)
-      .replace(
-        /<body([^>]*)>/,
-        `<body$1>${principal ? authenticatedPageNavigation(principal) : ""}`,
-      ),
-  );
 }
 function storyReviewPage(changeCase, governance) {
   const factors = governance.assessment?.explanation?.factors ?? [];
@@ -787,21 +753,6 @@ function bearer(request) {
   return (
     request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null
   );
-}
-function uiRedirectLocation(value) {
-  try {
-    const url = new URL(value || "http://127.0.0.1:4173/");
-    if (!["http:", "https:"].includes(url.protocol))
-      throw new Error("invalid protocol");
-    return url.toString();
-  } catch {
-    return "http://127.0.0.1:4173/";
-  }
-}
-function realWorkspaceLocation(value) {
-  const url = new URL(uiRedirectLocation(value));
-  url.searchParams.set("mode", "real");
-  return url.toString();
 }
 async function sessionFor(request) {
   const token = bearer(request);
@@ -1102,16 +1053,6 @@ function executionTask(changeCase, governance, templateId) {
       : null,
   };
 }
-function changeCaseResource(changeCase, scope) {
-  return {
-    id: changeCase.id,
-    organizationId: scope.organizationId,
-    workspaceId: scope.workspaceId,
-    type: "change-case",
-    version: changeCase.projectionVersion,
-    riskTier: changeCase.riskTier,
-  };
-}
 function commandError(response, error, traceId) {
   if (error instanceof ChangeCaseError)
     return write(
@@ -1356,30 +1297,7 @@ async function importFeatureBatch({
   return { importId, policy: "PARTIAL_SUCCESS_RESUMABLE", results };
 }
 
-function decisionFor({ session, resource, action }) {
-  const decision = authorize({
-    principal: session.principal,
-    memberships: session.memberships,
-    resource,
-    action,
-  });
-  const membership =
-    decision.membership ??
-    session.memberships.find(
-      (item) =>
-        item.workspaceId === resource.workspaceId &&
-        item.organizationId === resource.organizationId,
-    );
-  const snapshot = createAuthorizationSnapshot({
-    principal: session.principal,
-    membership,
-    resource,
-    action,
-    decision,
-  });
-  audit({ type: "authorization.decision", snapshot });
-  return decision;
-}
+const decisionFor = createDecisionFor({ authorize, createAuthorizationSnapshot, audit });
 
 const server = createServer(async (request, response) => {
   const traceId = request.headers["x-trace-id"] || randomUUID();
@@ -2153,44 +2071,22 @@ const server = createServer(async (request, response) => {
         traceId,
       );
     }
-    if (request.method === "GET" && operation === "application-preview") {
-      if (!evidenceRepository)
-        return write(
-          response,
-          503,
-          { code: "EVIDENCE_REPOSITORY_NOT_CONFIGURED" },
-          traceId,
-        );
-      const writeDecision = decisionFor({
-        session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
-      });
-      const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`;
-      return writeHtml(
+    if (request.method === "GET" && operation === "application-preview")
+      return handleApplicationPreviewRoute({
         response,
-        200,
-        renderApplicationPreviewPage(current, {
-          profiles: [...localPreviewManager.profiles.values()].map(
-            ({ id, label }) => ({ id, label }),
-          ),
-          evidence: await evidenceRepository.list(scope, changeCaseId),
-          previews: localPreviewManager
-            .list()
-            .filter((preview) => preview.changeCaseId === changeCaseId),
-          spotlight: executions
-            ? featureSpotlightFromEvents(
-                (await executions.view(scope, changeCaseId)).events,
-              )
-            : null,
-          canManage: writeDecision.outcome === "ALLOW",
-          startEndpoint: `${base}/application-preview-start`,
-          stopEndpoint: `${base}/application-preview-stop`,
-        }),
         traceId,
-        session.principal,
-      );
-    }
+        session,
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        evidenceRepository,
+        localPreviewManager,
+        executions,
+        decisionFor,
+        writeHtml,
+        write,
+      });
     if (request.method === "GET" && operation === "delivery-preview") {
       if (!previewDeliveries)
         return write(
@@ -2263,7 +2159,7 @@ const server = createServer(async (request, response) => {
         resource: changeCaseResource(current, scope),
         action: "resource.write",
       });
-      const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`;
+      const base = changeCaseBasePath(workspaceId, changeCaseId);
       return writeHtml(
         response,
         200,
@@ -2285,204 +2181,103 @@ const server = createServer(async (request, response) => {
         session.principal,
       );
     }
-    if (request.method === "GET" && operation === "execution-handoff") {
-      const writeDecision = decisionFor({
-        session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
-      });
-      const dispatchEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution/dispatch`;
-      const statusEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution`;
-      const evidenceReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`;
-      const candidateUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`;
-      return writeHtml(
+    if (request.method === "GET" && operation === "execution-handoff")
+      return handleExecutionHandoffRoute({
         response,
-        200,
-        renderExecutionHandoffPage(current, {
-          canSubmit: writeDecision.outcome === "ALLOW",
-          signedInRoles: membership.roles,
-          dispatchEndpoint,
-          statusEndpoint,
-          evidenceReviewUrl,
-          candidateUrl,
-          providers: codingAgentProvidersForUi(),
-          templates: listAgentSpecTemplates("coding"),
-        }),
         traceId,
-        session.principal,
-      );
-    }
+        session,
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        membershipRoles: membership.roles,
+        providers: codingAgentProvidersForUi(),
+        decisionFor,
+        writeHtml,
+      });
     if (request.method === "GET" && operation === "generated-candidate")
-      return writeHtml(
+      return handleGeneratedCandidateRoute({
         response,
-        200,
-        await renderCandidateBrowserPage({
-          candidateRoot,
-          sourceRoot: modelPatchProfile.sourceRoot,
-          baseUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`,
-          verificationUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`,
-          requestedPath: url.searchParams.get("path") ?? "",
-        }),
         traceId,
-        session.principal,
-      );
-    if (request.method === "GET" && operation === "evidence-review") {
-      if (!evidenceRepository)
-        return write(
-          response,
-          503,
-          { code: "EVIDENCE_REPOSITORY_NOT_CONFIGURED" },
-          traceId,
-        );
-      const writeDecision = decisionFor({
         session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
+        workspaceId,
+        changeCaseId,
+        candidateRoot,
+        sourceRoot: modelPatchProfile.sourceRoot,
+        url,
+        writeHtml,
       });
-      const reviewDecision = decisionFor({
-        session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.review",
-      });
-      const handoffUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution-handoff`;
-      const candidateUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`;
-      const runEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-run`;
-      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-decision`;
-      const previewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/application-preview`;
-      const verifierReadiness = localIndependentVerifier
-        ? await localIndependentVerifier.readiness()
-        : { ready: false, code: "LOCAL_VERIFIER_NOT_CONFIGURED" };
-      return writeHtml(
+    if (request.method === "GET" && operation === "evidence-review")
+      return handleEvidenceReviewRoute({
         response,
-        200,
-        renderVerificationReviewPage(
-          current,
-          await evidenceRepository.list(scope, changeCaseId),
-          {
-            canRun: writeDecision.outcome === "ALLOW",
-            canReview: reviewDecision.outcome === "ALLOW",
-            handoffUrl,
-            candidateUrl,
-            runEndpoint,
-            decisionEndpoint,
-            previewUrl,
-            verifierConfigured: verifierReadiness.ready,
-            verifierIssue: verifierReadiness.code,
-          },
-        ),
         traceId,
-        session.principal,
-      );
-    }
-    if (request.method === "GET" && operation === "intake-workshop") {
-      const writeDecision = decisionFor({
         session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        evidenceRepository,
+        localIndependentVerifier,
+        decisionFor,
+        writeHtml,
+        write,
       });
-      const classifyEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/classify`;
-      const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`;
-      return writeHtml(
+    if (request.method === "GET" && operation === "intake-workshop")
+      return handleIntakeWorkshopRoute({
         response,
-        200,
-        intakeGatePage(
-          current,
-          await changeCases.intakeView(scope, changeCaseId),
-          {
-            canWrite: writeDecision.outcome === "ALLOW",
-            classifyEndpoint,
-            storyWorkshopUrl,
-          },
-        ),
         traceId,
-        session.principal,
-      );
-    }
-    if (request.method === "GET" && operation === "story-workshop") {
-      const authorDecision = decisionFor({
         session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        changeCases,
+        decisionFor,
+        writeHtml,
       });
-      const governance = await changeCases.intakeView(scope, changeCaseId);
-      const storiesEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/stories`;
-      const storySuggestionsEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-suggestions`;
-      const storyReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-review`;
-      return writeHtml(
+    if (request.method === "GET" && operation === "story-workshop")
+      return handleStoryWorkshopRoute({
         response,
-        200,
-        storyWorkshopPageWithModelSelector(current, governance, {
-          canAuthor: authorDecision.outcome === "ALLOW",
-          storiesEndpoint,
-          storySuggestionsEndpoint,
-          storyReviewUrl,
-          aiStatus: storyDecompositionAgent.status(),
-          homeUrl: uiRedirectLocation(process.env.ADX_UI_ORIGIN),
-        }),
         traceId,
-        session.principal,
-      );
-    }
-    if (request.method === "GET" && operation === "story-review") {
-      const reviewDecision = decisionFor({
         session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        changeCases,
+        storyDecompositionAgent,
+        homeUrl: uiRedirectLocation(process.env.ADX_UI_ORIGIN),
+        decisionFor,
+        writeHtml,
       });
-      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-decision`;
-      const designReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-review`;
-      const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`;
-      const storyWorkshopUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-workshop`;
-      const governance = await changeCases.intakeView(scope, changeCaseId);
-      return writeHtml(
+    if (request.method === "GET" && operation === "story-review")
+      return handleStoryReviewRoute({
         response,
-        200,
-        renderStoryReviewPage(current, governance, {
-          canReview: reviewDecision.outcome === "ALLOW",
-          isStoryAuthor:
-            governance.stories?.authoredBy === session.principal.id,
-          decisionEndpoint,
-          designReviewUrl,
-          releasePlanningUrl,
-          storyWorkshopUrl,
-        }),
         traceId,
-        session.principal,
-      );
-    }
-    if (request.method === "GET" && operation === "story-release-planning") {
-      if (!storyMilestones)
-        return write(
-          response,
-          503,
-          { code: "STORY_RELEASE_PLANNING_NOT_CONFIGURED" },
-          traceId,
-        );
-      const writeDecision = decisionFor({
         session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        changeCases,
+        decisionFor,
+        writeHtml,
       });
-      const base = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}`;
-      const view = await storyMilestones.workspaceView(scope);
-      return writeHtml(
+    if (request.method === "GET" && operation === "story-release-planning")
+      return handleStoryReleasePlanningRoute({
         response,
-        200,
-        renderStoryReleasePlanningPage(current, view, {
-          canPlan: writeDecision.outcome === "ALLOW",
-          publisherConfigured: Boolean(configuredStoryMilestones.service),
-          designReviewUrl: `${base}/design-review`,
-          endpoints: {
-            priorityEndpoint: `${base}/story-priority-plan`,
-            milestonesEndpoint: `${base}/story-milestones`,
-            publishEndpoint: `${base}/story-milestone-publish`,
-            storyDigest: "workspace",
-          },
-        }),
         traceId,
-        session.principal,
-      );
-    }
+        session,
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        storyMilestones,
+        configuredStoryMilestones,
+        decisionFor,
+        write,
+        writeHtml,
+      });
     if (request.method === "GET" && operation === "story-milestones") {
       if (!configuredStoryMilestones.service)
         return write(
@@ -2503,56 +2298,31 @@ const server = createServer(async (request, response) => {
         traceId,
       );
     }
-    if (request.method === "GET" && operation === "design-workbench") {
-      const writeDecision = decisionFor({
-        session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
-      });
-      const designEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design`;
-      const designReviewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-review`;
-      return writeHtml(
+    if (request.method === "GET" && operation === "design-workbench")
+      return handleDesignWorkbenchRoute({
         response,
-        200,
-        renderDesignCapturePage(current, {
-          canWrite: writeDecision.outcome === "ALLOW",
-          designEndpoint,
-          designReviewUrl,
-        }),
         traceId,
-        session.principal,
-      );
-    }
-    if (request.method === "GET" && operation === "design-review") {
-      const view = await changeCases.designView(scope, changeCaseId);
-      const reviewDecision = decisionFor({
         session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.review",
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        decisionFor,
+        writeHtml,
       });
-      const writeDecision = decisionFor({
-        session,
-        resource: changeCaseResource(current, scope),
-        action: "resource.write",
-      });
-      const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-decision`;
-      const designCaptureUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/design-workbench`;
-      const releasePlanningUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/story-release-planning`;
-      return writeHtml(
+    if (request.method === "GET" && operation === "design-review")
+      return handleDesignReviewRoute({
         response,
-        200,
-        renderDesignReviewPage(current, view, {
-          canReview: reviewDecision.outcome === "ALLOW",
-          canWrite: writeDecision.outcome === "ALLOW",
-          isDesignAuthor: view.design?.authoredBy === session.principal.id,
-          decisionEndpoint,
-          designCaptureUrl,
-          releasePlanningUrl,
-        }),
         traceId,
-        session.principal,
-      );
-    }
+        session,
+        current,
+        scope,
+        workspaceId,
+        changeCaseId,
+        changeCases,
+        decisionFor,
+        writeHtml,
+      });
     const body = await readJson(request);
     const idempotencyKey = request.headers["idempotency-key"];
     try {

@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"path": "../../health-x"
+		},
+		{
+			"path": "../../EEAOS_Command_Center"
+		}
+	],
+	"settings": {}
+}

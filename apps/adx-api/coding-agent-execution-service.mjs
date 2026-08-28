@@ -363,6 +363,16 @@ function safeErrorDetails(details) {
   )
     ? details.validationCategory
     : null;
+  const validationOutputExcerpt =
+    typeof details?.validationOutputExcerpt === "string" &&
+    details.validationOutputExcerpt.length <= 4096
+      ? details.validationOutputExcerpt
+      : null;
+  const validationFailureReason =
+    typeof details?.validationFailureReason === "string" &&
+    details.validationFailureReason.length <= 256
+      ? details.validationFailureReason
+      : null;
   const safe = {
     provider:
       details?.provider === "AZURE_OPENAI_GATEWAY" ? details.provider : null,
@@ -381,6 +391,8 @@ function safeErrorDetails(details) {
     failureStage,
     validationCommand,
     validationCategory,
+    validationOutputExcerpt,
+    validationFailureReason,
   };
   return Object.values(safe).some(Boolean) ? safe : null;
 }
