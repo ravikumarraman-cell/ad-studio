@@ -86,3 +86,40 @@ test("preview page provides a side-by-side before and independently verified aft
     /http:\/\/127\.0\.0\.1:3457\/\?adx-feature=referral-status/,
   );
 });
+
+test("preview page defaults to the verified candidate profile", () => {
+  const page = renderApplicationPreviewPage(
+    {
+      title: "Preview Health-X",
+      state: "AWAITING_VERIFICATION",
+      projectionVersion: 9,
+    },
+    {
+      profiles: [
+        {
+          id: "health-x-before",
+          label: "Before implementation",
+          candidateBound: false,
+        },
+        {
+          id: "health-x-after",
+          label: "After implementation (verified candidate)",
+          candidateBound: true,
+        },
+      ],
+      evidence: [{ status: "PASS", candidateDigest: "sha256:verified" }],
+      previews: [],
+      canManage: true,
+      startEndpoint: "/application-preview-start",
+      stopEndpoint: "/application-preview-stop",
+    },
+  );
+  assert.match(
+    page,
+    /<option value="health-x-after" selected>After implementation \(verified candidate\)<\/option>/,
+  );
+  assert.doesNotMatch(
+    page,
+    /<option value="health-x-before" selected>/,
+  );
+});

@@ -31,3 +31,18 @@ test('guided walkthrough prevents skipped and incomplete early gate decisions', 
   await expect(page.getByRole('heading', { name: 'No records were created or changed.' })).toBeFocused()
   await expect(page.getByRole('button', { name: 'Choose a delivery path' })).toBeVisible()
 })
+
+test('guided flow keeps the current action and workflow state usable on a narrow screen', async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+
+  await page.getByRole('button', { name: /Start guided case/ }).click()
+  await expect(page.getByRole('heading', { name: 'Run a feature through ADX.' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Continue walkthrough' })).toBeVisible()
+  await expect(page.locator('body')).not.toHaveJSProperty('scrollWidth', await page.locator('body').evaluate((element) => element.clientWidth + 1))
+
+  await page.getByLabel('Feature title').fill('Accessible delivery review')
+  await page.getByRole('button', { name: 'Continue walkthrough' }).press('Enter')
+  await expect(page.getByRole('heading', { name: 'Story suggestions for this feature' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /Generate & curate stories/ })).toBeFocused()
+})

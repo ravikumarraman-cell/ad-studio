@@ -2,6 +2,9 @@ export type Membership = { organizationId: string; workspaceId: string; roles: s
 export type Principal = { id: string; displayName?: string }
 export type Session = { principal: Principal; memberships: Membership[] }
 export type ChangeCase = { id: string; title: string; riskTier: string; state: string; projectionVersion?: number }
+export type ExecutionRun = { id: string; adapterId: string; adapterVersion: string; status: 'LEASED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'; createdAt: string; updatedAt: string }
+export type ExecutionEvent = { runId: string; sequence: number; eventType: string; occurredAt: string; errorCode?: string | null }
+export type ExecutionStatus = { runs: ExecutionRun[]; events: ExecutionEvent[] }
 export type CommandResult = { changeCaseId: string; projectionVersion: number; newState: string; deduplicated?: boolean }
 export type ImportFeature = { featureId: string; title: string; description: string; priority: string; owner: string; targetRepository: string; acceptanceCriteria: string; riskTier: string; sourceUrl: string; raw: string }
 export type FeatureImportResult = { featureId: string; title: string; status: 'IMPORTED' | 'REQUIRES_CLARIFICATION' | 'FAILED'; changeCaseId?: string; message?: string }
@@ -28,6 +31,10 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function newIdempotencyKey() { return crypto.randomUUID() }
+
+export async function getExecutionStatus(workspaceId: string, changeCaseId: string): Promise<ExecutionStatus> {
+  return api<ExecutionStatus>(`/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}/execution`)
+}
 
 export async function cancelChangeCase(workspaceId: string, changeCase: ChangeCase): Promise<CommandResult> {
   if (typeof changeCase.projectionVersion !== 'number') throw new Error('The Change Case version is unavailable. Refresh the workspace and try again.')

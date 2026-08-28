@@ -24,9 +24,12 @@ export function renderApplicationPreviewPage(
     stopEndpoint,
     expectedVersion: changeCase.projectionVersion,
   });
+  const defaultProfileId =
+    profiles.find((profile) => profile.candidateBound !== false)?.id ??
+    profiles[0]?.id;
   const manager =
     canManage && profiles.length && passingCandidates.length
-      ? `<section class="card action"><p class="eyebrow">LOCAL MANUAL PREVIEW</p><h2>Start a verified candidate preview</h2><p>ADX builds and starts only the selected server-registered profile after confirming that the configured source still hashes to the retained passing candidate. No command, filesystem path, or external URL is accepted from this screen.</p><form id="preview-start"><label>Application profile<select name="profileId">${profiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.label)}</option>`).join("")}</select></label><label>Verified candidate<select name="candidateDigest">${passingCandidates.map((digest) => `<option value="${escapeHtml(digest)}">${escapeHtml(digest)}</option>`).join("")}</select></label><button type="submit">Start local preview</button><p id="preview-status" class="status" role="status" aria-live="polite"></p></form></section>`
+      ? `<section class="card action"><p class="eyebrow">LOCAL MANUAL PREVIEW</p><h2>Start a verified candidate preview</h2><p>ADX builds and starts only the selected server-registered profile after confirming that the configured source still hashes to the retained passing candidate. No command, filesystem path, or external URL is accepted from this screen.</p><form id="preview-start"><label>Application profile<select name="profileId">${profiles.map((profile) => `<option value="${escapeHtml(profile.id)}"${profile.id === defaultProfileId ? " selected" : ""}>${escapeHtml(profile.label)}</option>`).join("")}</select></label><label>Verified candidate<select name="candidateDigest">${passingCandidates.map((digest) => `<option value="${escapeHtml(digest)}">${escapeHtml(digest)}</option>`).join("")}</select></label><button type="submit">Start local preview</button><p id="preview-status" class="status" role="status" aria-live="polite"></p></form></section>`
       : `<section class="card notice"><h2>Manual preview is not ready</h2><p>${!profiles.length ? "No server-managed application preview profile is configured." : !passingCandidates.length ? "A retained passing independent evidence bundle is required before a manual preview can start." : "An authorized contributor must start the preview."}</p></section>`;
   const beforePreview = previews.find(
     (preview) => preview.comparisonRole === "BEFORE",

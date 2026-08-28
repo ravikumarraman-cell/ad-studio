@@ -63,9 +63,9 @@ export function createPublicGitHubMilestoneClient({ fetchImpl = globalThis.fetch
       const milestones = await githubJson(fetchImpl, githubUrl(safeOwner, safeRepository, '/milestones?state=all&per_page=100'))
       const milestone = Array.isArray(milestones) ? milestones.find((item) => item?.number === number) : null
       if (!milestone) throw new ChangeCaseError('GITHUB_PUBLIC_NOT_FOUND', 'The selected public GitHub milestone was not found.', { retryable: false, severity: 'warning' })
-      const issues = await githubJson(fetchImpl, githubUrl(safeOwner, safeRepository, `/issues?state=all&milestone=${number}&per_page=${maxIssueCount}`))
+      const issues = await githubJson(fetchImpl, githubUrl(safeOwner, safeRepository, `/issues?state=open&milestone=${number}&per_page=${maxIssueCount}`))
       if (!Array.isArray(issues)) throw new ChangeCaseError('GITHUB_PUBLIC_RESPONSE_INVALID', 'GitHub returned invalid milestone issues.', { retryable: true, severity: 'warning' })
-      const selectedIssues = issues.filter((issue) => !issue.pull_request).slice(0, maxIssueCount).map(publicIssue)
+      const selectedIssues = issues.filter((issue) => !issue.pull_request && issue.state !== 'closed').slice(0, maxIssueCount).map(publicIssue)
       if (!selectedIssues.length) throw new ChangeCaseError('GITHUB_PUBLIC_MILESTONE_EMPTY', 'The selected milestone has no non-pull-request issues to import.', { retryable: false, severity: 'warning' })
       const context = { owner: safeOwner, repository: safeRepository, milestone, featureOwner: featureOwner.trim(), targetRepository: targetRepository.trim(), riskTier }
       return Object.freeze(selectedIssues.map((issue) => issueFeature({ ...context, issue })))

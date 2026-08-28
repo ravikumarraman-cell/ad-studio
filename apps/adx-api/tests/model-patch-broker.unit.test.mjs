@@ -204,47 +204,47 @@ test("model-patch broker classifies a failed validation command", async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-test("health-x profile permits only its fixed verifier and links read-only dependencies into the disposable workspace", async () => {
+test("standalone Health-X permits only its production verifier and links read-only dependencies into the disposable workspace", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
   const candidate = join(root, "candidate");
-  await mkdir(join(source, "apps", "health-x"), { recursive: true });
+  await mkdir(join(source, "app"), { recursive: true });
   await mkdir(join(source, "node_modules"), { recursive: true });
   await writeFile(
-    join(source, "apps", "health-x", "marker.js"),
+    join(source, "app", "marker.js"),
     'export const marker = "before"\n',
   );
   const healthXTask = {
     objective: "Replace the marker.",
     changeDigest: "sha256:case-digest",
-    allowedCommands: ["npm run verify:health-x"],
+    allowedCommands: ["npm run verify:production"],
   };
   const broker = new ModelPatchBroker({
     enabled: true,
     sourceRoot: source,
     candidateRoot: candidate,
-    allowedValidationCommands: ["npm run verify:health-x"],
+    allowedValidationCommands: ["npm run verify:production"],
     linkSourceDependencies: true,
     gateway: gateway({
       schema: "adx-model-patch-response-v1",
       patches: [
         {
-          path: "apps/health-x/marker.js",
+          path: "app/marker.js",
           content: 'export const marker = "after"\n',
         },
       ],
     }),
     validate: async ({ cwd, allowedCommands }) => {
-      assert.deepEqual(allowedCommands, ["npm run verify:health-x"]);
+      assert.deepEqual(allowedCommands, ["npm run verify:production"]);
       assert.equal(
         (await lstat(join(cwd, "node_modules"))).isSymbolicLink(),
         true,
       );
-      await mkdir(join(cwd, "apps", "health-x", ".output"), {
+      await mkdir(join(cwd, ".output"), {
         recursive: true,
       });
       await writeFile(
-        join(cwd, "apps", "health-x", ".output", "server.mjs"),
+        join(cwd, ".output", "server.mjs"),
         "generated",
       );
       return {
@@ -259,15 +259,15 @@ test("health-x profile permits only its fixed verifier and links read-only depen
   const result = await broker.execute({
     adapter,
     task: healthXTask,
-    repository: { writePaths: ["apps/health-x/**"] },
+    repository: { writePaths: ["app/**"] },
   });
   assert.equal(result.promoted, true);
   assert.equal(
-    await readFile(join(candidate, "apps", "health-x", "marker.js"), "utf8"),
+    await readFile(join(candidate, "app", "marker.js"), "utf8"),
     'export const marker = "after"\n',
   );
   await assert.rejects(
-    () => stat(join(candidate, "apps", "health-x", ".output")),
+    () => stat(join(candidate, ".output")),
     { code: "ENOENT" },
   );
   await rm(root, { recursive: true, force: true });

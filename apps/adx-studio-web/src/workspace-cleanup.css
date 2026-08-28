@@ -23,6 +23,23 @@
   margin-top: 18px;
 }
 
+.adx-run-status {
+  display: grid;
+  gap: 4px;
+  margin: 18px 0;
+  padding: 13px 15px;
+  border: 1px solid #b9cbd9;
+  border-left: 4px solid #497693;
+  background: #f7fbff;
+}
+
+.adx-run-status strong { font-size: .98rem; }
+.adx-run-status span, .adx-run-status small { color: #53677e; font-size: .82rem; }
+.adx-run-state { display: block; margin-top: 4px; font-weight: 750; }
+.adx-run-running, .adx-run-leased { border-color: #4b7c5b; color: #23643c; }
+.adx-run-completed { border-color: #47765a; color: #1f633b; background: #f3faf5; }
+.adx-run-failed, .adx-run-cancelled { border-color: #bd4a4a; color: #962828; background: #fff6f5; }
+
 .adx-workspace-tools {
   position: relative;
 }

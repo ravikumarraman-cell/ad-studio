@@ -53,8 +53,11 @@ test("execution handoff requests a bounded implementation run instead of attesti
   assert.doesNotMatch(page, /prepared candidate/);
   assert.match(
     page,
-    /id="submit" class="button primary" type="submit" disabled/,
+    /id="submit" class="button primary" type="submit" disabled><span class="busy-indicator" aria-hidden="true"><\/span>/,
   );
+  assert.match(page, /aria-busy="false"/);
+  assert.match(page, /@media \(prefers-reduced-motion:reduce\)/);
+  assert.match(page, /status\.setAttribute\("aria-busy","true"\)/);
 });
 
 test("execution handoff does not expose submission controls outside execution readiness", () => {

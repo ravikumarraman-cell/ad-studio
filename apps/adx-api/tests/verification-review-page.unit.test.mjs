@@ -6,12 +6,19 @@ const changeCase = { title: 'Verify generated candidate', state: 'AWAITING_VERIF
 const options = { canRun: true, canReview: false, handoffUrl: '/execution-handoff', runEndpoint: '/verification-run', decisionEndpoint: '/verification-decision', verifierConfigured: true }
 
 test('verification page reports elapsed time while the governed verifier request is active', () => {
-  const page = renderVerificationReviewPage(changeCase, [], options)
+  const page = renderVerificationReviewPage(changeCase, [], { ...options, candidateUrl: '/generated-candidate' })
   assert.match(page, /Run independent verification/)
+  assert.match(page, /Review, then collect fresh evidence/)
+  assert.match(page, /review generated code/)
+  assert.match(page, /href="\/generated-candidate"/)
   assert.match(page, /Starting independent verification/)
   assert.match(page, /Independent verification running/)
   assert.match(page, /run-status/)
   assert.match(page, /'idempotency-key':crypto\.randomUUID\(\)/)
+  assert.match(page, /id="run-verifier" class="button primary" type="button"><span class="busy-indicator" aria-hidden="true"><\/span>/)
+  assert.match(page, /aria-busy="false"/)
+  assert.match(page, /@media \(prefers-reduced-motion:reduce\)/)
+  assert.match(page, /status\.setAttribute\("aria-busy","true"\)/)
 })
 
 test('verification page does not offer a run outside the awaiting-verification state', () => {

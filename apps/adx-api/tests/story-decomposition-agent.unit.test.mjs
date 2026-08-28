@@ -17,20 +17,30 @@ test('story decomposition agent creates a bounded preview receipt without workfl
   assert.equal(run.inspection.validBdd, true)
 })
 
-test('story decomposition agent applies an allowlisted reviewed skill and binds it to the receipt', async () => {
-  const agent = createStoryDecompositionAgent({ suggestionService: { status: () => ({ configured: true }), suggest: async ({ templateGuidance }) => { assert.match(templateGuidance, /Decompose by user journey/); return { provider: 'OLLAMA_LOCAL', model: 'local-story-model', suggestions } } } })
-  const run = await agent.run({ changeCase, governance, correlationId: 'trace-skill', skillId: 'user-journey' })
-  assert.equal(agent.status().skills.length, 3)
-  assert.equal(run.receipt.skill.id, 'user-journey')
-  assert.equal(run.receipt.skill.version, '1.0.0')
-  await assert.rejects(() => agent.run({ changeCase, governance, correlationId: 'trace-skill-denied', skillId: 'unreviewed-skill' }), { code: 'STORY_SKILL_NOT_ALLOWED' })
-})
-
 test('story decomposition agent binds a reviewed specification template to its receipt', async () => {
-  const agent = createStoryDecompositionAgent({ suggestionService: { status: () => ({ configured: true }), suggest: async ({ templateGuidance }) => { assert.match(templateGuidance, /independently observable user value/); return { provider: 'OLLAMA_LOCAL', model: 'local-story-model', suggestions } } } })
+  const agent = createStoryDecompositionAgent({ suggestionService: { status: () => ({ configured: true }), suggest: async ({ guidance }) => { assert.match(guidance, /smallest independently valuable user stories/); return { provider: 'OLLAMA_LOCAL', model: 'local-story-model', suggestions } } } })
   const run = await agent.run({ changeCase, governance, correlationId: 'trace-template', templateId: 'user-value-slices' })
   assert.equal(run.receipt.template.id, 'user-value-slices')
   await assert.rejects(() => agent.run({ changeCase, governance, correlationId: 'trace-template-denied', templateId: 'unknown' }), { code: 'AGENT_SPEC_TEMPLATE_NOT_ALLOWED' })
+})
+
+test('story decomposition agent supplies the complete feature decomposition playbook', async () => {
+  const output = []
+  const originalInfo = console.info
+  console.info = (message) => output.push(message)
+  try {
+    const agent = createStoryDecompositionAgent({ suggestionService: { status: () => ({ configured: true }), suggest: async ({ guidance }) => { assert.match(guidance, /Phase 1: Requirement Analysis/); assert.match(guidance, /Phase 4: Story Decomposition/); assert.match(guidance, /Story Quality Checklist/); return { provider: 'OLLAMA_LOCAL', model: 'local-story-model', suggestions } } } })
+    const run = await agent.run({ changeCase, governance, correlationId: 'trace-playbook', templateId: 'feature-decomposition-playbook' })
+    assert.equal(run.receipt.template.id, 'feature-decomposition-playbook')
+    assert.match(run.receipt.template.digest, /^sha256:/)
+  } finally {
+    console.info = originalInfo
+  }
+  assert.match(output[0], /^\[ADX story decomposition input trace-playbook\]/)
+  assert.match(output[0], /Phase 1: Requirement Analysis/)
+  assert.match(output[0], /Phase 4: Story Decomposition/)
+  assert.match(output[0], /Story Quality Checklist/)
+  assert.match(output[0], /"inputDigest": "sha256:/)
 })
 
 test('story decomposition agent refuses unresolved intake ambiguity', async () => {

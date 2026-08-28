@@ -155,6 +155,12 @@ export class CodingAgentExecutionService {
         task,
         repository: this.policy.repository,
         timeoutMs: lease.limits.maxDurationSeconds * 1000,
+        onProgress: (phase) =>
+          this.executionRepository.recordProgress({
+            scope,
+            runId: issued.runId,
+            phase,
+          }),
       });
     } catch (error) {
       result = failureResult(error);

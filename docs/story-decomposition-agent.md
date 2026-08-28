@@ -28,7 +28,7 @@ The agent has exactly four declared functions. They are deliberately narrow and 
 
 | Function | Authority | Responsibility | Explicit non-authority |
 | --- | --- | --- | --- |
-| `CURATE_RETAINED_CONTEXT` | Read-only | Select the retained Feature title, outcome, acceptance criteria, target repository, risk tier, asset classifications, approved model choice, and optional author-selected template guidance. | Cannot use unretained browser text, fetch repository context, or resolve an ambiguity by inference. |
+| `CURATE_RETAINED_CONTEXT` | Read-only | Select the retained Feature title, outcome, acceptance criteria, target repository, risk tier, asset classifications, approved model choice, and selected reviewed specification. | Cannot use unretained browser text, fetch repository context, or resolve an ambiguity by inference. |
 | `DRAFT_USER_VALUE_STORIES` | Model call | Call the configured and allowlisted model to propose one to three independently valuable Stories with a concise BDD scenario. | Cannot execute tools, modify a Feature, make a repository change, or select an unapproved model. |
 | `INSPECT_STORY_QUALITY` | Read-only | Validate BDD structure, inspect expected user-story narrative form, and report proposal-level findings. | Cannot turn warnings into approval or silently rewrite a submitted Story revision. |
 | `ISSUE_RUN_RECEIPT` | Read-only | Return correlation, input, output, and run digests that bind the proposal to the exact bounded request. | Does not write an event, advance state, or claim independent verification. |
@@ -58,8 +58,7 @@ Request fields:
 ```json
 {
   "model": "optional server-allowlisted model name",
-  "skillId": "optional repository-controlled ADX skill identifier",
-  "templateGuidance": "optional plain-text author guidance, maximum 6000 characters"
+  "templateId": "optional server-allowlisted reviewed specification identifier"
 }
 ```
 

@@ -34,6 +34,8 @@ const ignoredDirectories = new Set([
   "coverage",
 ]);
 const transientCandidateDirectories = Object.freeze([
+  ".output",
+  ".vinxi",
   "apps/health-x/.output",
   "apps/health-x/.vinxi",
 ]);
@@ -46,6 +48,10 @@ const validationCommands = Object.freeze({
   "npm run verify:health-x": Object.freeze({
     executable: "npm",
     arguments: Object.freeze(["run", "verify:health-x"]),
+  }),
+  "npm run verify:production": Object.freeze({
+    executable: "npm",
+    arguments: Object.freeze(["run", "verify:production"]),
   }),
 });
 
@@ -79,7 +85,7 @@ export class ModelPatchBroker {
     );
   }
 
-  async execute({ adapter, task, timeoutMs = 900_000, repository }) {
+  async execute({ adapter, task, timeoutMs = 900_000, repository, onProgress }) {
     const startedAt = Date.now();
     const timings = {};
     if (!this.configured())
@@ -106,6 +112,7 @@ export class ModelPatchBroker {
       );
     const normalizedTask = normalizeTask(task, this.allowedValidationCommands);
     const writePaths = normalizeWritePaths(repository?.writePaths);
+    await reportProgress(onProgress, "CONTEXT_COLLECTION");
     const context = await collectContext(source, writePaths);
     timings.contextMs = elapsed(startedAt);
     const scratchRoot = await mkdtemp(join(tmpdir(), "adx-model-patch-"));
@@ -122,6 +129,7 @@ export class ModelPatchBroker {
         await linkSourceDependencies(source, workspace);
       timings.workspaceCopyMs = elapsed(copyStartedAt);
       const modelStartedAt = Date.now();
+      await reportProgress(onProgress, "MODEL_REQUEST");
       const { completion, patches, featureSpotlight } =
         await requestValidatedPatches({
           gateway: this.gateway,
@@ -134,6 +142,7 @@ export class ModelPatchBroker {
       for (const patch of patches) await writePatch(workspace, patch);
       timings.patchMs = elapsed(patchStartedAt);
       const validationStartedAt = Date.now();
+      await reportProgress(onProgress, "VALIDATION");
       const validation = await this.validate({
         cwd: workspace,
         allowedCommands: normalizedTask.allowedCommands,
@@ -168,6 +177,7 @@ export class ModelPatchBroker {
           candidateDigest: null,
           timings: finalizedTimings(timings, startedAt),
         });
+      await reportProgress(onProgress, "CANDIDATE_PROMOTION");
       await removeTransientCandidateOutputs(workspace);
       const promotionStartedAt = Date.now();
       await mkdir(dirname(candidate), { recursive: true });
@@ -199,6 +209,10 @@ export class ModelPatchBroker {
       await rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
     }
   }
+}
+
+async function reportProgress(onProgress, phase) {
+  if (typeof onProgress === "function") await onProgress(phase);
 }
 
 function elapsed(startedAt) {

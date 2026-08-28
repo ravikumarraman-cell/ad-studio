@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { ChangeCaseError } from '../change-case-ledger.mjs'
 import { LocalPreviewManager } from '../local-preview-manager.mjs'
 
 test('local preview manager builds and exposes only a registered digest-matched profile', async () => {
@@ -28,6 +29,18 @@ test('local preview manager rejects a source that differs from the verified cand
 test('local preview manager rejects a corporate profile without a configured npm credential secret', async () => {
   const manager = new LocalPreviewManager({ profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', npmrcSecretRequired: true, containerPort: 8080, readinessPath: '/' }]]), digestCandidate: async () => 'sha256:verified' })
   await assert.rejects(() => manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' }), { code: 'LOCAL_PREVIEW_NPM_CREDENTIALS_REQUIRED' })
+})
+
+test('local preview manager reports npm authentication failures without exposing build output', async () => {
+  const manager = new LocalPreviewManager({
+    profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', containerPort: 8080, readinessPath: '/' }]]),
+    digestCandidate: async () => 'sha256:verified',
+    runCommand: async () => { throw new ChangeCaseError('LOCAL_PREVIEW_COMMAND_FAILED', 'The local preview command failed.', { details: { output: 'npm error code E401 Incorrect or missing password token=never-expose' } }) },
+  })
+  await assert.rejects(
+    () => manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' }),
+    (error) => error.code === 'LOCAL_PREVIEW_NPM_AUTH_FAILED' && !JSON.stringify(error).includes('never-expose'),
+  )
 })
 
 test('local preview manager rejects a candidate Dockerfile that predates the registered build contract', async () => {

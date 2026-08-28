@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 export function createApplicationPreviewProfiles({
   sourceRoot,
   candidateRoot,
+  dockerfilePath = "Dockerfile",
 }) {
   if (
     typeof sourceRoot !== "string" ||
@@ -11,13 +12,14 @@ export function createApplicationPreviewProfiles({
     !candidateRoot
   )
     return new Map();
+  const dockerfile = normalizeDockerfilePath(dockerfilePath);
   const profile = ({ id, label, context, comparisonRole, candidateBound }) =>
     Object.freeze({
       id,
       label,
       comparisonRole,
       candidateBound,
-      dockerfile: resolve(context, "apps/health-x/Dockerfile"),
+      dockerfile: resolve(context, dockerfile),
       context,
       npmRegistry:
         "https://edgeinternal1uhg.optum.com/artifactory/api/npm/tenant-compass-npm-vir/",
@@ -49,4 +51,16 @@ export function createApplicationPreviewProfiles({
       }),
     ],
   ]);
+}
+
+function normalizeDockerfilePath(value) {
+  const path = typeof value === "string" ? value.trim() : "";
+  if (
+    !path ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.split("/").some((part) => !part || part === "." || part === "..")
+  )
+    throw new Error("LOCAL_PREVIEW_DOCKERFILE_PATH_INVALID");
+  return path;
 }

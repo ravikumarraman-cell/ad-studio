@@ -6,6 +6,7 @@ export function WorkflowMap({ current }: { current: number }) {
       <p className="adx-eyebrow">WORKFLOW</p>
       <h2>From feature to governed delivery</h2>
       <p>Story generation is a deliberate authoring step before independent approval.</p>
+      <p aria-label="Workflow state legend">Complete: finished. Do this now: your current gate. Later: locked until earlier evidence is retained.</p>
     </div>
     <ol>
       {gates.map((gate, index) => {

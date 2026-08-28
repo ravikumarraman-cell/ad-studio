@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 export const POLICY_VERSION = 'adx-authz-1'
 
 export const roleCapabilities = Object.freeze({
-  workspace_admin: ['workspace.read', 'workspace.manage', 'member.manage', 'resource.read', 'resource.write', 'resource.approve_high_risk', 'audit.read'],
+  workspace_admin: ['workspace.read', 'workspace.manage', 'member.manage', 'resource.read', 'resource.write', 'resource.review', 'resource.approve_high_risk', 'audit.read'],
   contributor: ['workspace.read', 'resource.read', 'resource.write'],
   reviewer: ['workspace.read', 'resource.read', 'resource.review', 'audit.read'],
   auditor: ['workspace.read', 'resource.read', 'audit.read'],

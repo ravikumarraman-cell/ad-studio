@@ -10,6 +10,7 @@ test('delivery review guides a provider setup when no preview plan exists', () =
   assert.match(page, /No preview plan has been retained/)
   assert.match(page, /Commit-bound checklist/)
   assert.match(page, /Prepare preview plan/)
+  assert.match(page, /aria-label="Blocked: Preview plan retained\./)
   assert.doesNotMatch(page, /Approve this preview delivery/)
 })
 
@@ -20,6 +21,7 @@ test('delivery review enables a decision only after matching CI evidence and no 
   assert.match(page, /Approve this preview delivery/)
   assert.match(page, /delivery-decision/)
   assert.match(page, /sha256:commit/)
+  assert.match(page, /aria-label="Complete: Preview plan retained\./)
 })
 
 test('delivery review gives a bounded recovery path for missing CI and blocking findings', () => {

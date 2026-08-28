@@ -1,6 +1,6 @@
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]) }
 
-function checklistItem(title, done, detail) { return `<li class="${done ? 'done' : ''}"><b>${done ? 'OK' : '...'}</b><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></span></li>` }
+function checklistItem(title, done, detail) { return `<li class="${done ? 'done' : ''}" aria-label="${escapeHtml(`${done ? 'Complete' : 'Blocked'}: ${title}. ${detail}`)}"><span class="check-status" aria-hidden="true">${done ? 'OK' : '...'}</span><span><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></span></li>` }
 
 export function renderDeliveryReviewPage(changeCase, plans, review, options) {
   const { canReview, canPrepare, canExecute, prepareEndpoint, executeEndpoint, ciRefreshEndpoint, decisionEndpoint, outcomeReviewUrl } = options

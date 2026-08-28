@@ -104,26 +104,30 @@ export class LocalPreviewManager {
       typeof profile.npmrcSecretPath === "string" && profile.npmrcSecretPath
         ? ["--secret", `id=npmrc,src=${profile.npmrcSecretPath}`]
         : [];
-    await this.runCommand(
-      [
-        "docker",
-        "build",
-        "--label",
-        `${previewLabel}=true`,
-        "--label",
-        `com.adx.preview.profile=${profile.id}`,
-        "--label",
-        `com.adx.preview.candidate=${candidateDigest}`,
-        ...registryArgument,
-        ...npmrcSecretArgument,
-        "--tag",
-        image,
-        "--file",
-        profile.dockerfile,
-        profile.context,
-      ],
-      { timeoutMs: 10 * 60_000 },
-    );
+    try {
+      await this.runCommand(
+        [
+          "docker",
+          "build",
+          "--label",
+          `${previewLabel}=true`,
+          "--label",
+          `com.adx.preview.profile=${profile.id}`,
+          "--label",
+          `com.adx.preview.candidate=${candidateDigest}`,
+          ...registryArgument,
+          ...npmrcSecretArgument,
+          "--tag",
+          image,
+          "--file",
+          profile.dockerfile,
+          profile.context,
+        ],
+        { timeoutMs: 10 * 60_000 },
+      );
+    } catch (error) {
+      throw previewBuildError(error);
+    }
     try {
       await this.runCommand(
         [
@@ -183,6 +187,16 @@ export class LocalPreviewManager {
     this.previews.delete(id);
     return { accepted: true, previewId: id, status: "STOPPED" };
   }
+}
+
+function previewBuildError(error) {
+  const output = typeof error?.details?.output === "string" ? error.details.output : "";
+  if (/npm error code e401|incorrect or missing password/i.test(output))
+    return new ChangeCaseError(
+      "LOCAL_PREVIEW_NPM_AUTH_FAILED",
+      "The preview build could not authenticate to the configured npm registry. Refresh the server-configured npm credential file, then retry the preview.",
+    );
+  return error;
 }
 
 async function availablePort() {

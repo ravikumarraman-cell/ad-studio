@@ -407,6 +407,39 @@ export class PostgresExecutionRepository {
       ),
     );
   }
+  async recordProgress({ scope, runId, phase }) {
+    const allowedPhases = new Set([
+      "CONTEXT_COLLECTION",
+      "MODEL_REQUEST",
+      "VALIDATION",
+      "CANDIDATE_PROMOTION",
+    ]);
+    if (!allowedPhases.has(phase))
+      throw new ChangeCaseError(
+        "EXECUTION_PROGRESS_INVALID",
+        "Execution progress must name an approved runner phase.",
+      );
+    return this.scoped(scope, async (client) => {
+      const current = await client.query(
+        "SELECT status FROM adx_agent_run WHERE id=$1 AND organization_id=$2 AND workspace_id=$3 FOR UPDATE",
+        [runId, scope.organizationId, scope.workspaceId],
+      );
+      if (!current.rowCount)
+        throw new ChangeCaseError(
+          "EXECUTION_RUN_NOT_FOUND",
+          "Execution run was not found.",
+        );
+      if (current.rows[0].status !== "RUNNING") return false;
+      const event = this.#event({
+        runId,
+        sequence: await this.#nextSequence(client, runId),
+        eventType: "AgentRunProgressed.v1",
+        payload: { phase },
+      });
+      await this.#insertEvent(client, scope, event);
+      return true;
+    });
+  }
   async completeDispatch({ scope, leaseId, runId, result, request }) {
     return this.scoped(scope, async (client) => {
       const current = await client.query(
@@ -532,7 +565,7 @@ export class PostgresExecutionRepository {
       ).rows,
       events: (
         await client.query(
-          "SELECT event.run_id AS \"runId\",event.sequence,event.event_type AS \"eventType\",event.occurred_at AS \"occurredAt\",event.payload->>'errorCode' AS \"errorCode\",event.payload->'errorDetails' AS \"errorDetails\",event.payload->'timings' AS timings,event.payload->'quota' AS quota,event.payload->'artifacts' AS artifacts,COALESCE((event.payload->>'timedOut')::boolean,false) AS \"timedOut\",event.payload->>'signal' AS signal FROM adx_agent_run_event event JOIN adx_agent_run run ON run.id=event.run_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 ORDER BY event.occurred_at ASC,event.sequence ASC",
+          "SELECT event.run_id AS \"runId\",event.sequence,event.event_type AS \"eventType\",event.occurred_at AS \"occurredAt\",event.payload->>'phase' AS phase,event.payload->>'errorCode' AS \"errorCode\",event.payload->'errorDetails' AS \"errorDetails\",event.payload->'timings' AS timings,event.payload->'quota' AS quota,event.payload->'artifacts' AS artifacts,COALESCE((event.payload->>'timedOut')::boolean,false) AS \"timedOut\",event.payload->>'signal' AS signal FROM adx_agent_run_event event JOIN adx_agent_run run ON run.id=event.run_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 ORDER BY event.occurred_at ASC,event.sequence ASC",
           [changeCaseId, scope.organizationId, scope.workspaceId],
         )
       ).rows,

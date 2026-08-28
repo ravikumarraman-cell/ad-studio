@@ -70,6 +70,9 @@ import { adxPageThemeCss } from "./adx-page-theme.mjs";
 import { renderStoryReviewPage } from "./story-review-page.mjs";
 import workflowContract from "../../packages/domain/src/change-case-workflow.json" with { type: "json" };
 import { escapeHtml, htmlScriptConfig } from "./review-page-utils.mjs";
+import { intakeGatePage } from "./intake-gate-page.mjs";
+import { storyWorkshopPageWithModelSelector } from "./story-workshop-page.mjs";
+import { outcomeReviewPage } from "./outcome-review-page.mjs";
 import {
   authorizationAction,
   matchChangeCaseRoute,
@@ -112,6 +115,11 @@ const designAuthorReviewer = Object.freeze({
   type: "human",
   issuer: "https://issuer.example",
 });
+const designContributor = Object.freeze({
+  id: "oidc:https://issuer.example:design-contributor",
+  type: "human",
+  issuer: "https://issuer.example",
+});
 const memberships = Object.freeze({
   alice: [
     {
@@ -142,6 +150,14 @@ const memberships = Object.freeze({
       organizationId: ids.orgA,
       workspaceId: ids.workspaceA,
       roles: ["workspace_admin", "reviewer"],
+      version: 1,
+    },
+  ],
+  designContributor: [
+    {
+      organizationId: ids.orgA,
+      workspaceId: ids.workspaceA,
+      roles: ["contributor"],
       version: 1,
     },
   ],
@@ -221,6 +237,7 @@ const localPreviewManager = new LocalPreviewManager({
   profiles: createApplicationPreviewProfiles({
     sourceRoot: modelPatchProfile.sourceRoot,
     candidateRoot,
+    dockerfilePath: process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE,
   }),
   digestCandidate: digestCandidateTree,
 });
@@ -415,8 +432,11 @@ function resolveModelPatchProfile(environment) {
       ref: String(
         environment.ADX_HEALTH_X_MODEL_REF ?? "refs/heads/main",
       ).trim(),
-      writePaths: Object.freeze(["apps/health-x/**"]),
-      validationCommand: "npm run verify:health-x",
+      writePaths: configuredWritePaths(
+        environment.ADX_HEALTH_X_MODEL_WRITE_PATHS,
+        ["app/**"],
+      ),
+      validationCommand: "npm run verify:production",
       linkSourceDependencies: true,
     });
   return Object.freeze({
@@ -437,19 +457,25 @@ function resolveModelPatchProfile(environment) {
         environment.ADX_LOCAL_CODING_AGENT_REF ??
         "",
     ).trim(),
-    writePaths: Object.freeze(
-      String(
-        environment.ADX_CODING_MODEL_WRITE_PATHS ??
-          environment.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ??
-          "",
-      )
-        .split(",")
-        .map((path) => path.trim())
-        .filter(Boolean),
+    writePaths: configuredWritePaths(
+      environment.ADX_CODING_MODEL_WRITE_PATHS ??
+        environment.ADX_LOCAL_CODING_AGENT_WRITE_PATHS,
+      [],
     ),
     validationCommand: "node --test",
     linkSourceDependencies: false,
   });
+}
+
+function configuredWritePaths(value, fallback) {
+  if (typeof value !== "string" || !value.trim())
+    return Object.freeze(fallback);
+  return Object.freeze(
+    value
+      .split(",")
+      .map((path) => path.trim())
+      .filter(Boolean),
+  );
 }
 
 function createConfiguredGitHubDraftPrExecution({
@@ -652,180 +678,6 @@ function storyReviewPageV2(
         : `<section class="card notice"><p class="eyebrow">GATE B · AWAITING REVIEW</p><h2>Read access does not advance a gate</h2><p>You can inspect the retained requirement and story contract. An independent decision maker with workflow permission must record the decision.</p></section>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Review — ${escapeHtml(changeCase.title)}</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:auto;padding:32px 20px 56px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;letter-spacing:.12em;font-weight:750;color:#52657f;margin:0 0 6px}h1{margin:.2rem 0;font-size:2rem;line-height:1.2}h2{font-size:1.2rem;margin:.1rem 0 .5rem}h3{font-size:1rem;margin:0 0 .45rem}.risk{display:inline-block;background:#fff2d9;color:#7b4600;font-weight:750;padding:5px 10px;border-radius:999px}.muted{color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.decision{border:2px solid #2d74c4}.notice{background:#fff8e9;border-color:#f0cc7b}.success{background:#f0fbf4;border-color:#9bd2ae}dl{display:grid;grid-template-columns:max-content 1fr;gap:8px 18px}dt{font-weight:700;color:#52657f}ul{padding-left:20px}.story+.story{border-top:1px solid #e1e7ef;margin-top:20px;padding-top:20px}.scenario{border-left:3px solid #3274c7;padding-left:12px;margin:12px 0}.choice{display:flex;gap:10px;align-items:flex-start;border:1px solid #cddbeb;border-radius:10px;padding:13px;margin:10px 0;cursor:pointer}.choice:has(input:checked){border:2px solid #2d74c4;background:#edf6ff}.choice input{margin-top:4px}.choice strong,.choice small{display:block}.choice small{color:#52657f}fieldset{border:0;padding:0;margin:0 0 18px}legend{font-weight:750;margin-bottom:8px}textarea{display:block;width:100%;min-height:100px;border:1px solid #8da0b7;border-radius:9px;padding:10px;font:inherit}textarea:focus{outline:3px solid #9dcef8;outline-offset:2px}.status{min-height:1.5em;font-weight:650}.error{color:#a92e2e}.button{display:inline-block;border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button:hover{background:#0d427e}code{font-size:.85em;overflow-wrap:anywhere}@media(max-width:650px){main{padding:18px 14px 40px}header,.card{padding:19px}h1{font-size:1.65rem}dl{grid-template-columns:1fr}}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span> <span class="muted">State: ${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</span></p></header><section class="card next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${escapeHtml(nextAction)}</h2><p>Review is bound to the exact story digest below. A page view alone never grants approval.</p></section>${decisionPanel}<section class="card"><p class="eyebrow">RETAINED INTENT</p><h2>What is being changed</h2><dl><dt>Outcome</dt><dd>${escapeHtml(governance.intent?.outcome ?? "Not captured")}</dd><dt>Owner</dt><dd>${escapeHtml(governance.intent?.owner ?? "Not captured")}</dd><dt>Acceptance criteria</dt><dd>${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</dd><dt>Repository</dt><dd>${escapeHtml(governance.intent?.targetRepository ?? "Not captured")}</dd><dt>Source</dt><dd>${(governance.sources ?? []).map((source) => `${escapeHtml(source.sourceName)} <code>${escapeHtml(source.sourceDigest)}</code>`).join("<br>") || "None retained"}</dd></dl></section><section class="card"><p class="eyebrow">RISK EXPLANATION</p><h2>${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} effective risk</h2><p>${escapeHtml(governance.assessment?.explanation?.rationale ?? "Classification is pending.")}</p><ul>${factors.map((factor) => `<li>${escapeHtml(factor.asset)} — ${escapeHtml(factor.classification)} (minimum risk weight ${escapeHtml(factor.weight)})</li>`).join("")}</ul></section><section class="card"><p class="eyebrow">BDD STORY CONTRACT · ${escapeHtml(governance.stories?.storyDigest ?? "not generated")}</p><h2>Reviewable stories</h2>${storyMarkup}</section><section class="card"><p class="eyebrow">APPROVAL HISTORY</p><h2>Digest-bound decisions</h2><ul>${approvals.map((approval) => `<li><strong>${escapeHtml(approval.decision)}</strong> · ${escapeHtml(approval.status)} · <code>${escapeHtml(approval.storyDigest)}</code><br>${escapeHtml(approval.rationale)}</li>`).join("") || "<li>No decision has been recorded.</li>"}</ul></section></main><script>const config=${config};const form=document.getElementById('story-decision-form');form?.addEventListener('submit',async(event)=>{event.preventDefault();const status=document.getElementById('decision-status');const decision=new FormData(form).get('decision');const rationale=document.getElementById('story-rationale').value.trim();status.className='status';if(!decision||!rationale){status.textContent='Choose a decision and enter a rationale before recording it.';status.classList.add('error');return}const button=form.querySelector('button');button.disabled=true;button.textContent='Recording…';try{const response=await fetch(config.decisionEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({storyDigest:config.storyDigest,decision,rationale,expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||body.code||'Unable to record the decision.');status.textContent=decision==='APPROVED'?'Story approved. Opening design review…':'Story returned for revision. Refreshing the review…';window.setTimeout(()=>{window.location.href=decision==='APPROVED'?config.designReviewUrl:window.location.href},500)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Record decision'}});</script></body></html>`;
 }
-function storyWorkshopPage(
-  changeCase,
-  governance,
-  {
-    canAuthor,
-    storiesEndpoint,
-    storySuggestionsEndpoint,
-    storyReviewUrl,
-    aiStatus,
-  },
-) {
-  const isReady = [
-    "RISK_REVIEW",
-    "AWAITING_STORY_APPROVAL",
-    "DESIGN_REVIEW",
-  ].includes(changeCase.state);
-  const config = htmlScriptConfig({
-    storiesEndpoint,
-    storySuggestionsEndpoint,
-    expectedVersion: changeCase.projectionVersion,
-    storyReviewUrl,
-    aiEnabled: aiStatus.configured,
-    aiProvider: aiStatus.provider,
-    aiModel: aiStatus.model,
-  });
-  const aiPanel = aiStatus.configured
-    ? `<section class="ai-panel"><p class="eyebrow">AGENTIC STORY DECOMPOSITION · ${escapeHtml(aiStatus.model)}</p><h3>Start with agent-drafted story slices</h3><p>The bounded agent uses only retained Feature context and an approved model. It cannot save, approve, or advance stories; you review and submit any proposal yourself.</p><button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button><p id="suggestion-status" class="status" role="status" aria-live="polite"></p><div id="suggestion-list"></div><button class="button" type="button" id="accept-suggestions" hidden>Accept selected suggestions</button></section>`
-    : `<section class="ai-panel unavailable"><p class="eyebrow">AGENTIC STORY DECOMPOSITION</p><h3>Story decomposition agent is not configured</h3><p>Manual story authoring remains available. An administrator can enable the server-configured model agent; no browser key is used.</p></section>`;
-  const guidance = `<section class="card guidance"><p class="eyebrow">HOW TO SPLIT WELL</p><ol><li>Start with the user journey, not technical layers.</li><li>Make each slice independently valuable and small enough to plan.</li><li>Use observable Given / When / Then acceptance examples.</li><li>Keep cross-cutting security, accessibility, and operational needs visible in the relevant story.</li></ol></section>`;
-  const editor = !isReady
-    ? `<section class="card notice"><h2>Story shaping opens after risk classification</h2><p>Complete intake and risk classification first. That ensures the stories carry the right risk context into review.</p></section>`
-    : !canAuthor
-      ? `<section class="card notice"><h2>You can view the breakdown, but cannot submit it</h2><p>An authorized contributor must submit a story revision for independent review.</p></section>`
-      : `<section class="card editor"><p class="eyebrow">STEP 2 · DRAFT THE STORY SET</p><h2>Break this feature into user-value slices</h2><p>One feature can become several stories. Do not split by database, API, or UI layer—each story should describe a useful user outcome.</p>${aiPanel}<form id="story-workshop-form"><div id="story-list"></div><template id="story-template"><article class="story-card"><div class="story-head"><strong class="story-number"></strong><button type="button" class="remove">Remove</button></div><label>Story title<input name="title" required placeholder="e.g. Submit a complete authorization request"></label><label>User need<textarea name="narrative" required placeholder="As a …, I want …, so that …"></textarea></label><p class="bdd-title">Acceptance example</p><label>Given<textarea name="given" required></textarea></label><label>When<textarea name="when" required></textarea></label><label>Then<textarea name="then" required></textarea></label></article></template><button class="secondary" type="button" id="add-story">Add another story</button><p id="workshop-status" class="status" role="status" aria-live="polite"></p><button class="button" type="submit">Submit stories for independent review</button></form></section>`;
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Story Breakdown — ${escapeHtml(changeCase.title)}</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:960px;margin:auto;padding:32px 20px 56px}header,.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f;margin:0 0 6px}h1{font-size:2rem;margin:.15rem 0}h2{font-size:1.2rem;margin:.1rem 0 .5rem}.muted{color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.guidance{background:#fbfcfe}.notice{background:#fff8e9;border-color:#f0cc7b}.editor{border:2px solid #2d74c4}.ai-panel{border:1px solid #9dcef8;border-radius:12px;padding:18px;background:#f7fbff;margin:18px 0}.ai-panel.unavailable{border-color:#dce3ee;background:#fbfcfe}.suggestion{display:flex;gap:10px;border:1px solid #cddbeb;border-radius:9px;padding:12px;margin:9px 0;background:#fff;cursor:pointer}.suggestion input{margin-top:5px}.suggestion strong,.suggestion small{display:block}.suggestion small{color:#52657f}.story-card{border:1px solid #cddbeb;border-radius:12px;padding:18px;margin:14px 0;background:#fff}.story-head{display:flex;justify-content:space-between;align-items:center}.story-head strong{color:#11519b}.remove{border:0;background:transparent;color:#9b2929;text-decoration:underline;cursor:pointer;font:inherit}.story-card label{display:block;font-weight:700;margin-top:12px}.story-card input,.story-card textarea{display:block;width:100%;margin-top:5px;border:1px solid #8da0b7;border-radius:8px;padding:9px;font:inherit;font-weight:400}.story-card textarea{min-height:68px}.bdd-title{font-weight:750;margin:18px 0 0}.button,.secondary{display:inline-block;border:0;border-radius:9px;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}.button{background:#11519b;color:#fff;margin-top:12px}.secondary{background:#e9f4ff;color:#11519b}.status{min-height:1.5em;font-weight:650}.error{color:#a92e2e}ol{padding-left:20px}@media(max-width:650px){main{padding:18px 14px 40px}header,.card{padding:19px}h1{font-size:1.65rem}}</style></head><body><main><header><p class="eyebrow">AUTHORITATIVE CHANGE CASE · STORY BREAKDOWN</p><h1>${escapeHtml(changeCase.title)}</h1><p class="muted">Feature intent → story generation & curation → independent story approval → design review</p></header><section class="card next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>Generate and curate stories before Gate B</h2><p>Use model-backed suggestions or manual drafting, select the stories that fit the feature, and edit them before submission. ADX retains only the final story revision and sends that exact digest to the independent reviewer.</p></section><section class="card"><p class="eyebrow">PARENT FEATURE / RETAINED INTENT</p><h2>${escapeHtml(governance.intent?.outcome ?? "Intent has not been captured")}</h2><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</p><p><strong>Risk:</strong> ${escapeHtml(governance.assessment?.riskTier ?? changeCase.riskTier)} · <strong>Target repository:</strong> ${escapeHtml(governance.intent?.targetRepository ?? "Not captured")}</p></section>${guidance}${editor}</main><script>const config=${config};const form=document.getElementById('story-workshop-form');if(form){const list=document.getElementById('story-list');const template=document.getElementById('story-template');const renumber=()=>list.querySelectorAll('.story-card').forEach((card,index)=>card.querySelector('.story-number').textContent='Story '+(index+1));const add=()=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('.remove').onclick=()=>{card.remove();renumber()};renumber()};const fill=(story)=>{add();const card=list.lastElementChild;card.querySelector('[name=title]').value=story.title;card.querySelector('[name=narrative]').value=story.narrative;card.querySelector('[name=given]').value=story.scenarios[0].given;card.querySelector('[name=when]').value=story.scenarios[0].when;card.querySelector('[name=then]').value=story.scenarios[0].then};let suggestions=[];const suggestionStatus=document.getElementById('suggestion-status');const suggestionList=document.getElementById('suggestion-list');const accept=document.getElementById('accept-suggestions');document.getElementById('suggest-stories')?.addEventListener('click',async()=>{const button=document.getElementById('suggest-stories');button.disabled=true;button.textContent='Generating…';suggestionStatus.className='status';suggestionStatus.textContent='Generating a preview. Nothing is being saved.';try{const response=await fetch(config.storySuggestionsEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:'{}'});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to generate suggestions.');suggestions=body.suggestions||[];suggestionList.replaceChildren(...suggestions.map((story,index)=>{const label=document.createElement('label');label.className='suggestion';const input=document.createElement('input');input.type='checkbox';input.value=String(index);const text=document.createElement('span');const title=document.createElement('strong');title.textContent=story.title;const detail=document.createElement('small');detail.textContent=story.narrative;text.append(title,detail);label.append(input,text);return label}));accept.hidden=!suggestions.length;suggestionStatus.textContent=suggestions.length+' suggestions ready. Select one or more to add to your draft.'}catch(error){suggestionStatus.textContent=error.message;suggestionStatus.classList.add('error')}finally{button.disabled=false;button.textContent='Generate AI suggestions'}});accept?.addEventListener('click',()=>{const selected=[...suggestionList.querySelectorAll('input:checked')].map((input)=>suggestions[Number(input.value)]);if(!selected.length){suggestionStatus.textContent='Select at least one suggestion to add.';suggestionStatus.classList.add('error');return}[...list.querySelectorAll('.story-card')].filter((card)=>!['title','narrative','given','when','then'].some((name)=>card.querySelector('[name='+name+']').value.trim())).forEach((card)=>card.remove());selected.forEach(fill);renumber();suggestionStatus.className='status';suggestionStatus.textContent=selected.length+' suggestions added to your editable draft.';accept.hidden=true});document.getElementById('add-story').onclick=add;add();form.addEventListener('submit',async(event)=>{event.preventDefault();const status=document.getElementById('workshop-status');const cards=[...list.querySelectorAll('.story-card')];const stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));status.className='status';if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.textContent='Complete every field in at least one story.';status.classList.add('error');return}const button=form.querySelector('.button');button.disabled=true;button.textContent='Submitting…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,500)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Submit stories for independent review'}})}}</script></body></html>`;
-}
-function storyWorkshopPageWithModelSelector(changeCase, governance, options) {
-  // The legacy page bundled competing AI and editor handlers. Keep its markup, but
-  // replace that script with the single controllers below.
-  const page = storyWorkshopPage(changeCase, governance, options).replace(
-    /<script>[\s\S]*<\/script><\/body>/,
-    "</body>",
-  );
-  const models = options.aiStatus.models ?? [];
-  const style = `<style>
-    body{background:linear-gradient(135deg,#f6f9fc 0%,#eef7fd 48%,#f8fbf9 100%)}main{max-width:1100px;padding-top:24px}header{position:relative;overflow:hidden;background:#102b43;color:#f6fbff;border-color:#102b43;box-shadow:0 16px 34px #102a4324}header:after{content:"";position:absolute;width:360px;height:360px;right:-130px;top:-210px;border-radius:50%;background:#4fb9ec33}header .eyebrow,header .muted{color:#bcd8ea}header h1{max-width:760px;letter-spacing:-.035em}.adx-home-link{display:inline-flex;align-items:center;gap:7px;margin-bottom:22px;color:#dcedf8;font-weight:750;text-decoration:none}.adx-home-link:hover{text-decoration:underline}.story-hero-note{position:relative;display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}.story-hero-note span{padding:7px 10px;border:1px solid #5685a4;border-radius:999px;background:#173b58;color:#dcedf8;font-size:.8rem;font-weight:750}.next{background:linear-gradient(120deg,#e4f4ff,#f3fbff);border-color:#9dcef8}.ai-panel{border:0;border-radius:16px;padding:26px;background:linear-gradient(145deg,#102b43,#174a6c);color:#f4fbff;box-shadow:0 16px 30px #102a4320}.ai-panel .eyebrow{color:#a9d9f4}.ai-panel h3{font-size:1.45rem}.ai-panel p{max-width:700px;color:#d6eafa}.ai-panel.unavailable{background:#fff;color:#172033;border:1px solid #dce3ee;box-shadow:none}.ai-panel.unavailable p{color:#52657f}.ai-controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-top:20px}.model-picker{display:grid;gap:5px;min-width:min(100%,280px);font-size:.8rem;font-weight:800;color:#dcedf8}.model-picker small{font-weight:500;color:#bcd8ea}.model-picker select{width:100%;border:1px solid #78a8c3;border-radius:9px;padding:10px;background:#fff;color:#172033;font:inherit}.ai-panel .secondary{background:#75caef;color:#102b43}.ai-panel .secondary:hover{background:#b9e9fb}.ai-panel .button{background:#f4fbff;color:#102b43}.ai-feedback{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:center;margin:20px 0 4px;padding:14px 16px;border:1px solid #78b6d5;border-radius:12px;background:#0d3857}.ai-feedback[hidden]{display:none}.ai-feedback-icon{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#8bd5f4;color:#102b43;font-weight:900}.ai-feedback.loading .ai-feedback-icon{animation:adx-pulse 1.1s ease-in-out infinite}.ai-feedback.success{border-color:#82d4aa;background:#103f38}.ai-feedback.success .ai-feedback-icon{background:#a6e7bf}.ai-feedback.error{border-color:#f0a69d;background:#5a2424}.ai-feedback.error .ai-feedback-icon{background:#ffd2cd}.ai-feedback strong,.ai-feedback small{display:block}.ai-feedback small{margin-top:2px;color:#c7dfed}.ai-feedback.error small{color:#ffe0dc}.suggestion-list-title{margin:22px 0 8px;color:#dcedf8;font-size:.82rem;font-weight:800}.suggestion{position:relative;border:1px solid #bed6e7;background:#fff;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}.suggestion:hover{transform:translateY(-2px);border-color:#75caef;box-shadow:0 9px 18px #061d301f}.suggestion:has(input:checked){border:2px solid #2bb57a;background:#f2fff8}.status{margin:14px 0 0;padding:0}.status.error{padding:12px 14px;border-radius:9px;background:#fff2f1;color:#a52620}.editor{border:0;border-radius:16px;box-shadow:0 10px 25px #14213d12}.card{border-radius:16px}.guidance{border-style:dashed}@keyframes adx-pulse{50%{transform:scale(.82);opacity:.55}}@media(max-width:650px){.ai-controls{align-items:stretch}.ai-controls .secondary{width:100%}}
-    .suggestion{border-color:#79a9c5}.suggestion strong{color:#102b43;font-size:1rem;line-height:1.35}.suggestion small{color:#234861;font-size:.9rem;line-height:1.45}.suggestion input{accent-color:#087f5b;width:18px;height:18px;flex:0 0 auto}.suggestion:hover{border-color:#1776a8}.suggestion:has(input:checked){border:2px solid #087f5b;background:#eafbf3}
-    .editor{background:#f4f9fd;border:2px solid #176fa8}.editor>p{color:#294b63}.editor h2{color:#102b43}.editor form{display:grid;gap:16px;margin-top:22px}.editor #story-list{display:grid;gap:16px}.story-card{border:1px solid #628ba6;background:#fff;box-shadow:0 5px 14px #102a4312}.story-head{padding-bottom:13px;border-bottom:1px solid #c9dbe7}.story-head strong{display:inline-flex;align-items:center;min-height:28px;padding:4px 9px;border-radius:999px;background:#dcefff;color:#063d63;font-size:.84rem}.story-card label{color:#163b55;font-size:.9rem;letter-spacing:.01em}.story-card input,.story-card textarea{color:#102b43;background:#fff;border:2px solid #7998ad;line-height:1.45}.story-card input::placeholder,.story-card textarea::placeholder{color:#526f83;opacity:1}.story-card input:focus,.story-card textarea:focus{outline:3px solid #f5bb43;outline-offset:2px;border-color:#076fa8}.bdd-title{color:#123f5d;border-left:4px solid #1677ad;padding-left:9px}.remove{padding:6px 9px;border:1px solid #b74848;border-radius:7px;background:#fff;color:#8b2020;font-weight:750;text-decoration:none}.remove:hover{background:#fff0f0}.editor #add-story{justify-self:start;border:1px solid #2d75a5;background:#e7f4fd;color:#0d4e78}.editor form>.button{justify-self:start;background:#075f91;color:#fff;box-shadow:0 3px 8px #075f9138}.editor form>.button:hover{background:#06496f}.editor .status{color:#163b55}.editor .status.error{color:#8b2020}
-  </style>`;
-  const homeLink = `<a class="adx-home-link" href="${escapeHtml(options.homeUrl)}">← Back to ADX home</a><div class="story-hero-note"><span>1. Choose a model</span><span>2. Review suggestions</span><span>3. Edit before submitting</span></div>`;
-  const withHome = page
-    .replace("</style>", style)
-    .replace(
-      '</header><section class="card next">',
-      `${homeLink}</header><section class="card next">`,
-    );
-  const editorConfig = htmlScriptConfig({
-    storiesEndpoint: options.storiesEndpoint,
-    expectedVersion: changeCase.projectionVersion,
-    storyReviewUrl: options.storyReviewUrl,
-  });
-  const editorController = `<script>(function(){const config=${editorConfig},form=document.getElementById('story-workshop-form');if(!form)return;const list=document.getElementById('story-list'),template=document.getElementById('story-template'),status=document.getElementById('workshop-status'),renumber=()=>list.querySelectorAll('.story-card').forEach((card,index)=>card.querySelector('.story-number').textContent='Story '+(index+1)),add=()=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('.remove').addEventListener('click',()=>card.remove());renumber()};document.getElementById('add-story').addEventListener('click',add);if(!list.children.length)add();new MutationObserver(renumber).observe(list,{childList:true});form.addEventListener('submit',async(event)=>{event.preventDefault();const cards=[...list.querySelectorAll('.story-card')],stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));status.className='status';if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.textContent='Complete every field in at least one story.';status.classList.add('error');return}const button=form.querySelector('[type=submit]');button.disabled=true;button.textContent='Submitting…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})}),body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,350)}catch(error){status.textContent=error.message;status.classList.add('error');button.disabled=false;button.textContent='Submit stories for independent review'}})})()</script>`;
-  const submitController = `<script>(function(){const config=${editorConfig},form=document.getElementById('story-workshop-form');if(!form)return;form.addEventListener('submit',async(event)=>{event.preventDefault();event.stopImmediatePropagation();const list=document.getElementById('story-list'),status=document.getElementById('workshop-status'),cards=[...list.querySelectorAll('.story-card')],stories=cards.map((card,index)=>({key:'STORY-'+(index+1),title:card.querySelector('[name=title]').value.trim(),narrative:card.querySelector('[name=narrative]').value.trim(),scenarios:[{given:card.querySelector('[name=given]').value.trim(),when:card.querySelector('[name=when]').value.trim(),then:card.querySelector('[name=then]').value.trim()}]}));if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then)){status.className='status error';status.textContent='Each story needs a title, user need, and Given / When / Then example.';return}const button=form.querySelector('[type=submit]');button.disabled=true;button.textContent='Submitting…';status.className='status';status.textContent='Saving your story set…';try{const response=await fetch(config.storiesEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({stories,expectedVersion:config.expectedVersion})}),body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to submit the story set.');status.textContent='Stories submitted. Opening independent review…';window.setTimeout(()=>window.location.href=config.storyReviewUrl,350)}catch(error){status.className='status error';status.textContent=error.message;button.disabled=false;button.textContent='Submit stories for independent review'}},true)})()</script>`;
-  const formResetter = `<script>(function(){const original=document.getElementById('story-workshop-form');if(!original)return;const replacement=original.cloneNode(true);original.replaceWith(replacement)})()</script>`;
-  const draftSanitizer = `<script>(function(){const form=document.getElementById('story-workshop-form');form?.addEventListener('submit',()=>{const seen=new Set;document.querySelectorAll('#story-list .story-card').forEach((card)=>{const fields=[...card.querySelectorAll('[name]')].map((field)=>field.value.trim()),key=(fields[0]+'|'+fields[1]).toLowerCase();if(!fields.every(Boolean)||seen.has(key))card.remove();else seen.add(key)})},true)})()</script>`;
-  const withEditor = withHome.replace(
-    "</body>",
-    `${formResetter}${editorController}${draftSanitizer}${submitController}</body>`,
-  );
-  if (!options.aiStatus.configured || !models.length) return withEditor;
-  const choices = models
-    .map(
-      (model) =>
-        `<option value="${escapeHtml(model)}">${escapeHtml(model)}</option>`,
-    )
-    .join("");
-  const skills = options.aiStatus.skills ?? [];
-  const templates = options.aiStatus.templates ?? [];
-  const skillChoices = skills
-    .map(
-      (skill) =>
-        `<option value="${escapeHtml(skill.id)}">${escapeHtml(skill.label)} - ${escapeHtml(skill.description)}</option>`,
-    )
-    .join("");
-  const templateChoices = templates
-    .map(
-      (template) =>
-        `<option value="${escapeHtml(template.id)}">${escapeHtml(template.label)} - ${escapeHtml(template.description)}</option>`,
-    )
-    .join("");
-  const suggestionEndpoint = JSON.stringify(options.storySuggestionsEndpoint);
-  const selector = `<div class="ai-controls"><label for="story-ai-model" class="model-picker">Choose a decomposition model<select id="story-ai-model">${choices}</select><small>Using ${escapeHtml(options.aiStatus.providerLabel)}. Only approved, server-configured models are available.</small></label><label for="story-decomposition-skill" class="model-picker">Choose a reviewed ADX skill<select id="story-decomposition-skill"><option value="">No reviewed skill</option>${skillChoices}</select><small>Skills are repository-controlled guidance recorded in the agent run receipt.</small></label><label for="story-spec-template" class="model-picker">Story specification<select id="story-spec-template"><option value="">Use only retained context</option>${templateChoices}</select><small>One reviewed specification shapes this preview and is bound to its receipt.</small></label><label for="story-template-file" class="model-picker">Optional supplemental notes<input id="story-template-file" type="file" accept=".txt,text/plain" onchange="const file=this.files[0],status=document.getElementById('story-template-status');window.adxStoryTemplateGuidance='';if(!file){status.textContent='Upload a plain-text template, up to 6,000 characters.';return}file.text().then((text)=>{if(file.type&&file.type!=='text/plain'){throw new Error('Choose a plain-text (.txt) template.')}if(text.trim().length>6000){throw new Error('This template exceeds 6,000 characters.')}window.adxStoryTemplateGuidance=text;status.textContent=file.name+' loaded for this preview only.'}).catch((error)=>{this.value='';status.textContent=error.message})"><small id="story-template-status">Optional notes, up to 6,000 characters.</small></label>`;
-  const feedback = `<section id="ai-feedback" class="ai-feedback" hidden aria-live="polite"><span class="ai-feedback-icon" id="ai-feedback-icon">✦</span><div><strong id="ai-feedback-title">Preparing suggestions</strong><small id="ai-feedback-detail">ADX is preparing your feature context.</small></div></section><p id="suggestion-list-title" class="suggestion-list-title" hidden>Choose the story slices worth keeping</p>`;
-  return (
-    withEditor
-      .replace(
-        '<button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button>',
-        `${selector}<button class="secondary" type="button" id="suggest-stories">Run story decomposition agent</button></div>`,
-      )
-      .replace(
-        "body:'{}'",
-        "body:JSON.stringify({model:document.getElementById('story-ai-model')?.value,skillId:document.getElementById('story-decomposition-skill')?.value,templateId:document.getElementById('story-spec-template')?.value,templateGuidance:window.adxStoryTemplateGuidance||''})",
-      )
-      .replace(
-        '<p id="suggestion-status" class="status" role="status" aria-live="polite"></p>',
-        `${feedback}<p id="suggestion-status" class="status" role="status" aria-live="polite"></p>`,
-      )
-      .replace(
-        "</body>",
-        `<script>(function(){const button=document.getElementById('suggest-stories'),feedback=document.getElementById('ai-feedback'),title=document.getElementById('ai-feedback-title'),detail=document.getElementById('ai-feedback-detail'),list=document.getElementById('suggestion-list'),listTitle=document.getElementById('suggestion-list-title'),status=document.getElementById('suggestion-status');if(!button||!feedback||!list||!status)return;let startedAt=0,timer;const show=(state,heading,message)=>{feedback.hidden=false;feedback.className='ai-feedback '+state;title.textContent=heading;detail.textContent=message};const stop=()=>{if(timer)window.clearInterval(timer);timer=null};button.addEventListener('click',()=>{startedAt=Date.now();listTitle.hidden=true;show('loading','Crafting story options…','Your local model is analysing the feature. This can take a short moment on the first request.');stop();timer=window.setInterval(()=>{const seconds=Math.max(1,Math.round((Date.now()-startedAt)/1000));detail.textContent='Still working — '+seconds+'s elapsed. ADX has not saved or approved anything.'},1000)});const observer=new MutationObserver(()=>{if(status.classList.contains('error')){stop();show('error','Suggestions need attention',status.textContent||'The model could not produce a usable draft.')}else if(list.children.length){stop();listTitle.hidden=false;show('success',list.children.length+' story option'+(list.children.length===1?'':'s')+' ready','Review each option, select the ones that fit, then add them to your editable draft.')}});observer.observe(status,{childList:true,subtree:true,attributes:true,attributeFilter:['class']});observer.observe(list,{childList:true});list.addEventListener('change',()=>{const count=list.querySelectorAll('input:checked').length;if(count)detail.textContent=count+' selected. You can still edit every detail before submission.'})})()</script></body>`,
-      )
-      .replace(
-        "</script></body>",
-        `</script><script>(function(){const button=document.getElementById('suggest-stories'),accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),listTitle=document.getElementById('suggestion-list-title'),template=document.getElementById('story-template'),status=document.getElementById('suggestion-status'),feedback=document.getElementById('ai-feedback'),feedbackTitle=document.getElementById('ai-feedback-title'),feedbackDetail=document.getElementById('ai-feedback-detail'),model=document.getElementById('story-ai-model');if(!button||!accept||!list||!template||!status)return;let suggestions=[];let timer;const setFeedback=(kind,heading,message)=>{if(!feedback)return;feedback.hidden=false;feedback.className='ai-feedback '+kind;feedbackTitle.textContent=heading;feedbackDetail.textContent=message};const stop=()=>{if(timer)window.clearInterval(timer);timer=null};const fill=(story)=>{const node=template.content.cloneNode(true);list.append(node);const card=list.lastElementChild;card.querySelector('[name=title]').value=story.title;card.querySelector('[name=narrative]').value=story.narrative;card.querySelector('[name=given]').value=story.scenarios[0].given;card.querySelector('[name=when]').value=story.scenarios[0].when;card.querySelector('[name=then]').value=story.scenarios[0].then;card.querySelector('.remove').onclick=()=>card.remove()};button.addEventListener('click',async(event)=>{event.preventDefault();event.stopImmediatePropagation();button.disabled=true;button.textContent='Generating…';status.className='status';status.textContent='';listTitle.hidden=true;setFeedback('loading','Crafting story options…','Your local model is analysing the feature. Nothing is being saved.');const started=Date.now();timer=window.setInterval(()=>{setFeedback('loading','Crafting story options…','Still working — '+Math.max(1,Math.round((Date.now()-started)/1000))+'s elapsed. You can safely stay on this page.')},1000);const controller=new AbortController();const timeout=window.setTimeout(()=>controller.abort(),90000);try{const response=await fetch(${suggestionEndpoint},{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({model:model?.value}),signal:controller.signal});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to generate suggestions.');suggestions=body.suggestions||[];if(!suggestions.length)throw new Error('The model returned no usable story options. Try again or draft a story manually.');list.replaceChildren(...suggestions.map((story,index)=>{const label=document.createElement('label');label.className='suggestion';const input=document.createElement('input');input.type='checkbox';input.value=String(index);const text=document.createElement('span');const heading=document.createElement('strong');heading.textContent=story.title;const detail=document.createElement('small');detail.textContent=story.narrative;text.append(heading,detail);label.append(input,text);return label}));listTitle.hidden=false;accept.hidden=false;status.textContent=suggestions.length+' suggestions are ready to review.';setFeedback('success',suggestions.length+' story option'+(suggestions.length===1?'':'s')+' ready','Select the slices that fit your feature, then add them to your editable draft.')}catch(error){const message=error.name==='AbortError'?'This took longer than 90 seconds. The request was stopped; try again or use manual drafting.':error.message;status.textContent=message;status.classList.add('error');setFeedback('error','Suggestions need attention',message)}finally{window.clearTimeout(timeout);stop();button.disabled=false;button.textContent='Generate AI suggestions'}},true);accept.addEventListener('click',(event)=>{event.preventDefault();event.stopImmediatePropagation();const selected=[...list.querySelectorAll('input:checked')].map((input)=>suggestions[Number(input.value)]);if(!selected.length){status.textContent='Select at least one story option first.';status.className='status error';setFeedback('error','Choose a story first','Select one or more options, then add them to your editable draft.');return}[...document.querySelectorAll('#story-list .story-card')].filter((card)=>!['title','narrative','given','when','then'].some((name)=>card.querySelector('[name='+name+']').value.trim())).forEach((card)=>card.remove());selected.forEach(fill);accept.hidden=true;status.className='status';status.textContent=selected.length+' selected suggestion'+(selected.length===1?' was':'s were')+' added to your editable draft.';setFeedback('success','Stories added to your draft','Review and edit every field before submitting for independent approval.')},true)})()</script></body>`,
-      )
-      // The legacy page also shipped an AI handler. The enhanced controller above is
-      // the single authority for generation and acceptance, preventing double drafts.
-      .replace(
-        "document.getElementById('suggest-stories')?.addEventListener('click',async()=>{",
-        "if(false)document.getElementById('suggest-stories')?.addEventListener('click',async()=>{",
-      )
-      .replace(
-        "accept?.addEventListener('click',()=>{",
-        "if(false)accept?.addEventListener('click',()=>{",
-      )
-      .replaceAll(
-        "if(!stories.length||stories.some((story)=>!story.title||!story.narrative||!story.scenarios[0].given||!story.scenarios[0].when||!story.scenarios[0].then))",
-        "if(!stories.length)",
-      )
-      .replace(
-        "list=document.getElementById('suggestion-list'),listTitle",
-        "list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle",
-      )
-      .replace(
-        "if(!button||!accept||!list||!template||!status)return",
-        "if(!button||!accept||!list||!storyList||!template||!status)return",
-      )
-      .replace(
-        "const fill=(story)=>{const node=template.content.cloneNode(true);list.append(node);",
-        "const fill=(story)=>{const node=template.content.cloneNode(true);storyList.append(node);",
-      )
-      .replace(
-        "storyList.append(node);const card=list.lastElementChild;",
-        "storyList.append(node);const card=storyList.lastElementChild;",
-      )
-      .replace(
-        "list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle",
-        "list=document.getElementById('suggestion-list'),listTitle",
-      )
-      .replace(
-        "accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),listTitle",
-        "accept=document.getElementById('accept-suggestions'),list=document.getElementById('suggestion-list'),storyList=document.getElementById('story-list'),listTitle",
-      )
-  );
-}
-
-function intakeGatePage(
-  changeCase,
-  governance,
-  { canWrite, classifyEndpoint, storyWorkshopUrl },
-) {
-  const ready = changeCase.state === "RISK_REVIEW";
-  const action = ready
-    ? `<a class="button" href="${escapeHtml(storyWorkshopUrl)}">Continue to Generate & curate stories</a>`
-    : changeCase.state === "INTAKE" && canWrite
-      ? `<button class="button" id="classify">Confirm intake and classify risk</button><p id="status" role="status" aria-live="polite"></p>`
-      : `<p>This Change Case must have complete retained intake before ADX can classify risk and open story generation.</p>`;
-  const config = htmlScriptConfig({
-    classifyEndpoint,
-    expectedVersion: changeCase.projectionVersion,
-    storyWorkshopUrl,
-  });
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Intake & Risk</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px/1.5 system-ui,sans-serif}main{max-width:760px;margin:auto;padding:32px 20px}section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.eyebrow{font-size:.75rem;font-weight:750;letter-spacing:.12em;color:#52657f}.next{background:#e9f4ff;border-color:#9dcef8}.button{border:0;border-radius:9px;background:#11519b;color:#fff;padding:10px 14px;text-decoration:none;font:inherit;font-weight:750;cursor:pointer}#status{font-weight:650}.error{color:#a92e2e}</style></head><body><main><section><p class="eyebrow">GATE A · DEFINE THE WORK</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} declared risk</p></section><section class="next"><p class="eyebrow">ONE SAFE NEXT ACTION</p><h2>${ready ? "Risk classification is complete." : "Confirm the retained intake before generating stories."}</h2><p>Story generation starts only after this check, so every suggested or manual story carries the right risk context.</p>${action}</section><section><p class="eyebrow">RETAINED FEATURE INTENT</p><p><strong>Outcome:</strong> ${escapeHtml(governance.intent?.outcome ?? "Not captured")}</p><p><strong>Owner:</strong> ${escapeHtml(governance.intent?.owner ?? "Not captured")}</p><p><strong>Acceptance criteria:</strong> ${escapeHtml(governance.intent?.acceptanceCriteria ?? "Not captured")}</p></section></main><script>const config=${config};document.getElementById('classify')?.addEventListener('click',async()=>{const button=document.getElementById('classify');const status=document.getElementById('status');button.disabled=true;button.textContent='Classifying…';try{const response=await fetch(config.classifyEndpoint,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json','idempotency-key':crypto.randomUUID()},body:JSON.stringify({expectedVersion:config.expectedVersion})});const body=await response.json().catch(()=>({}));if(!response.ok)throw new Error(body.error?.message||'Unable to classify risk.');status.textContent='Risk classified. Opening story generation…';window.setTimeout(()=>window.location.href=config.storyWorkshopUrl,400)}catch(error){status.textContent=error.message;status.className='error';button.disabled=false;button.textContent='Confirm intake and classify risk'}})</script></body></html>`;
-}
 function designReviewPage(changeCase, view) {
   const design = view.design;
   const exceptions = view.exceptions ?? [];
@@ -873,22 +725,6 @@ function deliveryReviewPage(changeCase, plans, review) {
         ? "Resolve or reject error-level review findings before approval."
         : "An independent reviewer may record an approval or rejection for this exact commit.";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Delivery Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.warn{color:#a92e2e;font-weight:700}code{overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · DELIVERY REVIEW · PREVIEW ONLY</p><h1>${escapeHtml(changeCase.title)}</h1><p>No external branch, pull request, merge, or release is created by this surface.</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p></section>${plan ? `<section><h2>Exact preview under review</h2><p>Branch <code>${escapeHtml(plan.branch)}</code><br>Commit <code>${escapeHtml(plan.commitDigest)}</code><br>Candidate <code>${escapeHtml(plan.candidateDigest)}</code><br>Evidence <code>${escapeHtml(plan.evidenceDigest)}</code></p></section><section><h2>CI and review findings</h2><ul>${ciRuns.map((item) => `<li>${escapeHtml(item.providerId)} · ${escapeHtml(item.status)} · <code>${escapeHtml(item.commitDigest)}</code></li>`).join("") || "<li>No CI status retained.</li>"}</ul><ul>${findings.map((item) => `<li class="${item.finding?.severity === "ERROR" ? "warn" : ""}">${escapeHtml(item.finding?.severity)} · ${escapeHtml(item.finding?.ruleId)} — ${escapeHtml(item.finding?.message)}</li>`).join("") || "<li>No review findings retained.</li>"}</ul></section><section><h2>Commit-bound decisions</h2><ul>${approvals.map((item) => `<li><strong>${escapeHtml(item.decision)}</strong> · ${escapeHtml(item.status)} · ${escapeHtml(item.reviewedBy)}<br><code>${escapeHtml(item.commitDigest)}</code><br>${escapeHtml(item.rationale)}</li>`).join("") || "<li>No decision has been recorded.</li>"}</ul></section>` : ""}</main></body></html>`;
-}
-function outcomeReviewPage(changeCase, records) {
-  const counts = records.reduce(
-    (summary, item) => ({
-      ...summary,
-      [item.outcome]: (summary[item.outcome] ?? 0) + 1,
-    }),
-    {},
-  );
-  const next =
-    changeCase.state === "READY_FOR_DELIVERY"
-      ? "Retain a final outcome before marking this Change Case complete."
-      : changeCase.state === "OUTCOME_RECORDED"
-        ? "Review the retained outcome and compare it with the frozen evaluation baseline."
-        : "A release outcome may be recorded only after delivery readiness.";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Outcome Review</title><style>body{margin:0;background:#f6f8fb;color:#172033;font:16px system-ui,sans-serif;line-height:1.5}main{max-width:960px;margin:auto;padding:32px 20px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:24px;margin:16px 0}.next{background:#e9f4ff}.metric{display:inline-block;margin-right:20px;font-weight:700}code{overflow-wrap:anywhere}ul{padding-left:20px}</style></head><body><main><header><p>AUTHORITATIVE CHANGE CASE · OUTCOME REVIEW</p><h1>${escapeHtml(changeCase.title)}</h1><p>State: ${escapeHtml(changeCase.state)} · ${escapeHtml(changeCase.riskTier)} risk</p></header><section class="next"><h2>One safe next action</h2><p>${escapeHtml(next)}</p><p>Only retained outcomes count. Activity, transcripts, and unverified release claims are not outcomes.</p></section><section><h2>Outcome summary</h2><p><span class="metric">Success: ${escapeHtml(counts.SUCCESS ?? 0)}</span><span class="metric">Failure: ${escapeHtml(counts.FAILURE ?? 0)}</span><span class="metric">Rolled back: ${escapeHtml(counts.ROLLED_BACK ?? 0)}</span></p></section><section><h2>Immutable outcome history</h2><ul>${records.map((item) => `<li><strong>${escapeHtml(item.outcome)}</strong> · ${escapeHtml(item.taxonomy)}<br>Release candidate: <code>${escapeHtml(item.releaseCandidateId)}</code><br>Outcome: <code>${escapeHtml(item.outcomeDigest)}</code></li>`).join("") || "<li>No retained outcome record.</li>"}</ul></section></main></body></html>`;
 }
 function controlPlanePage(principal, workspaces) {
   const rows = workspaces.flatMap(({ workspaceId, changeCases }) =>
@@ -1672,6 +1508,8 @@ const server = createServer(async (request, response) => {
             ? designReviewer
             : actor === "designAuthorReviewer"
               ? designAuthorReviewer
+              : actor === "designContributor"
+                ? designContributor
               : actor === "bob"
                 ? bob
                 : null;
@@ -2480,7 +2318,9 @@ const server = createServer(async (request, response) => {
         200,
         await renderCandidateBrowserPage({
           candidateRoot,
+          sourceRoot: modelPatchProfile.sourceRoot,
           baseUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`,
+          verificationUrl: `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/evidence-review`,
           requestedPath: url.searchParams.get("path") ?? "",
         }),
         traceId,
@@ -2505,6 +2345,7 @@ const server = createServer(async (request, response) => {
         action: "resource.review",
       });
       const handoffUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/execution-handoff`;
+      const candidateUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/generated-candidate`;
       const runEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-run`;
       const decisionEndpoint = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/verification-decision`;
       const previewUrl = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCaseId)}/application-preview`;
@@ -2521,6 +2362,7 @@ const server = createServer(async (request, response) => {
             canRun: writeDecision.outcome === "ALLOW",
             canReview: reviewDecision.outcome === "ALLOW",
             handoffUrl,
+            candidateUrl,
             runEndpoint,
             decisionEndpoint,
             previewUrl,
@@ -2781,21 +2623,19 @@ const server = createServer(async (request, response) => {
           }),
           traceId,
         );
-      if (request.method === "POST" && operation === "story-suggestions")
-        return write(
-          response,
-          200,
-          await storyDecompositionAgent.run({
-            changeCase: current,
-            governance: await changeCases.intakeView(scope, changeCaseId),
-            correlationId: traceId,
-            model: body?.model,
-            skillId: body?.skillId,
-            templateId: body?.templateId,
-            templateGuidance: body?.templateGuidance,
-          }),
-          traceId,
+      if (request.method === "POST" && operation === "story-suggestions") {
+        const agentOutput = await storyDecompositionAgent.run({
+          changeCase: current,
+          governance: await changeCases.intakeView(scope, changeCaseId),
+          correlationId: traceId,
+          model: body?.model,
+          templateId: body?.templateId,
+        });
+        console.info(
+          `[ADX story decomposition output ${traceId}]\n${JSON.stringify(agentOutput, null, 2)}`,
         );
+        return write(response, 200, agentOutput, traceId);
+      }
       if (request.method === "POST" && operation === "stories")
         return write(
           response,
