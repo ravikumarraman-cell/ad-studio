@@ -21,9 +21,19 @@ try {
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()) })
   page.on('request', (request) => { const target = new URL(request.url()); if (target.origin !== origin) externalRequests.push(target.origin) })
   await page.goto(origin, { waitUntil: 'networkidle' })
+  await page.evaluate(() => localStorage.clear())
+  await page.reload({ waitUntil: 'networkidle' })
   await page.getByRole('link', { name: 'Health-X home' }).waitFor()
   await page.getByRole('heading', { name: 'Your appointment' }).waitFor()
   await page.getByText(/fictional data/i).waitFor()
+  await page.getByRole('button', { name: 'Comfortable', exact: true }).waitFor()
+  await assert.equal(await page.getByRole('button', { name: 'Comfortable', exact: true }).getAttribute('aria-pressed'), 'true')
+  await page.getByRole('button', { name: 'Compact', exact: true }).click()
+  await assert.equal(await page.locator('main').getAttribute('class'), 'app-shell density-compact')
+  await page.reload({ waitUntil: 'networkidle' })
+  await assert.equal(await page.getByRole('button', { name: 'Compact', exact: true }).getAttribute('aria-pressed'), 'true')
+  await page.getByRole('button', { name: 'Use default', exact: true }).click()
+  await assert.equal(await page.getByRole('button', { name: 'Comfortable', exact: true }).getAttribute('aria-pressed'), 'true')
   await assertProgress(page, '0 of 4 daily actions complete')
   await page.getByRole('button', { name: 'Check in', exact: true }).click()
   await page.getByText('Checked in', { exact: true }).waitFor()
@@ -37,11 +47,7 @@ try {
   assert.deepEqual([...new Set(externalRequests)], [], 'Health-X made an external browser request.')
   assert.deepEqual(consoleErrors, [], 'Health-X emitted browser console errors.')
   console.log('Health-X standalone production acceptance passed.')
-} finally {
-  await browser?.close()
-  server.kill('SIGTERM')
-  await Promise.race([once(server, 'exit'), delay(2_000)])
-}
+} finally { await browser?.close(); server.kill('SIGTERM'); await Promise.race([once(server, 'exit'), delay(2_000)]) }
 
 async function assertProgress(page, expected) { assert.equal(await page.locator('[aria-label*="daily actions complete"]').getAttribute('aria-label'), expected) }
 function run(command) { return new Promise((resolvePromise, reject) => { const child = spawn(command[0], command.slice(1), { env: process.env, stdio: 'inherit' }); child.once('error', reject); child.once('exit', (code, signal) => code === 0 ? resolvePromise() : reject(new Error(`Build failed: ${command.join(' ')} (${signal ?? code})`))) }) }
