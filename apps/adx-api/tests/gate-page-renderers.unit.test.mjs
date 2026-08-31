@@ -123,3 +123,23 @@ test('Gate F totals retained outcomes and preserves escaped history', () => {
   assert.doesNotMatch(page, /<script>alert\(1\)<\/script>/)
   assert.match(page, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
 })
+
+test('Gate F exposes a visible completion path for delivery-ready cases', () => {
+  const page = outcomeReviewPage(
+    { ...changeCase, state: 'READY_FOR_DELIVERY' },
+    [
+      { outcome: 'SUCCESS', taxonomy: 'ADOPTION', releaseCandidateId: 'candidate-1', outcomeDigest: 'sha256:success' },
+      { outcome: 'FAILURE', taxonomy: 'ROLLBACK', releaseCandidateId: 'candidate-2', outcomeDigest: 'sha256:failure' },
+    ],
+    {
+      canComplete: true,
+      completionEndpoint: '/outcome-completion',
+      expectedVersion: 7,
+    },
+  )
+
+  assert.match(page, /Complete Gate F/)
+  assert.match(page, /outcome-completion/)
+  assert.match(page, /id="outcome-digest"/)
+  assert.match(page, /Recording Gate F outcome/)
+})

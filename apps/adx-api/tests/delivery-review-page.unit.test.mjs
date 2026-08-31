@@ -39,3 +39,13 @@ test('delivery review offers a new server-owned plan when an unexecuted plan mus
   assert.match(page, /Rebuild preview plan/)
   assert.match(page, /delivery-preview-prepare/)
 })
+
+test('delivery review makes Gate F the obvious next step after approval', () => {
+  const plan = { id: 'plan-1', branch: 'adx/preview/case-1', commitDigest: 'sha256:commit', candidateDigest: 'sha256:candidate', evidenceDigest: 'sha256:evidence' }
+  const review = { ciRuns: [{ providerId: 'ci', status: 'PASSED', commitDigest: 'sha256:commit' }], findings: [], approvals: [{ status: 'ACTIVE', decision: 'APPROVED', commitDigest: 'sha256:commit' }] }
+  const page = renderDeliveryReviewPage(changeCase, [plan], review, options)
+
+  assert.match(page, /Gate F is now open/)
+  assert.match(page, /Complete Gate F/)
+  assert.match(page, /outcome-review/)
+})

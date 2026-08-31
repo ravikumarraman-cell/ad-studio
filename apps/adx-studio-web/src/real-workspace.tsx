@@ -31,6 +31,18 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
   const current = selected ? workflowPosition(selected.state) : 0
   const gate = gates[Math.min(current, gates.length - 1)]
   const path = selected ? `/v1/workspaces/${activeWorkspace}/change-cases/${selected.id}/${gate.review}` : ''
+  const nextActionLabel =
+    current === gates.length
+      ? 'Review the recorded outcome.'
+      : gate.id === 'F'
+        ? 'Complete Gate F'
+        : `Open Gate ${gate.id} review`
+  const nextActionButton =
+    current === gates.length
+      ? 'Open outcome review'
+      : gate.id === 'F'
+        ? 'Complete Gate F'
+        : `Open Gate ${gate.id}`
   const latestRun = selected ? executionsByCase[selected.id]?.runs[0] : undefined
   const latestEvent = selected && latestRun ? [...(executionsByCase[selected.id]?.events ?? [])].reverse().find((event) => event.runId === latestRun.id) : undefined
   const workspace = memberships.find((item) => item.workspaceId === activeWorkspace)
@@ -71,7 +83,7 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
             <h2>{selected.title}</h2>
             <p className="adx-focus-question">{gate.purpose}</p>
             {latestRun && <section className={`adx-run-status adx-run-${latestRun.status.toLowerCase()}`} aria-live="polite"><p className="adx-eyebrow">CODING AGENT</p><strong>{runLabel(latestRun.status)}</strong><span>{latestEvent?.errorCode ? `Diagnostic: ${latestEvent.errorCode}` : latestRun.adapterId}</span><small>Updated {new Date(latestRun.updatedAt).toLocaleString()}</small></section>}
-            <section className="adx-next-action"><div><p className="adx-eyebrow">YOUR NEXT ACTION</p><strong>{current === gates.length ? 'Review the recorded outcome.' : `Open Gate ${gate.id} review`}</strong><small>Available through your {workspace?.roles.join(', ') ?? 'current'} workspace role.</small></div><a className="adx-primary" href={path}>{current === gates.length ? 'Open outcome' : `Open Gate ${gate.id}`}</a></section>
+            <section className="adx-next-action"><div><p className="adx-eyebrow">YOUR NEXT ACTION</p><strong>{nextActionLabel}</strong><small>Available through your {workspace?.roles.join(', ') ?? 'current'} workspace role.</small></div><a className="adx-primary" href={path}>{nextActionButton}</a></section>
             {selected.state !== 'OUTCOME_RECORDED' && <button className="adx-danger adx-delete-case" onClick={() => setCancellationMode('selected')}>Delete Change Case</button>}
             <details className="adx-journey"><summary>Show the full journey</summary><ol>{gates.map((item, index) => <li key={item.id} className={gateState(index, current)}><strong>Gate {item.id} · {item.name}</strong><span>{item.purpose}</span></li>)}</ol></details>
           </> : <><h2>Start with a Change Case</h2><button className="adx-primary" onClick={onCreate}>Create Change Case</button></>}

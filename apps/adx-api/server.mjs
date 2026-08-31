@@ -742,13 +742,16 @@ function changeCaseWorkflowCard(changeCase, workspaceId) {
   const href = `/v1/workspaces/${encodeURIComponent(workspaceId)}/change-cases/${encodeURIComponent(changeCase.id)}/${currentGate.review}`;
   const nextText =
     position === 7
-      ? "All gates are complete. Review the retained outcome for this Change Case."
+      ? "All gates are complete. Open Gate F to review the retained outcome."
+      : currentGate.id === "F"
+        ? "Gate F is ready. Complete the outcome review for this Change Case."
       : changeCase.state === "PAUSED"
         ? "This Change Case is paused. Resolve the pause before advancing the active gate."
         : changeCase.state === "CANCELLED"
           ? "This Change Case was cancelled. Its retained history remains available for review."
           : `Focus on Gate ${currentGate.id}: ${currentGate.purpose}`;
-  return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">Open Gate ${escapeHtml(currentGate.id)} review</a></section></article>`;
+  const nextLink = position === 7 ? "Open outcome review" : currentGate.id === "F" ? "Complete Gate F" : `Open Gate ${escapeHtml(currentGate.id)}`
+  return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">${nextLink}</a></section></article>`;
 }
 function bearer(request) {
   const value = request.headers.authorization;
@@ -2128,10 +2131,19 @@ const server = createServer(async (request, response) => {
           { code: "OUTCOME_REPOSITORY_NOT_CONFIGURED" },
           traceId,
         );
+      const completionDecision = decisionFor({
+        session,
+        resource: changeCaseResource(current, scope),
+        action: "resource.review",
+      });
       return writeHtml(
         response,
         200,
-        outcomeReviewPage(current, await outcomes.list(scope, changeCaseId)),
+        outcomeReviewPage(current, await outcomes.list(scope, changeCaseId), {
+          canComplete: completionDecision.outcome === "ALLOW",
+          completionEndpoint: `${changeCaseBasePath(workspaceId, changeCaseId)}/outcome-completion`,
+          expectedVersion: current.projectionVersion,
+        }),
         traceId,
         session.principal,
       );
