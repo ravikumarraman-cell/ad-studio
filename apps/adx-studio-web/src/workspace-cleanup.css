@@ -1,7 +1,7 @@
 .adx-danger {
-  border: 1px solid #bd4a4a;
-  border-radius: 8px;
   padding: 10px 14px;
+  border: 1px solid #bd4a4a;
+  border-radius: 10px;
   background: #fff;
   color: #962828;
   font: inherit;
@@ -28,17 +28,45 @@
   gap: 4px;
   margin: 18px 0;
   padding: 13px 15px;
-  border: 1px solid #b9cbd9;
+  border: 1px solid var(--adx-border);
   border-left: 4px solid #497693;
   background: #f7fbff;
 }
 
-.adx-run-status strong { font-size: .98rem; }
-.adx-run-status span, .adx-run-status small { color: #53677e; font-size: .82rem; }
-.adx-run-state { display: block; margin-top: 4px; font-weight: 750; }
-.adx-run-running, .adx-run-leased { border-color: #4b7c5b; color: #23643c; }
-.adx-run-completed { border-color: #47765a; color: #1f633b; background: #f3faf5; }
-.adx-run-failed, .adx-run-cancelled { border-color: #bd4a4a; color: #962828; background: #fff6f5; }
+.adx-run-status strong {
+  font-size: 0.98rem;
+}
+
+.adx-run-status span,
+.adx-run-status small {
+  color: var(--adx-copy);
+  font-size: 0.82rem;
+}
+
+.adx-run-state {
+  display: block;
+  margin-top: 4px;
+  font-weight: 750;
+}
+
+.adx-run-running,
+.adx-run-leased {
+  border-color: #4b7c5b;
+  color: #23643c;
+}
+
+.adx-run-completed {
+  border-color: #47765a;
+  color: #1f633b;
+  background: #f3faf5;
+}
+
+.adx-run-failed,
+.adx-run-cancelled {
+  border-color: #bd4a4a;
+  color: #962828;
+  background: #fff6f5;
+}
 
 .adx-workspace-tools {
   position: relative;
@@ -47,7 +75,7 @@
 .adx-workspace-tools summary {
   cursor: pointer;
   color: #23475f;
-  font-size: .86rem;
+  font-size: 0.86rem;
   font-weight: 750;
   list-style: none;
 }
@@ -67,23 +95,23 @@
 
 .adx-workspace-tools-menu {
   position: absolute;
-  z-index: 2;
   top: calc(100% + 10px);
   left: 0;
+  z-index: 2;
   display: grid;
   min-width: 250px;
   gap: 9px;
   padding: 14px;
-  border: 1px solid #b9cbd9;
-  border-radius: 8px;
-  background: #fff;
+  border: 1px solid var(--adx-border);
+  border-radius: 12px;
+  background: var(--adx-surface);
   box-shadow: 0 12px 30px rgb(16 42 67 / 16%);
 }
 
 .adx-workspace-tools-menu p {
   margin: 0 0 2px;
-  color: #53677e;
-  font-size: .78rem;
+  color: var(--adx-copy);
+  font-size: 0.78rem;
   line-height: 1.4;
 }
 
@@ -94,8 +122,8 @@
 .adx-modal label small {
   display: block;
   margin-top: 5px;
-  color: #53677e;
-  font-size: .76rem;
+  color: var(--adx-copy);
+  font-size: 0.76rem;
   line-height: 1.4;
 }
 
@@ -119,8 +147,8 @@
 
 @media (max-width: 700px) {
   .adx-workspace {
-    align-items: stretch;
     flex-direction: column;
+    align-items: stretch;
   }
 
   .adx-workspace select {
