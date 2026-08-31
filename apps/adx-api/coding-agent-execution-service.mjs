@@ -191,14 +191,32 @@ export class CodingAgentExecutionService {
         result: publicResult(result),
       });
     }
-    const transition = await this.changeCaseRepository.transition({
-      scope,
-      principal,
-      changeCaseId: changeCase.id,
-      toState: "AWAITING_VERIFICATION",
-      expectedVersion,
-      idempotencyKey,
-    });
+    let transition;
+    try {
+      transition = await this.changeCaseRepository.transition({
+        scope,
+        principal,
+        changeCaseId: changeCase.id,
+        toState: "AWAITING_VERIFICATION",
+        expectedVersion,
+        idempotencyKey,
+      });
+    } catch (error) {
+      if (error instanceof ChangeCaseError) {
+        const current = await this.changeCaseRepository.get(scope, changeCase.id);
+        if (current?.state === "AWAITING_VERIFICATION") {
+          return Object.freeze({
+            accepted: true,
+            lease: issued,
+            completion,
+            transition: null,
+            candidateDigest: result.candidateDigest,
+            result: publicResult(result),
+          });
+        }
+      }
+      throw error;
+    }
     return Object.freeze({
       accepted: true,
       lease: issued,

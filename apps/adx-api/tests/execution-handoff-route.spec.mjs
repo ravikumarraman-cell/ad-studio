@@ -122,7 +122,7 @@ async function createReadyChangeCase(request, token, title) {
 }
 
 test('execution handoff rejects unauthenticated browser requests', async ({ page }) => {
-  const response = await page.goto(`${appUrl}/v1/workspaces/${workspace}/change-cases/bd4b1b6b-e6cf-47a2-bf1a-72a45c5dbeb6/execution-handoff`)
+  const response = await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/bd4b1b6b-e6cf-47a2-bf1a-72a45c5dbeb6/execution-handoff`, appUrl).toString())
   expect(response?.status()).toBe(401)
   await expect(page.locator('body')).toContainText('AUTHENTICATION_REQUIRED')
 })
@@ -131,12 +131,12 @@ test('execution handoff enables a ready bounded implementation after authenticat
   const pageErrors = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   const token = await createSession(request)
-  await context.addCookies([{ name: 'adx_session', value: token, url: 'http://127.0.0.1:4173' }])
+  await context.addCookies([{ name: 'adx_session', value: token, url: appUrl }])
   let changeCaseId
   try {
     changeCaseId = await createReadyChangeCase(request, token, `Execution handoff route ${randomUUID()}`)
 
-    await page.goto(`${appUrl}/v1/workspaces/${workspace}/change-cases/${changeCaseId}/execution-handoff`)
+    await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/execution-handoff`, appUrl).toString())
     await expect(pageErrors).toEqual([])
     await expect(page.getByRole('heading', { name: 'Start a controlled implementation run' })).toBeVisible()
     await expect(page.getByRole('radio', { name: /gpt-5\.6-terra/ })).toBeChecked()

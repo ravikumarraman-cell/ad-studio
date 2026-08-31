@@ -2,6 +2,7 @@ import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 
 const defaultScope = 'https://cognitiveservices.azure.com/.default'
 const supportedCredentialHeaders = new Set(['api-key', 'authorization'])
+const transientGatewayStatuses = new Set([502, 503, 504])
 const maxSystemCharacters = 16 * 1024
 const maxPromptCharacters = 256 * 1024
 
@@ -21,7 +22,11 @@ export function createAzureOpenAiGatewayAdapter({ endpoint, apiVersion = '2025-0
       const request = normalizeRequest({ system, prompt, correlationId, maxTokens, temperature, responseSchema })
       const accessToken = await tokenProvider({ scope: defaultScope, audience: gateway.origin, deployment: configuration.deployment, projectId: configuration.projectId, correlationId: request.correlationId })
       if (!validToken(accessToken)) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_CREDENTIAL_UNAVAILABLE', 'Azure AD did not provide a usable Cognitive Services access token.', { severity: 'warning' })
-      const headers = Object.freeze({ accept: 'application/json', 'content-type': 'application/json', 'x-client-request-id': request.correlationId, projectId: configuration.projectId, 'x-idp': 'azuread', [configuration.credentialHeaderName]: credentialValue(configuration.credentialHeaderName, accessToken) })
+      // Some gateway routes close or poison an HTTP/1.1 connection after a 400.
+      // Compatibility negotiation intentionally follows a rejected request with a
+      // corrected one, so make every request self-contained rather than allowing
+      // the retry to inherit that connection's state.
+      const headers = Object.freeze({ accept: 'application/json', 'content-type': 'application/json', connection: 'close', 'x-client-request-id': request.correlationId, projectId: configuration.projectId, 'x-idp': 'azuread', [configuration.credentialHeaderName]: credentialValue(configuration.credentialHeaderName, accessToken) })
       const baseBody = { model: configuration.model, messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.prompt }], max_completion_tokens: request.maxTokens, temperature: request.temperature }
       const { response, payload } = await sendCompatibleGatewayRequest(fetchImpl, gateway.url, headers, { ...baseBody, ...(request.responseSchema ? { response_format: { type: 'json_schema', json_schema: request.responseSchema } } : {}) })
       const providerRequestId = response.headers.get('x-request-id') ?? response.headers.get('x-ms-request-id') ?? response.headers.get('apim-request-id') ?? null
@@ -94,9 +99,23 @@ function normalizeResponseSchema(value) {
 }
 
 async function sendGatewayRequest(fetchImpl, url, headers, body) {
-  let response
-  try { response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) }) } catch { throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' }) }
-  return { response, payload: await response.json().catch(() => null) }
+  let lastError = null
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    let response
+    try {
+      response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) })
+    } catch {
+      lastError = new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' })
+      if (attempt < 2) continue
+      throw lastError
+    }
+    const payload = await response.json().catch(() => null)
+    if (!transientGatewayStatuses.has(response.status)) return { response, payload }
+    lastError = new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_FAILED', failureMessage(response.status), { retryable: true, severity: 'warning', details: { provider: 'AZURE_OPENAI_GATEWAY', providerStatus: response.status, providerRequestId: response.headers.get('x-request-id') ?? response.headers.get('x-ms-request-id') ?? response.headers.get('apim-request-id') ?? null, gatewayError: safeGatewayError(payload?.error) } })
+    if (attempt < 2) continue
+    return { response, payload }
+  }
+  throw lastError ?? new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' })
 }
 
 async function sendCompatibleGatewayRequest(fetchImpl, url, headers, body) {

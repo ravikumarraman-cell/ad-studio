@@ -2,9 +2,13 @@ import { expect, test } from '@playwright/test'
 import { cancelChangeCase } from './change-case-test-utils.mjs'
 
 const workspaceId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+function appUrl(testInfo) {
+  return testInfo.project.use.baseURL || 'http://127.0.0.1:3107'
+}
 
-test('a Change Case deep link reloads the authoritative persisted projection', async ({ page, context, request }) => {
-  const session = await (await request.get('/__test/session?as=alice')).json()
+test('a Change Case deep link reloads the authoritative persisted projection', async ({ page, context, request }, testInfo) => {
+  const base = appUrl(testInfo)
+  const session = await (await request.get(new URL('/__test/session?as=alice', base).toString())).json()
   await context.addCookies([{ name: 'adx_session', value: session.token, domain: '127.0.0.1', path: '/' }])
   let changeCaseId
   try {
@@ -12,7 +16,7 @@ test('a Change Case deep link reloads the authoritative persisted projection', a
     expect(createResponse.status()).toBe(201)
     const created = await createResponse.json()
     changeCaseId = created.changeCaseId
-    const route = `/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}`
+    const route = new URL(`/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}`, base).toString()
     await page.goto(route)
     await expect(page.locator('body')).toContainText('Browser refresh Change Case')
     await expect(page.locator('body')).toContainText('"projectionVersion":1')
@@ -24,8 +28,9 @@ test('a Change Case deep link reloads the authoritative persisted projection', a
   }
 })
 
-test('Gate A classifies retained intake before opening story authoring', async ({ page, context, request }) => {
-  const session = await (await request.get('/__test/session?as=alice')).json()
+test('Gate A classifies retained intake before opening story authoring', async ({ page, context, request }, testInfo) => {
+  const base = appUrl(testInfo)
+  const session = await (await request.get(new URL('/__test/session?as=alice', base).toString())).json()
   const headers = (idempotencyKey) => ({ authorization: `Bearer ${session.token}`, 'content-type': 'application/json', 'idempotency-key': idempotencyKey })
   await context.addCookies([{ name: 'adx_session', value: session.token, domain: '127.0.0.1', path: '/' }])
 
@@ -38,7 +43,7 @@ test('Gate A classifies retained intake before opening story authoring', async (
     const { projectionVersion: intakeVersion } = await moved.json()
     await request.post(`/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}/intake`, { headers: headers(`stage2-intake-capture-${Date.now()}`), data: { expectedVersion: intakeVersion, intent: { outcome: 'Classify a retained change request', owner: 'Product operations', acceptanceCriteria: 'Risk classification opens story authoring.', targetRepository: 'adx-api', assets: [], sourceContent: 'Controlled browser test', sourceName: 'intake.md' } } })
 
-    await page.goto(`/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}/intake-workshop`)
+    await page.goto(new URL(`/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}/intake-workshop`, base).toString())
     await expect(page.getByText('ONE SAFE NEXT ACTION')).toBeVisible()
     await expect(page.getByRole('button', { name: 'Confirm intake, then continue to stories' })).toBeVisible()
     await page.getByRole('button', { name: 'Confirm intake, then continue to stories' }).press('Enter')

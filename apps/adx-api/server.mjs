@@ -236,6 +236,7 @@ const modelPatchBroker = new ModelPatchBroker({
   sourceRoot: modelPatchProfile.sourceRoot,
   candidateRoot: modelPatchProfile.candidateRoot,
   allowedValidationCommands: [modelPatchProfile.validationCommand],
+  readOnlyContextPaths: modelPatchProfile.readOnlyContextPaths,
   linkSourceDependencies: modelPatchProfile.linkSourceDependencies,
   gateway: uhgAzureOpenAiExecutionGateway,
 });
@@ -424,6 +425,7 @@ function resolveModelPatchProfile(environment) {
         environment.ADX_HEALTH_X_MODEL_WRITE_PATHS,
         ["app/**"],
       ),
+      readOnlyContextPaths: Object.freeze(["scripts/verify-production.mjs"]),
       validationCommand: "npm run verify:production",
       linkSourceDependencies: true,
     });
@@ -450,6 +452,7 @@ function resolveModelPatchProfile(environment) {
         environment.ADX_LOCAL_CODING_AGENT_WRITE_PATHS,
       [],
     ),
+    readOnlyContextPaths: Object.freeze([]),
     validationCommand: "node --test",
     linkSourceDependencies: false,
   });

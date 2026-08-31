@@ -21,6 +21,7 @@ test('Azure OpenAI gateway adapter uses the approved UHG endpoint, Azure AD head
   assert.equal(captured.init.headers.authorization, 'Bearer azure-ad-short-lived-access-token-value')
   assert.equal(captured.init.headers.projectId, configuration.projectId)
   assert.equal(captured.init.headers['x-idp'], 'azuread')
+  assert.equal(captured.init.headers.connection, 'close')
   assert.doesNotMatch(JSON.stringify(result), /azure-ad-short-lived-access-token-value/)
   assert.equal(result.providerRequestId, 'uhg-request-1')
   assert.deepEqual(result.usage, { inputTokens: 11, outputTokens: 9, totalTokens: 20 })
@@ -78,6 +79,21 @@ test('gateway retries without temperature when its route rejects that value', as
   assert.equal(requests[1].temperature, undefined)
 })
 
+test('gateway isolates a temperature compatibility retry from a rejected connection', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => {
+    requests.push({ body: JSON.parse(init.body), connection: init.headers.connection })
+    if (requests.length === 1) return response({ error: { code: 'unsupported_value', param: 'temperature' } }, { status: 400 })
+    assert.equal(init.headers.connection, 'close')
+    return response({ choices: [{ message: { content: 'ready' } }] })
+  } })
+  const result = await adapter.complete({ system: 'Be concise.', prompt: 'Reply ready.', correlationId: 'trace-temperature-connection-retry', temperature: 0 })
+  assert.equal(result.text, 'ready')
+  assert.deepEqual(requests.map((request) => request.connection), ['close', 'close'])
+  assert.equal(requests[0].body.temperature, 0)
+  assert.equal(requests[1].body.temperature, undefined)
+})
+
 test('gateway composes explicit compatibility retries without restoring rejected fields', async () => {
   const requests = []
   const responses = [
@@ -120,6 +136,25 @@ test('gateway composes every supported compatibility-rejection order exactly onc
     }
     assert.equal(requests[3].max_tokens, 2_000)
   }
+})
+
+test('gateway retries a transient upstream failure before surfacing the result', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({
+    ...configuration,
+    fetchImpl: async (_url, init) => {
+      requests.push(JSON.parse(init.body))
+      return requests.length === 1
+        ? response({}, { status: 502, headers: { 'x-request-id': 'retry-1' } })
+        : response({ choices: [{ message: { content: 'ready' } }], usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 } }, { headers: { 'x-request-id': 'retry-2' } })
+    },
+  })
+  const result = await adapter.complete({ system: 'Be concise.', prompt: 'Reply ready.', correlationId: 'trace-transient-retry' })
+  assert.equal(result.text, 'ready')
+  assert.equal(result.providerRequestId, 'retry-2')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].temperature, 1)
+  assert.equal(requests[1].temperature, 1)
 })
 
 test('Azure OpenAI gateway adapter accepts a bounded source-context prompt', async () => {

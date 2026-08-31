@@ -62,6 +62,7 @@ export class ModelPatchBroker {
     candidateRoot,
     gateway,
     allowedValidationCommands = ["node --test"],
+    readOnlyContextPaths = [],
     linkSourceDependencies = false,
     validate = runValidation,
   } = {}) {
@@ -72,6 +73,9 @@ export class ModelPatchBroker {
     this.allowedValidationCommands = Object.freeze([
       ...new Set(allowedValidationCommands),
     ]);
+    this.readOnlyContextPaths = normalizeReadOnlyContextPaths(
+      readOnlyContextPaths,
+    );
     this.linkSourceDependencies = Boolean(linkSourceDependencies);
     this.validate = validate;
   }
@@ -113,7 +117,11 @@ export class ModelPatchBroker {
     const normalizedTask = normalizeTask(task, this.allowedValidationCommands);
     const writePaths = normalizeWritePaths(repository?.writePaths);
     await reportProgress(onProgress, "CONTEXT_COLLECTION");
-    const context = await collectContext(source, writePaths);
+    const context = await collectContext(
+      source,
+      writePaths,
+      this.readOnlyContextPaths,
+    );
     timings.contextMs = elapsed(startedAt);
     const scratchRoot = await mkdtemp(join(tmpdir(), "adx-model-patch-"));
     const workspace = join(scratchRoot, basename(candidate) || "candidate");
@@ -302,6 +310,30 @@ function normalizeWritePaths(paths) {
   return Object.freeze(normalized);
 }
 
+function normalizeReadOnlyContextPaths(paths) {
+  if (!Array.isArray(paths))
+    throw new ChangeCaseError(
+      "MODEL_PATCH_CONTEXT_PATHS_INVALID",
+      "Read-only context paths must be a server-configured array.",
+    );
+  const normalized = [...new Set(paths.map((path) => String(path).trim()))];
+  if (
+    normalized.some(
+      (path) =>
+        !path ||
+        path.startsWith("/") ||
+        path.includes("\\") ||
+        path.includes("*") ||
+        path.split("/").includes(".."),
+    )
+  )
+    throw new ChangeCaseError(
+      "MODEL_PATCH_CONTEXT_PATHS_INVALID",
+      "Read-only context paths must be canonical relative file paths.",
+    );
+  return Object.freeze(normalized);
+}
+
 async function checkedOutRoot(value) {
   if (typeof value !== "string" || !value.trim())
     throw new ChangeCaseError(
@@ -317,7 +349,7 @@ async function checkedOutRoot(value) {
   return root;
 }
 
-async function collectContext(root, writePaths) {
+async function collectContext(root, writePaths, readOnlyContextPaths) {
   const entries = [];
   async function visit(current) {
     for (const entry of await readdir(current, { withFileTypes: true })) {
@@ -332,7 +364,9 @@ async function collectContext(root, writePaths) {
   const files = [];
   for (const fullPath of entries.sort()) {
     const path = relative(root, fullPath);
-    if (!isWritable(path, writePaths) || isSensitivePath(path)) continue;
+    const writable = isWritable(path, writePaths);
+    const readOnly = readOnlyContextPaths.includes(path);
+    if ((!writable && !readOnly) || isSensitivePath(path)) continue;
     const content = await readFile(fullPath, "utf8").catch(() => null);
     if (
       content === null ||
@@ -343,7 +377,7 @@ async function collectContext(root, writePaths) {
     const size = Buffer.byteLength(content);
     if (bytes + size > maxContextBytes) break;
     bytes += size;
-    files.push({ path, content });
+    files.push({ path, content, writable });
   }
   if (!files.length)
     throw new ChangeCaseError(
@@ -383,7 +417,7 @@ function buildPatchPrompt(
     previousResponseIssue,
     rules: [
       "Return JSON only.",
-      "Change only supplied paths.",
+      "Change only supplied writable paths. Files marked writable:false are read-only verification context and must never be included in patches.",
       "Use complete replacement content for each changed file.",
       "When a user-visible feature is added, include featureSpotlight and mark its visible root element with data-adx-feature equal to featureSpotlight.featureId. Otherwise set featureSpotlight to null.",
       "Do not add dependencies, run commands, request secrets, create commits, or claim verification.",

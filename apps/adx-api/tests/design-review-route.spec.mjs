@@ -4,10 +4,14 @@ import { cancelChangeCase } from './change-case-test-utils.mjs'
 
 const workspace = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const design = { architectureDecision: { decision: 'Use a tenant-scoped boundary.' }, interfaceDelta: { changes: ['POST /design'] }, migrationPlan: { steps: ['apply migration'] }, threatModel: { threats: [{ id: 'T1', mitigation: 'authorize', residualRisk: 'low' }] }, dependencies: { items: [{ name: 'pg', license: 'MIT' }] }, testStrategy: { layers: ['unit', 'integration', 'browser'] } }
+function appUrl(testInfo) {
+  return testInfo.project.use.baseURL || 'http://127.0.0.1:3111'
+}
 
-test('design review deep link explains retained artifacts, residual risk, and the safe next action', async ({ page, request }) => {
+test('design review deep link explains retained artifacts, residual risk, and the safe next action', async ({ page, request }, testInfo) => {
+  const base = appUrl(testInfo)
   const changeCaseTitle = `Design review deep link ${randomUUID()}`
-  const token = async (as) => (await (await request.get(`/__test/session?as=${as}`)).json()).token
+  const token = async (as) => (await (await request.get(new URL(`/__test/session?as=${as}`, base).toString())).json()).token
   const alice = await token('alice'); const approver = await token('approver'); const reviewer = await token('designReviewer')
   const headers = (value) => ({ authorization: `Bearer ${value}`, 'content-type': 'application/json', 'idempotency-key': `stage4-ui-${randomUUID()}` })
   let changeCaseId
@@ -18,11 +22,11 @@ test('design review deep link explains retained artifacts, residual risk, and th
     const classified = await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/classify`, { headers: headers(alice), data: { expectedVersion: version } }); ({ projectionVersion: version } = await classified.json())
     const stories = await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/stories`, { headers: headers(alice), data: { expectedVersion: version, stories: [{ title: 'Review design', narrative: 'As a reviewer, I need a retained design package.', scenarios: [{ given: 'a classified Change Case', when: 'I open design review', then: 'I see the security decision context' }] }] } }); const story = await stories.json(); version = story.projectionVersion
     const storyApproval = await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-decision`, { headers: headers(approver), data: { expectedVersion: version, storyDigest: story.storyDigest, decision: 'APPROVED', rationale: 'Story contract is sufficient.' } }); ({ projectionVersion: version } = await storyApproval.json())
-    await page.context().addCookies([{ name: 'adx_session', value: alice, url: 'http://127.0.0.1:3111' }]); await page.goto(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/design-review`)
+    await page.context().addCookies([{ name: 'adx_session', value: alice, url: base }]); await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/design-review`, base).toString())
     await expect(page.getByRole('link', { name: 'Capture design package' })).toBeVisible(); await page.getByRole('link', { name: 'Capture design package' }).click()
     await page.getByLabel('Architecture decision').fill(design.architectureDecision.decision); await page.getByLabel('Interface or schema changes').fill(design.interfaceDelta.changes.join('\n')); await page.getByLabel('Migration plan').fill(design.migrationPlan.steps.join('\n')); await page.getByLabel('Primary threat').fill(design.threatModel.threats[0].id); await page.getByLabel('Mitigation').fill(design.threatModel.threats[0].mitigation); await page.getByLabel('Residual risk').fill(design.threatModel.threats[0].residualRisk); await page.getByLabel('Dependencies and licenses').fill('pg | MIT'); await page.getByRole('checkbox', { name: 'Unit' }).check(); await page.getByRole('button', { name: 'Capture design package for review' }).click(); await page.waitForURL(/\/design-review$/)
     const designViewResponse = await request.get(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/design`, { headers: headers(alice) }); const designView = await designViewResponse.json(); version = designView.changeCase?.projectionVersion ?? version
-    await page.context().addCookies([{ name: 'adx_session', value: reviewer, url: 'http://127.0.0.1:3111' }]); await page.goto(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/design-review`)
+    await page.context().addCookies([{ name: 'adx_session', value: reviewer, url: base }]); await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/design-review`, base).toString())
     await expect(page.getByRole('heading', { name: changeCaseTitle })).toBeVisible(); await expect(page.getByText('Review the package, residual risk, and verification plan before advancing the work.')).toBeVisible(); await expect(page.getByText('Threat model and residual risk')).toBeVisible(); await expect(page.locator('.digest')).toHaveText(designView.design.designDigest); await expect(page.getByText('Evidence at a glance')).toBeVisible(); await expect(page.getByText('Inspect retained evidence')).toHaveCount(4); await page.getByRole('radio', { name: 'Approve design' }).check(); await page.getByLabel('Review rationale').fill('The package addresses the recorded threat and has an executable verification strategy.'); await page.getByRole('button', { name: 'Record design decision' }).click(); await expect(page.getByText('Design approved. Reloading review…')).toBeVisible(); await page.reload(); await expect(page.getByText('Design approved')).toBeVisible()
   } finally {
     await cancelChangeCase(request, workspace, alice, changeCaseId)

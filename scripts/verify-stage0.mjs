@@ -27,8 +27,8 @@ if (!Array.isArray(rootPackage.workspaces) || !rootPackage.workspaces.includes('
 if (rootPackage.engines?.node !== '>=22.19.0 <23') throw new Error('STG0-NODE: Node engine must be explicitly pinned')
 
 const registry = readFileSync(resolve(root, '.npmrc'), 'utf8')
-if (!registry.includes('registry=https://registry.npmjs.org/') || !registry.includes('strict-ssl=true')) {
-  throw new Error('STG0-REGISTRY: the public registry and strict SSL are required')
+if (!registry.includes('registry=https://edgeinternal1uhg.optum.com/artifactory/api/npm/tenant-compass-npm-vir/') || !registry.includes('strict-ssl=true')) {
+  throw new Error('STG0-REGISTRY: the corporate registry and strict SSL are required')
 }
 
 const schema = JSON.parse(readFileSync(resolve(root, 'packages/contracts/schemas/change-case.create.schema.json'), 'utf8'))

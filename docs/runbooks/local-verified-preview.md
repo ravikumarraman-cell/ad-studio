@@ -53,7 +53,7 @@ export ADX_PREVIEW_SOURCE_ROOT="/absolute/path/to/clean/source-checkout"
 export ADX_PREVIEW_CANDIDATE_ROOT="/absolute/path/to/verified/candidate"
 ```
 
-The source checkout must be clean, have an `origin` matching the registered canonical HTTPS repository, and remain separate from the candidate checkout. ADX recomputes the candidate digest and refuses the plan if it differs from the independently verified candidate, the Git base is dirty, or secret files would be exported.
+The source checkout must have an `origin` matching the registered canonical HTTPS repository and remain separate from the candidate checkout. ADX recomputes the candidate digest and refuses the plan if it differs from the independently verified candidate or if secret files would be exported. If the source tree changes after the plan is retained, the later draft-PR export will be rejected as stale and a fresh preview plan will be required.
 
 To create a remote **draft** pull request from a retained preview plan, set a server-only GitHub credential with repository contents and pull-request write permission. ADX never exposes it to the browser:
 

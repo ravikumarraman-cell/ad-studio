@@ -2,16 +2,20 @@ import { test, expect } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { cancelChangeCase } from './change-case-test-utils.mjs'
 const workspace = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-test('story review deep link presents authoritative retained intent, risk, and BDD stories', async ({ page, request }) => {
+function appUrl(testInfo) {
+  return testInfo.project.use.baseURL || 'http://127.0.0.1:3109'
+}
+test('story review deep link presents authoritative retained intent, risk, and BDD stories', async ({ page, request }, testInfo) => {
+  const base = appUrl(testInfo)
   const pageErrors = []; page.on('pageerror', (error) => pageErrors.push(error.message))
-  const session = await request.get('/__test/session?as=alice'); const { token } = await session.json(); const headers = (key) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json', 'idempotency-key': key })
+  const session = await request.get(new URL('/__test/session?as=alice', base).toString()); const { token } = await session.json(); const headers = (key) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json', 'idempotency-key': key })
   let changeCaseId
   try {
     const created = await request.post(`/v1/workspaces/${workspace}/change-cases`, { headers: headers(`stage3-ui-create-${randomUUID()}`), data: { title: 'Story review deep link', riskTier: 'R1' } }); const createdBody = await created.json(); changeCaseId = createdBody.changeCaseId; const { projectionVersion: createdVersion } = createdBody
     const moved = await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/transitions`, { headers: headers(`stage3-ui-intake-${randomUUID()}`), data: { toState: 'INTAKE', expectedVersion: createdVersion } }); const { projectionVersion: intakeVersion } = await moved.json()
     const captured = await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/intake`, { headers: headers(`stage3-ui-capture-${randomUUID()}`), data: { expectedVersion: intakeVersion, intent: { outcome: 'Review a governed story', owner: 'Product Operations', acceptanceCriteria: 'A reviewer can understand risk and acceptance scenarios without raw transcripts.', targetRepository: 'health-auth-service', assets: [{ name: 'clinical record', classification: 'restricted' }], sourceContent: 'UI story review source', sourceName: 'review.csv' } } }); const { projectionVersion: capturedVersion } = await captured.json()
     const classified = await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/classify`, { headers: headers(`stage3-ui-classify-${randomUUID()}`), data: { expectedVersion: capturedVersion } }); const { projectionVersion: classifiedVersion } = await classified.json()
-    await page.context().addCookies([{ name: 'adx_session', value: token, url: 'http://127.0.0.1:3109' }]); await page.goto(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-workshop`)
+    await page.context().addCookies([{ name: 'adx_session', value: token, url: base }]); await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-workshop`, base).toString())
     expect(pageErrors).toEqual([])
     await expect(page.locator('.signed-in-indicator')).toHaveAttribute('aria-label', 'Signed in as alice')
     await expect(page.getByRole('link', { name: '← Back to ADX home' })).toHaveAttribute('href', 'http://127.0.0.1:4173/')
@@ -40,7 +44,7 @@ test('story review deep link presents authoritative retained intent, risk, and B
     expect(submitted.stories).toHaveLength(1)
     expect(submitted.stories[0].title).toBe('View authorization status')
     await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/stories`, { headers: headers(`stage3-ui-story-${randomUUID()}`), data: { expectedVersion: classifiedVersion, stories: submitted.stories } })
-    await page.goto(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-review`)
+    await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-review`, base).toString())
     await expect(page.locator('.signed-in-indicator')).toHaveAttribute('aria-label', 'Signed in as alice')
     await expect(page.getByRole('link', { name: 'Return to workspace' })).toHaveAttribute('href', 'http://127.0.0.1:4173/?mode=real')
     await expect(page.getByRole('heading', { name: 'Story review deep link' })).toBeVisible(); await expect(page.getByText('R4 effective risk')).toBeVisible(); await expect(page.locator('.scenarios strong', { hasText: 'Given' }).first()).toBeVisible(); await expect(page.getByLabel('Review context')).toBeVisible(); await page.reload(); await expect(page.getByText('View authorization status')).toBeVisible()

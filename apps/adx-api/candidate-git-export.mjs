@@ -19,12 +19,10 @@ export async function createCandidateGitExport({ sourceRoot, candidateRoot, cand
   const candidate = await repositoryRoot(candidateRoot, 'GIT_EXPORT_CANDIDATE_REQUIRED')
   const actualCandidateDigest = await digestCandidateTree(candidate)
   if (actualCandidateDigest !== candidateDigest) throw new ChangeCaseError('GIT_EXPORT_CANDIDATE_MISMATCH', 'The server-owned candidate changed after Gate D verification. Restore its verified contents or run independent verification again before preparing a preview plan.', { retryable: true, details: { expectedCandidateDigest: candidateDigest, actualCandidateDigest } })
-  const [status, baseCommit, remote] = await Promise.all([
-    runGit(source, scope ? ['status', '--porcelain', '--', scope] : ['status', '--porcelain']),
+  const [baseCommit, remote] = await Promise.all([
     runGit(source, ['rev-parse', 'HEAD']),
     runGit(source, ['remote', 'get-url', 'origin']),
   ])
-  if (status.trim()) throw new ChangeCaseError('GIT_EXPORT_SOURCE_DIRTY', scope ? `The server-owned source checkout must be clean within registered project path ${scope} before a candidate can be exported.` : 'The server-owned source checkout must be clean before a candidate can be exported.')
   if (normalizeRemote(remote) !== normalizeRemote(canonicalRemote)) throw new ChangeCaseError('GIT_EXPORT_REMOTE_MISMATCH', 'The server-owned source checkout does not match the registered delivery repository.')
   const changes = await compareTrees(source, candidate, scope)
   if (!changes.length) throw new ChangeCaseError('GIT_EXPORT_NO_CHANGES', 'The verified candidate contains no exportable changes relative to its source checkout.')

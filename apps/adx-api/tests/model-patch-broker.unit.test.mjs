@@ -212,10 +212,15 @@ test("standalone Health-X permits only its production verifier and links read-on
   const source = join(root, "source");
   const candidate = join(root, "candidate");
   await mkdir(join(source, "app"), { recursive: true });
+  await mkdir(join(source, "scripts"), { recursive: true });
   await mkdir(join(source, "node_modules"), { recursive: true });
   await writeFile(
     join(source, "app", "marker.js"),
     'export const marker = "before"\n',
+  );
+  await writeFile(
+    join(source, "scripts", "verify-production.mjs"),
+    "// The product progress label must match the two canonical action lists.\n",
   );
   const healthXTask = {
     objective: "Replace the marker.",
@@ -227,16 +232,40 @@ test("standalone Health-X permits only its production verifier and links read-on
     sourceRoot: source,
     candidateRoot: candidate,
     allowedValidationCommands: ["npm run verify:production"],
+    readOnlyContextPaths: ["scripts/verify-production.mjs"],
     linkSourceDependencies: true,
-    gateway: gateway({
-      schema: "adx-model-patch-response-v1",
-      patches: [
-        {
-          path: "app/marker.js",
-          content: 'export const marker = "after"\n',
-        },
-      ],
-    }),
+    gateway: {
+      status: () => ({ configured: true, model: "gpt-5.6-terra" }),
+      complete: async (request) => {
+        const context = JSON.parse(request.prompt).files;
+        assert.deepEqual(
+          context.find((file) => file.path === "scripts/verify-production.mjs"),
+          {
+            path: "scripts/verify-production.mjs",
+            content:
+              "// The product progress label must match the two canonical action lists.\n",
+            writable: false,
+          },
+        );
+        assert.equal(
+          context.find((file) => file.path === "app/marker.js").writable,
+          true,
+        );
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: "sha256:response",
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              {
+                path: "app/marker.js",
+                content: 'export const marker = "after"\n',
+              },
+            ],
+          }),
+        };
+      },
+    },
     validate: async ({ cwd, allowedCommands }) => {
       assert.deepEqual(allowedCommands, ["npm run verify:production"]);
       assert.equal(

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderExecutionHandoffPage } from "../execution-handoff-page.mjs";
+import {
+  describeExecutionFailure,
+  renderExecutionHandoffPage,
+} from "../execution-handoff-page.mjs";
 
 const changeCase = {
   title: "Referral decision communication",
@@ -44,8 +47,12 @@ test("execution handoff requests a bounded implementation run instead of attesti
   assert.match(page, /progress-events/);
   assert.match(page, /failure-details/);
   assert.match(page, /Diagnostic code/);
+  assert.match(page, /Actual issue/);
+  assert.match(page, /Possible reason/);
+  assert.match(page, /Validation mismatch/);
+  assert.match(page, /Run stopped/);
   assert.match(page, /Runner limit reached/);
-  assert.match(page, /providerStatus===429/);
+  assert.match(page, /Gateway retry recommended/);
   assert.match(page, /View generated candidate/);
   assert.match(page, /candidateUrl/);
   assert.match(page, /LOCAL_TEST/);
@@ -102,6 +109,31 @@ test("execution handoff sends only a reviewed coding specification ID with dispa
     page,
     /Bounded feature delivery\. Implement only approved scope\./,
   );
+});
+
+test("execution handoff explains transient gateway failures and validation failures", () => {
+  const gatewayFailure = describeExecutionFailure(
+    { providerStatus: 502 },
+    "AZURE_OPENAI_GATEWAY_REQUEST_FAILED",
+  );
+  assert.equal(gatewayFailure.summary, "The Azure OpenAI gateway returned HTTP 502.");
+  assert.match(gatewayFailure.reason, /transient upstream gateway or proxy outage/i);
+  assert.match(gatewayFailure.nextAction, /Retry once/);
+
+  const validationFailure = describeExecutionFailure(
+    {
+      validationCommand: "npm run verify:production",
+      validationCategory: "CHECK_FAILED",
+      validationFailureReason: "Expected 4 actions, got 7.",
+    },
+    "MODEL_PATCH_VALIDATION_FAILED",
+  );
+  assert.equal(
+    validationFailure.summary,
+    "Validation failed after the candidate was built.",
+  );
+  assert.match(validationFailure.reason, /Expected 4 actions, got 7\./);
+  assert.match(validationFailure.nextAction, /npm run verify:production/);
 });
 
 test("execution handoff presents durable live run status without exposing unvalidated model output", () => {

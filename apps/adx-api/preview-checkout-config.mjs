@@ -6,8 +6,8 @@ export async function validatePreviewCheckoutPaths({ sourceRoot, candidateRoot }
   const configured = [sourceRoot, candidateRoot].some((value) => typeof value === 'string' && value.trim())
   if (!configured) return Object.freeze({ configured: false, sourceRoot: null, candidateRoot: null })
   if (typeof sourceRoot !== 'string' || !sourceRoot.trim() || typeof candidateRoot !== 'string' || !candidateRoot.trim()) throw new Error('PREVIEW_CHECKOUT_CONFIGURATION_INCOMPLETE')
-  const source = await readableDirectory(sourceRoot, 'PREVIEW_SOURCE_CHECKOUT')
-  const candidate = await candidateDirectory(candidateRoot)
+  const source = normalizeMacPath(await readableDirectory(sourceRoot, 'PREVIEW_SOURCE_CHECKOUT'))
+  const candidate = normalizeMacPath(await candidateDirectory(candidateRoot))
   return Object.freeze({ configured: true, sourceRoot: source, candidateRoot: candidate })
 }
 
@@ -19,7 +19,7 @@ export async function validateReadableFilePath(value, code) {
   const metadata = await stat(path).catch(() => null)
   if (!metadata?.isFile()) throw new Error(`${code}_NOT_FILE`)
   await access(path, constants.R_OK).catch(() => { throw new Error(`${code}_UNREADABLE`) })
-  return path
+  return normalizeMacPath(path)
 }
 
 async function readableDirectory(value, code) {
@@ -28,13 +28,17 @@ async function readableDirectory(value, code) {
   const metadata = await stat(path).catch(() => null)
   if (!metadata?.isDirectory()) throw new Error(`${code}_NOT_DIRECTORY`)
   await access(path, constants.R_OK | constants.X_OK).catch(() => { throw new Error(`${code}_UNREADABLE`) })
-  return path
+  return normalizeMacPath(path)
 }
 
 async function candidateDirectory(value) {
   const configuredPath = resolve(value)
   const path = await realpath(configuredPath).catch(() => null)
-  if (path) return readableDirectory(path, 'PREVIEW_CANDIDATE_CHECKOUT')
+  if (path) return normalizeMacPath(await readableDirectory(path, 'PREVIEW_CANDIDATE_CHECKOUT'))
   await access(dirname(configuredPath), constants.W_OK | constants.X_OK).catch(() => { throw new Error('PREVIEW_CANDIDATE_PARENT_UNWRITABLE') })
-  return configuredPath
+  return normalizeMacPath(configuredPath)
+}
+
+function normalizeMacPath(path) {
+  return typeof path === 'string' && path.startsWith('/private/') ? path.slice('/private'.length) : path
 }

@@ -58,7 +58,7 @@ function normalizePath(value) { const path = typeof value === 'string' ? value.t
 function isSensitive(path) { return path.split('/').some((part) => sensitiveFileNames.has(part) || part.endsWith('.pem') || part.endsWith('.key')) }
 function candidateUrl(baseUrl, path) { return `${baseUrl}?path=${encodeURIComponent(path)}` }
 function vsCodeFolderUrl(path) {
-  return `vscode://file${encodeURI(path).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
+  return `vscode://file${encodeURI(normalizeMacPath(path)).replace(/#/g, '%23').replace(/\?/g, '%3F')}`
 }
 
 function vsCodeNewWindowFolderUrl(path) {
@@ -67,7 +67,7 @@ function vsCodeNewWindowFolderUrl(path) {
 }
 
 async function createComparisonWorkspace(sourceRoot, candidateRoot) {
-  const source = await realpath(sourceRoot).catch(() => null)
+  const source = normalizeMacPath(await realpath(sourceRoot).catch(() => null))
   if (!source) return null
   const directory = join(tmpdir(), 'adx-candidate-comparisons')
   const name = createHash('sha256').update(`${source}\0${candidateRoot}`).digest('hex').slice(0, 20)
@@ -75,10 +75,14 @@ async function createComparisonWorkspace(sourceRoot, candidateRoot) {
   const workspace = {
     folders: [
       { name: 'Source baseline', path: source },
-      { name: 'Modified candidate', path: candidateRoot },
+      { name: 'Modified candidate', path: normalizeMacPath(candidateRoot) },
     ],
   }
   await mkdir(directory, { recursive: true, mode: 0o700 })
   await writeFile(workspacePath, `${JSON.stringify(workspace, null, 2)}\n`, { mode: 0o600 })
-  return workspacePath
+  return normalizeMacPath(workspacePath)
+}
+
+function normalizeMacPath(path) {
+  return typeof path === 'string' && path.startsWith('/private/') ? path.slice('/private'.length) : path
 }

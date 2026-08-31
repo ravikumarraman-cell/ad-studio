@@ -451,6 +451,24 @@ export class PostgresExecutionRepository {
           "EXECUTION_RUN_NOT_FOUND",
           "Execution run was not found.",
         );
+      if (
+        ["COMPLETED", "FAILED", "CANCELLED"].includes(current.rows[0].status)
+      ) {
+        return {
+          status: current.rows[0].status,
+          receiptDigest: null,
+          errorCode: result?.errorCode ?? null,
+          errorDetails:
+            result?.errorDetails && typeof result.errorDetails === "object"
+              ? result.errorDetails
+              : null,
+          timings:
+            result?.timings && typeof result.timings === "object"
+              ? result.timings
+              : null,
+          artifacts: Array.isArray(result?.artifacts) ? result.artifacts : [],
+        };
+      }
       const cancelled =
         current.rows[0].status === "CANCELLED" || result.cancelled;
       const status = cancelled
@@ -556,19 +574,24 @@ export class PostgresExecutionRepository {
           'SELECT id,status,lease_digest AS "leaseDigest",issued_at AS "issuedAt",expires_at AS "expiresAt",revoked_at AS "revokedAt",revoke_reason AS "revokeReason" FROM adx_execution_lease WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 ORDER BY issued_at DESC',
           [changeCaseId, scope.organizationId, scope.workspaceId],
         )
-      ).rows,
+      ).rows.filter((row) => row?.id && row?.status && row?.leaseDigest),
       runs: (
         await client.query(
           'SELECT id,lease_id AS "leaseId",adapter_id AS "adapterId",adapter_version AS "adapterVersion",status,created_at AS "createdAt",updated_at AS "updatedAt" FROM adx_agent_run WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 ORDER BY created_at DESC',
           [changeCaseId, scope.organizationId, scope.workspaceId],
         )
-      ).rows,
+      ).rows.filter((row) => row?.id && row?.leaseId && row?.status),
       events: (
         await client.query(
           "SELECT event.run_id AS \"runId\",event.sequence,event.event_type AS \"eventType\",event.occurred_at AS \"occurredAt\",event.payload->>'phase' AS phase,event.payload->>'errorCode' AS \"errorCode\",event.payload->'errorDetails' AS \"errorDetails\",event.payload->'timings' AS timings,event.payload->'quota' AS quota,event.payload->'artifacts' AS artifacts,COALESCE((event.payload->>'timedOut')::boolean,false) AS \"timedOut\",event.payload->>'signal' AS signal FROM adx_agent_run_event event JOIN adx_agent_run run ON run.id=event.run_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 ORDER BY event.occurred_at ASC,event.sequence ASC",
           [changeCaseId, scope.organizationId, scope.workspaceId],
         )
-      ).rows,
+      ).rows.filter(
+        (row) =>
+          row?.runId &&
+          Number.isInteger(Number(row?.sequence)) &&
+          typeof row?.eventType === "string",
+      ),
     }));
   }
   async close() {
