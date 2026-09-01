@@ -744,13 +744,13 @@ function changeCaseWorkflowCard(changeCase, workspaceId) {
     position === 7
       ? "All gates are complete. Open Gate F to review the retained outcome."
       : currentGate.id === "F"
-        ? "Gate F is ready. Complete the outcome review for this Change Case."
+        ? "Open Gate F to check for a retained outcome and complete the final review when one is available."
       : changeCase.state === "PAUSED"
         ? "This Change Case is paused. Resolve the pause before advancing the active gate."
         : changeCase.state === "CANCELLED"
           ? "This Change Case was cancelled. Its retained history remains available for review."
           : `Focus on Gate ${currentGate.id}: ${currentGate.purpose}`;
-  const nextLink = position === 7 ? "Open outcome review" : currentGate.id === "F" ? "Complete Gate F" : `Open Gate ${escapeHtml(currentGate.id)}`
+  const nextLink = position === 7 ? "Open outcome review" : currentGate.id === "F" ? "Open Gate F" : `Open Gate ${escapeHtml(currentGate.id)}`
   return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">${nextLink}</a></section></article>`;
 }
 function bearer(request) {
@@ -2142,6 +2142,7 @@ const server = createServer(async (request, response) => {
         outcomeReviewPage(current, await outcomes.list(scope, changeCaseId), {
           canComplete: completionDecision.outcome === "ALLOW",
           completionEndpoint: `${changeCaseBasePath(workspaceId, changeCaseId)}/outcome-completion`,
+          deliveryReviewUrl: `${changeCaseBasePath(workspaceId, changeCaseId)}/delivery-review`,
           expectedVersion: current.projectionVersion,
         }),
         traceId,

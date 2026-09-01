@@ -35,13 +35,13 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
     current === gates.length
       ? 'Review the recorded outcome.'
       : gate.id === 'F'
-        ? 'Complete Gate F'
+        ? 'Check Gate F for a retained outcome.'
         : `Open Gate ${gate.id} review`
   const nextActionButton =
     current === gates.length
       ? 'Open outcome review'
       : gate.id === 'F'
-        ? 'Complete Gate F'
+        ? 'Open Gate F'
         : `Open Gate ${gate.id}`
   const latestRun = selected ? executionsByCase[selected.id]?.runs[0] : undefined
   const latestEvent = selected && latestRun ? [...(executionsByCase[selected.id]?.events ?? [])].reverse().find((event) => event.runId === latestRun.id) : undefined

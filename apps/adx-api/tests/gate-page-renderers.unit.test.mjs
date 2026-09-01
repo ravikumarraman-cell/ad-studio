@@ -143,3 +143,16 @@ test('Gate F exposes a visible completion path for delivery-ready cases', () => 
   assert.match(page, /id="outcome-digest"/)
   assert.match(page, /Recording Gate F outcome/)
 })
+
+test('Gate F explains the upstream action when no outcome has been retained', () => {
+  const page = outcomeReviewPage(
+    { ...changeCase, state: 'READY_FOR_DELIVERY' },
+    [],
+    { canComplete: true, deliveryReviewUrl: '/delivery-review' },
+  )
+  assert.match(page, /Nothing to record yet/)
+  assert.match(page, /Finish Gate E/)
+  assert.match(page, /Open Gate E/)
+  assert.match(page, /outcome service retain the result/)
+  assert.doesNotMatch(page, /id="complete-gate-f"/)
+})
