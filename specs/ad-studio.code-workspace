@@ -8,6 +8,9 @@
 		},
 		{
 			"path": "../../EEAOS_Command_Center"
+		},
+		{
+			"path": "../../cloud-asset-inventory"
 		}
 	],
 	"settings": {}

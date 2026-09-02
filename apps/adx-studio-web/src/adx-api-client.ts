@@ -15,7 +15,8 @@ export type ApiError = Error & { status?: number; code?: string }
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(path, { ...init, credentials: 'include', headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } })
+    const token = await optumAccessToken()
+    response = await fetch(path, { ...init, credentials: 'include', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Azure ${token}` } : {}), ...(init?.headers ?? {}) } })
   } catch {
     throw new Error('The ADX API could not be reached. Confirm that the local ADX API is running, then try again.')
   }
@@ -68,3 +69,4 @@ export async function listPrivateGitHubMilestones(workspaceId: string, owner: st
 export async function importPrivateGitHubMilestone(workspaceId: string, input: { owner: string; repository: string; milestone: number; featureOwner: string; targetRepository: string; riskTier: string }): Promise<FeatureImportResponse> {
   return api(`/v1/workspaces/${workspaceId}/github-private/milestone-import`, { method: 'POST', headers: { 'idempotency-key': newIdempotencyKey() }, body: JSON.stringify({ ...input, importId: crypto.randomUUID() }) })
 }
+import { optumAccessToken } from './entra-auth'

@@ -8,6 +8,8 @@ const options = { canReview: true, canPrepare: true, prepareEndpoint: '/delivery
 test('delivery review guides a provider setup when no preview plan exists', () => {
   const page = renderDeliveryReviewPage(changeCase, [], null, options)
   assert.match(page, /No preview plan has been retained/)
+  assert.match(page, /Back to Gate F/)
+  assert.match(page, /href="\/outcome-review"/)
   assert.match(page, /Commit-bound checklist/)
   assert.match(page, /Prepare preview plan/)
   assert.match(page, /aria-label="Blocked: Preview plan retained\./)

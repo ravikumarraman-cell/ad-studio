@@ -6,7 +6,7 @@ if (process.env.NODE_ENV === 'production') throw new Error('LOCAL_USER_PROVISION
 const principalId = process.argv[2]
 const organizationId = process.env.ADX_BOOTSTRAP_ORGANIZATION_ID ?? '11111111-1111-4111-8111-111111111111'
 const workspaceId = process.env.ADX_BOOTSTRAP_WORKSPACE_ID ?? 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
-if (typeof principalId !== 'string' || !principalId.startsWith('oidc:https://accounts.google.com:')) throw new Error('GOOGLE_OIDC_PRINCIPAL_ID_REQUIRED')
+if (typeof principalId !== 'string' || !principalId.startsWith('oidc:')) throw new Error('OIDC_PRINCIPAL_ID_REQUIRED: Provide the principal ID returned by /v1/me after Google or Optum SSO login.')
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL_REQUIRED_FOR_LOCAL_USER_PROVISIONING')
 const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 1 })
 try {

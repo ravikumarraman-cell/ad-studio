@@ -111,7 +111,8 @@ p {
   padding: 44px 52px 60px;
 }
 
-header {
+.shell > header,
+.adx-content > .adx-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -933,13 +934,55 @@ h2 {
 
 .adx-sign-in,
 .adx-loading {
+  min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: clamp(24px, 6vw, 72px);
 }
 
 .adx-hero {
   box-shadow: var(--adx-shadow-md);
+}
+
+.adx-status-card {
+  display: grid;
+  gap: 14px;
+  width: min(620px, 100%);
+  padding: clamp(26px, 5vw, 44px);
+  border-radius: var(--adx-radius-xl);
+}
+
+.adx-status-card h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.35rem);
+}
+
+.adx-status-card > p:not(.adx-eyebrow) {
+  max-width: 48ch;
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.55;
+}
+
+.adx-auth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.adx-auth-actions > * {
+  min-width: min(100%, 178px);
+}
+
+.adx-auth-error {
+  margin: 2px 0 0 !important;
+  padding: 11px 13px;
+  border: 1px solid #e0a2a6;
+  border-radius: var(--adx-radius-sm);
+  background: var(--adx-danger-soft);
+  color: var(--adx-danger) !important;
+  font-size: 0.9rem !important;
 }
 
 .adx-help {
@@ -949,6 +992,18 @@ h2 {
 
 .adx-modal-backdrop {
   z-index: 2;
+}
+
+.adx-principal-id {
+  display: block;
+  margin: 18px 0;
+  padding: 12px;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--adx-border);
+  border-radius: 10px;
+  background: var(--adx-surface-soft);
+  color: var(--adx-ink);
+  font-size: 0.78rem;
 }
 
 .adx-modal {
@@ -1055,5 +1110,10 @@ main:has(.feature-layout) .metrics {
     width: 100%;
     max-width: 100%;
     margin-block: 16px;
+  }
+
+  .adx-auth-actions > * {
+    flex: 1 1 100%;
+    width: 100%;
   }
 }

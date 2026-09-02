@@ -641,7 +641,7 @@ main:has(.feature-layout) .metrics {
     flex-direction: column;
   }
 
-  .adx-next-action .adx-primary {
+.adx-next-action .adx-primary {
     text-align: center;
   }
 

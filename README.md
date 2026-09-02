@@ -45,7 +45,7 @@ npm install
 npm run dev
 ```
 
-Open <http://127.0.0.1:4173> and choose **Guided demo**. You can now explore the complete journey without Docker, a database, OAuth, or credentials.
+Open <http://localhost:5173> and choose **Guided demo**. You can now explore the complete journey without Docker, a database, OAuth, or credentials.
 
 > The health-authorization scenario is fictional. It is a product demonstration, not a clinical decision-support system. Do not use it for real patient, member, or protected health information.
 
@@ -168,7 +168,7 @@ npm install
 npm run dev
 ```
 
-Open the Vite address printed by the command, normally <http://127.0.0.1:4173>. Choose **Guided demo** on the opening screen.
+Open the Vite address printed by the command, normally <http://localhost:5173>. Choose **Guided demo** on the opening screen.
 
 The root `dev` script starts `apps/adx-studio-web`. To stop it, press `Ctrl+C` in that terminal.
 
@@ -222,7 +222,7 @@ For local database-backed development, begin with:
 
 ```dotenv
 DATABASE_URL=postgresql://adx:adx_local_only@127.0.0.1:5432/adx
-ADX_UI_ORIGIN=http://127.0.0.1:4173/
+ADX_UI_ORIGIN=http://localhost:5173/
 ```
 
 Add the authenticated-mode values described in the next section before attempting login. Keep `.env.local` private and never commit provider tokens or signing keys.
@@ -262,11 +262,11 @@ In a second terminal, from the repository root:
 npm run dev
 ```
 
-Open <http://127.0.0.1:4173> and select **Real mode**. The Vite client proxies `/v1`, `/auth`, and `/control-plane` to the API at port `3100`.
+Open <http://localhost:5173> and select **Real mode**. The Vite client proxies `/v1`, `/auth`, and `/control-plane` to the API at port `3100`.
 
 ### Configure authenticated Real mode
 
-Real mode is deny-by-default. A user must authenticate through Google OIDC and have a local workspace membership before the control plane exposes tenant data.
+Real mode is deny-by-default. A user must authenticate through OIDC and have a local workspace membership before the control plane exposes tenant data. Google remains supported for local development; Microsoft Entra ID provides the same workforce SSO pattern used by Cloud Asset Inventory.
 
 #### Google OAuth setup
 
@@ -283,7 +283,7 @@ ADX_OIDC_ISSUER=https://accounts.google.com
 ADX_OIDC_AUDIENCE=YOUR_GOOGLE_OAUTH_CLIENT_ID
 ADX_OIDC_CLIENT_SECRET=YOUR_GOOGLE_OAUTH_CLIENT_SECRET
 ADX_OIDC_REDIRECT_URI=http://127.0.0.1:3100/auth/callback
-ADX_UI_ORIGIN=http://127.0.0.1:4173/
+ADX_UI_ORIGIN=http://localhost:5173/
 ```
 
 `ADX_OIDC_AUDIENCE` is the OAuth client ID in this local Google adapter. The API uses Google's published JWKS endpoint by default; set `ADX_OIDC_JWKS_URI` only when using a different compatible identity setup.
@@ -293,6 +293,25 @@ If a local configuration already sets `ADX_OIDC_JWKS_URI`, it must use Google’
 ```dotenv
 ADX_OIDC_JWKS_URI=https://www.googleapis.com/oauth2/v3/certs
 ```
+
+#### Microsoft Entra ID SSO
+
+Cloud Asset Inventory uses MSAL in the browser. ADX now uses that same pattern: register ADX as a **Single-page application**, add `http://localhost:5173` as its local redirect URI, and configure the public application ID and tenant authority. The existing Entra browser session is reused, so users normally do not need to sign in again.
+
+```dotenv
+ADX_ENTRA_TENANT_ID=YOUR_TENANT_ID
+ADX_ENTRA_CLIENT_ID=YOUR_APPLICATION_CLIENT_ID
+```
+
+Then add the browser configuration to `apps/adx-studio-web/.env.local`:
+
+```dotenv
+VITE_AZURE_CLIENTID=YOUR_APPLICATION_CLIENT_ID
+VITE_AZURE_AUTHORITY=https://login.microsoftonline.com/YOUR_TENANT_ID
+VITE_AZURE_SCOPES=openid profile email
+```
+
+These provider-specific variables can coexist with the Google `ADX_OIDC_*` configuration, which makes both **Sign in with Optum SSO** and **Sign in with Google** available. For a deployed environment, use HTTPS redirect and UI origins. The API validates the Entra access token’s issuer, audience, signature, and expiration before applying ADX membership and RBAC; Entra group claims are not used to grant ADX access. Provision the authenticated principal as described below to give it a workspace role.
 
 #### Ledger signing key
 
@@ -308,7 +327,7 @@ Alternatively, the API accepts `ADX_LEDGER_SIGNING_PRIVATE_KEY_PEM` and `ADX_LED
 
 #### Provision a local membership
 
-After completing Google login once, determine the principal ID emitted by the API or use the required Google subject format. Then grant that principal access to the default local workspace:
+After completing an OIDC login once, determine the principal ID emitted by the API or use the provider subject format. Then grant that principal access to the default local workspace:
 
 ```bash
 npm run provision:local-user -- 'oidc:https://accounts.google.com:YOUR_GOOGLE_SUBJECT'
@@ -449,7 +468,7 @@ Check all of the following:
 
 1. `ADX_OIDC_AUDIENCE`, `ADX_OIDC_CLIENT_SECRET`, and `ADX_OIDC_REDIRECT_URI` are set.
 2. The Google OAuth client permits `http://127.0.0.1:3100/auth/callback` exactly.
-3. `ADX_UI_ORIGIN` is `http://127.0.0.1:4173/` including the trailing slash.
+3. `ADX_UI_ORIGIN` is `http://localhost:5173/` including the trailing slash.
 4. You restarted the API after editing `.env.local`.
 5. Your Google principal received local membership through `npm run provision:local-user -- ...`.
 

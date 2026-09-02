@@ -11,12 +11,12 @@ export function write(response, status, body, traceId) {
 
 export function uiRedirectLocation(value) {
   try {
-    const url = new URL(value || "http://127.0.0.1:4173/");
+    const url = new URL(value || "http://localhost:5173/");
     if (!["http:", "https:"].includes(url.protocol))
       throw new Error("invalid protocol");
     return url.toString();
   } catch {
-    return "http://127.0.0.1:4173/";
+    return "http://localhost:5173/";
   }
 }
 

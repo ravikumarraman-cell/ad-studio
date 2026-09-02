@@ -17,8 +17,9 @@ import {
 import { createOidcVerifier } from "./oidc.mjs";
 import {
   createPkceTransaction,
-  exchangeGoogleCode,
-  googleAuthorizationUrl,
+  exchangeOidcCode,
+  oidcAuthorizationUrl,
+  oidcProvider,
 } from "./oauth.mjs";
 import { PostgresTenantRepository } from "./postgres.mjs";
 import { ChangeCaseError, sha256 } from "./change-case-ledger.mjs";
@@ -199,6 +200,7 @@ const resources = new TenantResourceStore([
 const auditEvents = [];
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const verifyOidc = createOidcVerifier();
+const verifyEntraOidc = createOidcVerifier(oidcProvider(process.env, "entra") ?? {});
 const postgres = process.env.DATABASE_URL
   ? new PostgresTenantRepository(process.env.DATABASE_URL)
   : null;
@@ -582,6 +584,7 @@ function oidcFailureMetadata(error) {
     name: error.name,
     code: typeof error.code === "string" ? error.code : null,
     causeCode: typeof error.cause?.code === "string" ? error.cause.code : null,
+    message: typeof error.message === "string" ? error.message.slice(0, 180) : null,
   };
 }
 function storyReviewPage(changeCase, governance) {
@@ -753,20 +756,57 @@ function changeCaseWorkflowCard(changeCase, workspaceId) {
   const nextLink = position === 7 ? "Open outcome review" : currentGate.id === "F" ? "Open Gate F" : `Open Gate ${escapeHtml(currentGate.id)}`
   return `<article class="case"><div class="case-head"><div><p class="eyebrow">CHANGE CASE · ${escapeHtml(changeCase.state)}</p><h2>${escapeHtml(changeCase.title)}</h2><p class="case-id"><code>${escapeHtml(changeCase.id)}</code></p></div><span class="risk">${escapeHtml(changeCase.riskTier)} risk</span></div><div class="workflow" aria-label="Gate progress for ${escapeHtml(changeCase.title)}">${gateCards}</div><section class="next"><div><p class="eyebrow">ONE SAFE NEXT STEP</p><strong>${escapeHtml(nextText)}</strong></div><a class="review-link" href="${href}">${nextLink}</a></section></article>`;
 }
-function bearer(request) {
-  const value = request.headers.authorization;
-  if (value?.startsWith("Bearer ")) return value.slice(7);
-  return (
-    request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null
-  );
+function cookieSessionToken(request) {
+  return request.headers.cookie?.match(/(?:^|;\s*)adx_session=([^;]+)/)?.[1] ?? null;
 }
-async function sessionFor(request) {
-  const token = bearer(request);
-  const local = sessions.resolve(token);
-  if (local || !verifyOidc || !token) return local;
+function cookieOidcToken(request) {
+  return request.headers.cookie?.match(/(?:^|;\s*)adx_oidc=([^;]+)/)?.[1] ?? null;
+}
+function authorizationToken(request) {
+  const value = request.headers.authorization;
+  if (value?.startsWith("Bearer ") || value?.startsWith("Azure ")) return value.slice(value.indexOf(" ") + 1);
+  return null;
+}
+function sessionCookieHeaders(sessionToken, oidcToken = null) {
+  const attributes = "; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600";
+  return [
+    `adx_session=${sessionToken}${attributes}`,
+    ...(oidcToken ? [`adx_oidc=${oidcToken}${attributes}`] : []),
+  ];
+}
+function tokenMetadata(token) {
+  if (typeof token !== "string") return { segments: 0, header: null };
+  const [encodedHeader] = token.split(".");
   try {
-    return { principal: await verifyOidc(token), memberships: [] };
+    const header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8"));
+    const payload = JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8"));
+    return { segments: token.split(".").length, header: { alg: header.alg ?? null, enc: header.enc ?? null, kidPresent: Boolean(header.kid), typ: header.typ ?? null }, claims: { issuer: payload.iss ?? null, audience: payload.aud ?? null } };
   } catch {
+    return { segments: token.split(".").length, header: null };
+  }
+}
+async function sessionFor(request, traceId) {
+  const local = sessions.resolve(cookieSessionToken(request));
+  if (local) return local;
+  // A verified ID token is retained only in an HttpOnly, same-site cookie. This
+  // lets a server-rendered gate restore a local session after an API restart;
+  // the token is still cryptographically verified before it is trusted.
+  const token = authorizationToken(request) ?? cookieOidcToken(request);
+  if (!token) return null;
+  try {
+    const principal = await (verifyEntraOidc ?? verifyOidc)?.(token);
+    if (!principal) return null;
+    const membershipsForPrincipal = postgres ? await postgres.memberships(principal.id) : [];
+    return { principal, memberships: membershipsForPrincipal, sessionToken: sessions.create(principal, membershipsForPrincipal) };
+  } catch (error) {
+    console.warn(JSON.stringify({
+      service: "adx-api",
+      event: "oidc.bearer.rejected",
+      traceId,
+      reason: oidcCallbackFailureReason(error),
+      failure: oidcFailureMetadata(error),
+      token: tokenMetadata(token),
+    }));
     return null;
   }
 }
@@ -1321,20 +1361,24 @@ const server = createServer(async (request, response) => {
       traceId,
     );
   if (request.method === "GET" && url.pathname === "/auth/login") {
-    if (!process.env.ADX_OIDC_AUDIENCE || !process.env.ADX_OIDC_REDIRECT_URI)
+    const provider = oidcProvider(process.env, url.searchParams.get("provider") || "google");
+    if (!provider || !provider.redirectUri)
       return write(response, 503, { code: "OIDC_NOT_CONFIGURED" }, traceId);
     const transaction = createPkceTransaction();
     oauthTransactions.set(transaction.state, {
       ...transaction,
+      provider: provider.id,
       expiresAt: Date.now() + 10 * 60_000,
     });
     response.statusCode = 302;
     response.setHeader(
       "location",
-      googleAuthorizationUrl({
-        clientId: process.env.ADX_OIDC_AUDIENCE,
-        redirectUri: process.env.ADX_OIDC_REDIRECT_URI,
+      oidcAuthorizationUrl({
+        authorizationEndpoint: provider.authorizationEndpoint,
+        clientId: provider.clientId,
+        redirectUri: provider.redirectUri,
         transaction,
+        scope: provider.scope,
       }),
     );
     return response.end();
@@ -1347,15 +1391,20 @@ const server = createServer(async (request, response) => {
     if (!state || !code || !transaction || transaction.expiresAt < Date.now())
       return write(response, 400, { code: "OIDC_STATE_REJECTED" }, traceId);
     let principal;
+    let oidcToken;
     try {
-      const tokens = await exchangeGoogleCode({
+      const provider = oidcProvider(process.env, transaction.provider);
+      if (!provider || !provider.redirectUri) throw new Error("OIDC_PROVIDER_NOT_CONFIGURED");
+      const tokens = await exchangeOidcCode({
+        tokenEndpoint: provider.tokenEndpoint,
         code,
         verifier: transaction.verifier,
-        clientId: process.env.ADX_OIDC_AUDIENCE,
-        clientSecret: process.env.ADX_OIDC_CLIENT_SECRET,
-        redirectUri: process.env.ADX_OIDC_REDIRECT_URI,
+        clientId: provider.clientId,
+        clientSecret: provider.clientSecret,
+        redirectUri: provider.redirectUri,
       });
-      principal = verifyOidc ? await verifyOidc(tokens.id_token) : null;
+      oidcToken = tokens.id_token;
+      principal = await createOidcVerifier(provider)?.(oidcToken);
     } catch (error) {
       const reason = oidcCallbackFailureReason(error);
       const diagnostic = oidcFailureMetadata(error);
@@ -1408,13 +1457,10 @@ const server = createServer(async (request, response) => {
     audit({
       type: "session.login",
       principalId: principal.id,
-      provider: "google",
+      provider: transaction.provider,
     });
     response.statusCode = 302;
-    response.setHeader(
-      "set-cookie",
-      `adx_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=3600`,
-    );
+    response.setHeader("set-cookie", sessionCookieHeaders(token, oidcToken));
     response.setHeader(
       "location",
       realWorkspaceLocation(process.env.ADX_UI_ORIGIN),
@@ -1448,7 +1494,7 @@ const server = createServer(async (request, response) => {
       traceId,
     );
   }
-  const session = await sessionFor(request);
+  const session = await sessionFor(request, traceId);
   if (!session)
     return write(
       response,
@@ -1459,7 +1505,12 @@ const server = createServer(async (request, response) => {
       },
       traceId,
     );
-  if (request.method === "GET" && url.pathname === "/v1/me")
+  if (request.method === "GET" && url.pathname === "/v1/me") {
+    if (session.sessionToken)
+      response.setHeader(
+        "set-cookie",
+        sessionCookieHeaders(session.sessionToken, authorizationToken(request)),
+      );
     return write(
       response,
       200,
@@ -1475,6 +1526,7 @@ const server = createServer(async (request, response) => {
       },
       traceId,
     );
+  }
   if (request.method === "GET" && url.pathname === "/control-plane") {
     if (!changeCases)
       return write(

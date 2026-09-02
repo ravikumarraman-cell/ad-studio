@@ -127,6 +127,13 @@
   line-height: 1.4;
 }
 
+.adx-import-status {
+  margin: 10px 0 0;
+  color: var(--adx-copy);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
 .adx-cancel-summary {
   padding: 13px 15px;
   border-left: 4px solid #c94f4f;

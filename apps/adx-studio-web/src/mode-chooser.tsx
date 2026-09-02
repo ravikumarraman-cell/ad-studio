@@ -1,6 +1,13 @@
 import './mode-chooser.css'
+import { signInWithOptum } from './entra-auth'
+import { useState } from 'react'
 
 export function ModeChooser({ onChoose, workspaceReady }: { onChoose: (mode: 'real' | 'demo') => void; workspaceReady: boolean }) {
+  const [signInError, setSignInError] = useState('')
+  const startOptumSignIn = async () => {
+    setSignInError('')
+    try { await signInWithOptum() } catch (error) { setSignInError(error instanceof Error ? error.message : 'Optum SSO could not be started.') }
+  }
   return <main className="adx-mode-home">
     <header className="adx-home-header">
       <a className="adx-home-brand" href="/" aria-label="ADX home"><span>ADX</span><strong>Delivery control</strong></a>
@@ -23,12 +30,16 @@ export function ModeChooser({ onChoose, workspaceReady }: { onChoose: (mode: 're
           <div className="adx-home-path-heading"><p>Authorized workspace</p><h2>Open my Change Cases</h2></div>
           <p>Sign in to continue work already assigned to your identity and workspace.</p>
           <strong>Open workspace <span aria-hidden="true">-&gt;</span></strong>
-        </button> : <a className="adx-home-path adx-home-path-primary" href="/auth/login">
+        </button> : <div className="adx-home-path adx-home-path-primary">
           <span className="adx-home-path-index">01</span>
           <div className="adx-home-path-heading"><p>Authorized workspace</p><h2>Open my Change Cases</h2></div>
           <p>Sign in to continue work already assigned to your identity and workspace.</p>
-          <strong>Sign in to workspace <span aria-hidden="true">-&gt;</span></strong>
-        </a>}
+          <div className="adx-home-sign-in-actions">
+            <button className="adx-primary" onClick={() => void startOptumSignIn()}>Sign in with Optum SSO</button>
+            <a className="adx-secondary" href="/auth/login?provider=google">Sign in with Google</a>
+          </div>
+          {signInError && <p className="adx-home-sign-in-error" role="alert">{signInError}</p>}
+        </div>}
         <button className="adx-home-path adx-home-path-secondary" onClick={() => onChoose('demo')}>
           <span className="adx-home-path-index">02</span>
           <div className="adx-home-path-heading"><p>Guided case</p><h2>Explore a provider intake change</h2></div>

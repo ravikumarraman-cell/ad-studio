@@ -18,7 +18,7 @@ test('story review deep link presents authoritative retained intent, risk, and B
     await page.context().addCookies([{ name: 'adx_session', value: token, url: base }]); await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-workshop`, base).toString())
     expect(pageErrors).toEqual([])
     await expect(page.locator('.signed-in-indicator')).toHaveAttribute('aria-label', 'Signed in as alice')
-    await expect(page.getByRole('link', { name: '← Back to ADX home' })).toHaveAttribute('href', 'http://127.0.0.1:4173/')
+    await expect(page.getByRole('link', { name: '← Back to ADX home' })).toHaveAttribute('href', 'http://127.0.0.1:5173/')
     await expect(page.locator('.story-card')).toHaveCount(1)
     await page.route('**/story-suggestions', async (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ receipt: { template: { id: 'story-spec-delivery-slices', version: '10.10', digest: 'sha256:story-spec' } }, suggestions: [{ title: 'View authorization status', narrative: 'As a member, I want to view my authorization status, so that I know what happens next.', scenarios: [{ given: 'a submitted authorization', when: 'the member opens its status', then: 'the current status and next action are shown' }] }] }) }))
     await page.getByRole('button', { name: 'Generate suggestions' }).click()
@@ -46,7 +46,7 @@ test('story review deep link presents authoritative retained intent, risk, and B
     await request.post(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/stories`, { headers: headers(`stage3-ui-story-${randomUUID()}`), data: { expectedVersion: classifiedVersion, stories: submitted.stories } })
     await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/story-review`, base).toString())
     await expect(page.locator('.signed-in-indicator')).toHaveAttribute('aria-label', 'Signed in as alice')
-    await expect(page.getByRole('link', { name: 'Return to workspace' })).toHaveAttribute('href', 'http://127.0.0.1:4173/?mode=real')
+    await expect(page.getByRole('link', { name: 'Return to workspace' })).toHaveAttribute('href', 'http://127.0.0.1:5173/?mode=real')
     await expect(page.getByRole('heading', { name: 'Story review deep link' })).toBeVisible(); await expect(page.getByText('R4 effective risk')).toBeVisible(); await expect(page.locator('.scenarios strong', { hasText: 'Given' }).first()).toBeVisible(); await expect(page.getByLabel('Review context')).toBeVisible(); await page.reload(); await expect(page.getByText('View authorization status')).toBeVisible()
   } finally {
     await cancelChangeCase(request, workspace, token, changeCaseId)
