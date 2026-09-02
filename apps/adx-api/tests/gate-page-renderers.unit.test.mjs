@@ -150,9 +150,9 @@ test('Gate F explains the upstream action when no outcome has been retained', ()
     [],
     { canComplete: true, deliveryReviewUrl: '/delivery-review' },
   )
-  assert.match(page, /Nothing to record yet/)
+  assert.match(page, /Wait for the outcome record/)
   assert.match(page, /Finish Gate E/)
   assert.match(page, /Open Gate E/)
-  assert.match(page, /outcome service retain the result/)
+  assert.match(page, /Run the approved change/)
   assert.doesNotMatch(page, /id="complete-gate-f"/)
 })
