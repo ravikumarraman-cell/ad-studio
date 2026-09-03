@@ -16,6 +16,7 @@ import {
 } from "../../packages/identity/src/index.mjs";
 import { createOidcVerifier } from "./oidc.mjs";
 import {
+  createBrowserSessionHandoffCode,
   createPkceTransaction,
   exchangeOidcCode,
   oidcAuthorizationUrl,
@@ -43,6 +44,7 @@ import { createGitHubMilestoneStoryClient } from "./github-milestone-story-clien
 import { StoryMilestoneRepository } from "./story-milestone-repository.mjs";
 import { createStoryMilestoneService } from "./story-milestone-service.mjs";
 import { PostgresOutcomeRepository } from "./outcome-repository.mjs";
+import { createOutcomeRecord } from "./outcome-record.mjs";
 import { createStorySuggestionService } from "./story-suggestions.mjs";
 import { createStoryDecompositionAgent } from "./story-decomposition-agent.mjs";
 import {
@@ -336,6 +338,7 @@ const localIndependentVerifier =
       })
     : null;
 const oauthTransactions = new Map();
+const browserSessionHandoffs = new Map();
 
 function createConfiguredPreviewDeliveryPreparation({
   changeCases,
@@ -773,6 +776,11 @@ function sessionCookieHeaders(sessionToken, oidcToken = null) {
     `adx_session=${sessionToken}${attributes}`,
     ...(oidcToken ? [`adx_oidc=${oidcToken}${attributes}`] : []),
   ];
+}
+function browserSessionHandoffLocation(value, code) {
+  const url = new URL("auth/complete", uiRedirectLocation(value));
+  url.searchParams.set("handoff", code);
+  return url.toString();
 }
 function tokenMetadata(token) {
   if (typeof token !== "string") return { segments: 0, header: null };
@@ -1361,6 +1369,8 @@ const server = createServer(async (request, response) => {
       traceId,
     );
   if (request.method === "GET" && url.pathname === "/auth/login") {
+    for (const [code, handoff] of browserSessionHandoffs)
+      if (handoff.expiresAt < Date.now()) browserSessionHandoffs.delete(code);
     const provider = oidcProvider(process.env, url.searchParams.get("provider") || "google");
     if (!provider || !provider.redirectUri)
       return write(response, 503, { code: "OIDC_NOT_CONFIGURED" }, traceId);
@@ -1459,12 +1469,28 @@ const server = createServer(async (request, response) => {
       principalId: principal.id,
       provider: transaction.provider,
     });
+    const handoff = createBrowserSessionHandoffCode();
+    browserSessionHandoffs.set(handoff, {
+      token,
+      oidcToken,
+      expiresAt: Date.now() + 60_000,
+    });
     response.statusCode = 302;
-    response.setHeader("set-cookie", sessionCookieHeaders(token, oidcToken));
     response.setHeader(
       "location",
-      realWorkspaceLocation(process.env.ADX_UI_ORIGIN),
+      browserSessionHandoffLocation(process.env.ADX_UI_ORIGIN, handoff),
     );
+    return response.end();
+  }
+  if (request.method === "GET" && url.pathname === "/auth/complete") {
+    const handoffCode = url.searchParams.get("handoff");
+    const handoff = browserSessionHandoffs.get(handoffCode);
+    browserSessionHandoffs.delete(handoffCode);
+    if (!handoff || handoff.expiresAt < Date.now())
+      return write(response, 400, { code: "OIDC_SESSION_HANDOFF_REJECTED" }, traceId);
+    response.statusCode = 302;
+    response.setHeader("set-cookie", sessionCookieHeaders(handoff.token, handoff.oidcToken));
+    response.setHeader("location", realWorkspaceLocation(process.env.ADX_UI_ORIGIN));
     return response.end();
   }
   if (process.env.ADX_TEST_AUTH === "1" && url.pathname === "/__test/session") {
@@ -2188,14 +2214,20 @@ const server = createServer(async (request, response) => {
         resource: changeCaseResource(current, scope),
         action: "resource.review",
       });
+      const deliveryReviewComplete = (await changeCases.timeline(scope, changeCaseId)).some(
+        (event) => event.eventType === "ChangeCaseDeliveryApproved.v1",
+      );
       return writeHtml(
         response,
         200,
         outcomeReviewPage(current, await outcomes.list(scope, changeCaseId), {
           canComplete: completionDecision.outcome === "ALLOW",
+          canRecord: completionDecision.outcome === "ALLOW",
+          recordEndpoint: `${changeCaseBasePath(workspaceId, changeCaseId)}/outcome-record`,
           completionEndpoint: `${changeCaseBasePath(workspaceId, changeCaseId)}/outcome-completion`,
           deliveryReviewUrl: `${changeCaseBasePath(workspaceId, changeCaseId)}/delivery-review`,
           expectedVersion: current.projectionVersion,
+          deliveryReviewComplete,
         }),
         traceId,
         session.principal,
@@ -2783,6 +2815,27 @@ const server = createServer(async (request, response) => {
           }),
           traceId,
         );
+      if (request.method === "POST" && operation === "outcome-record") {
+        if (!outcomes || !previewDeliveries)
+          throw new ChangeCaseError("OUTCOME_RECORDING_NOT_CONFIGURED", "Outcome recording requires the outcome and preview-delivery repositories.");
+        if (current.state !== "READY_FOR_DELIVERY")
+          throw new ChangeCaseError("OUTCOME_NOT_AWAITED", "An outcome may be recorded only after Gate E delivery approval.");
+        const approval = (await changeCases.timeline(scope, changeCaseId)).find((event) => event.eventType === "ChangeCaseDeliveryApproved.v1");
+        const approvedCommit = approval?.payload?.commitDigest;
+        const plan = (await previewDeliveries.list(scope, changeCaseId)).find((item) => item.commitDigest === approvedCommit);
+        if (!plan)
+          throw new ChangeCaseError("OUTCOME_RELEASE_CANDIDATE_MISSING", "The approved preview candidate is unavailable; do not record an outcome against a different release.");
+        const outcome = createOutcomeRecord({
+          changeCaseId,
+          releaseCandidateId: plan.id,
+          outcome: body?.outcome,
+          taxonomy: body?.taxonomy,
+          summary: body?.summary,
+          rollback: body?.rollback,
+          metrics: body?.metrics ?? {},
+        });
+        return write(response, 201, await outcomes.retain({ scope, principal: session.principal, outcome }), traceId);
+      }
       if (request.method === "POST" && operation === "delivery-decision") {
         if (!previewDeliveries)
           return write(
@@ -2791,19 +2844,18 @@ const server = createServer(async (request, response) => {
             { code: "GIT_PREVIEW_REPOSITORY_NOT_CONFIGURED" },
             traceId,
           );
-        return write(
-          response,
-          200,
-          await previewDeliveries.decide({
+        const decision = await previewDeliveries.decide({
             scope,
             principal: session.principal,
             previewPlanId: body?.previewPlanId,
             commitDigest: body?.commitDigest,
             decision: body?.decision,
             rationale: body?.rationale,
-          }),
-          traceId,
-        );
+          });
+        const result = body?.decision === "APPROVED"
+          ? await (current.state === "READY_FOR_DELIVERY" ? changeCases.attestLegacyDeliveryReview : changeCases.completeDeliveryReview).call(changeCases, { scope, principal: session.principal, changeCaseId, commitDigest: body?.commitDigest, expectedVersion: current.projectionVersion, idempotencyKey, correlationId: traceId })
+          : decision;
+        return write(response, 200, result, traceId);
       }
       return write(
         response,

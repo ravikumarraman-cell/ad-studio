@@ -52,6 +52,10 @@ test('Gate A.5 renders the authoring surface only for an authorized ready case',
 
   assert.match(page, /Shape a reviewable story set/)
   assert.match(page, /Suggestions are unavailable/)
+  assert.match(page, /header-summary/)
+  assert.match(page, /grid-template-columns: minmax\(0, 1fr\) minmax\(280px, 340px\)/)
+  assert.doesNotMatch(page, /FOCUS FOR THIS STEP/)
+  assert.doesNotMatch(page, /CURRENT STEP/)
   assert.match(page, /story-workshop-form/)
   assert.match(page, /Back to ADX home/)
   assert.equal((page.match(/<script>/g) ?? []).length, 1)
@@ -135,6 +139,7 @@ test('Gate F exposes a visible completion path for delivery-ready cases', () => 
       canComplete: true,
       completionEndpoint: '/outcome-completion',
       expectedVersion: 7,
+      deliveryReviewComplete: true,
     },
   )
 
@@ -144,15 +149,15 @@ test('Gate F exposes a visible completion path for delivery-ready cases', () => 
   assert.match(page, /Recording Gate F outcome/)
 })
 
-test('Gate F explains the upstream action when no outcome has been retained', () => {
+test('Gate F lets an authorized reviewer retain the factual production outcome', () => {
   const page = outcomeReviewPage(
     { ...changeCase, state: 'READY_FOR_DELIVERY' },
     [],
-    { canComplete: true, deliveryReviewUrl: '/delivery-review' },
+    { canComplete: true, canRecord: true, recordEndpoint: '/outcome-record', deliveryReviewUrl: '/delivery-review', deliveryReviewComplete: true },
   )
-  assert.match(page, /Wait for the outcome record/)
-  assert.match(page, /Finish Gate E/)
-  assert.match(page, /Open Gate E/)
-  assert.match(page, /Run the approved change/)
+  assert.match(page, /Record what actually happened/)
+  assert.match(page, /id="outcome-record-form"/)
+  assert.match(page, /outcome-record/)
+  assert.match(page, /Rollback artifact digest/)
   assert.doesNotMatch(page, /id="complete-gate-f"/)
 })

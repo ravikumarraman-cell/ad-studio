@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createPkceTransaction, googleAuthorizationUrl, oidcAuthorizationUrl, oidcEndpoints, oidcProvider } from '../oauth.mjs'
+import { createBrowserSessionHandoffCode, createPkceTransaction, googleAuthorizationUrl, oidcAuthorizationUrl, oidcEndpoints, oidcProvider } from '../oauth.mjs'
+
+test('browser session handoff codes are opaque and unique', () => {
+  const first = createBrowserSessionHandoffCode()
+  const second = createBrowserSessionHandoffCode()
+  assert.match(first, /^[A-Za-z0-9_-]{40,}$/)
+  assert.notEqual(first, second)
+})
 
 test('Google authorization URL allows an existing Google session to continue without an account picker', () => {
   const transaction = createPkceTransaction()

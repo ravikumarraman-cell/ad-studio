@@ -7,7 +7,7 @@ export class PostgresOutcomeRepository {
   constructor({ connectionString }) { if (!connectionString) throw new Error('OUTCOME_REPOSITORY_CONFIGURATION_REQUIRED'); this.pool = new pg.Pool({ connectionString, max: 10, idleTimeoutMillis: 10_000 }) }
   async scoped(scope, work) { const client = await this.pool.connect(); try { await client.query('BEGIN'); await client.query("SELECT set_config('adx.organization_id',$1,true),set_config('adx.workspace_id',$2,true)", [scope.organizationId, scope.workspaceId]); const value = await work(client); await client.query('COMMIT'); return value } catch (error) { await client.query('ROLLBACK'); throw error } finally { client.release() } }
   async retain({ scope, principal, outcome }) {
-    if (principal?.type !== 'service' || !principal.id || !outcome?.outcomeDigest) throw new ChangeCaseError('OUTCOME_WRITER_REQUIRED', 'Only the outcome service may retain a valid outcome record.')
+    if (!['service', 'human'].includes(principal?.type) || !principal.id || !outcome?.outcomeDigest) throw new ChangeCaseError('OUTCOME_WRITER_REQUIRED', 'An authenticated outcome service or authorized human reviewer must retain a valid outcome record.')
     return this.scoped(scope, async (client) => {
       const changeCase = await client.query('SELECT 1 FROM adx_change_case WHERE id=$1 AND organization_id=$2 AND workspace_id=$3', [outcome.changeCaseId, scope.organizationId, scope.workspaceId])
       if (!changeCase.rowCount) throw new ChangeCaseError('CHANGE_CASE_NOT_FOUND', 'Change Case was not found.')

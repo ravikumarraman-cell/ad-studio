@@ -44,6 +44,24 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
     expectedVersion: changeCase.projectionVersion,
     storyReviewUrl: options.storyReviewUrl,
   });
+  const assistance = options.aiStatus.configured && models.length
+    ? `
+      <details class="assistance-panel">
+        <summary><span><b>Optional assistance</b><small>Generate ideas to curate; nothing is saved automatically.</small></span></summary>
+        <div class="assistance-body">
+          <div class="pickers">
+            <label>Approved model<select id="story-ai-model">${modelOptions}</select><small>Provided by ${escapeHtml(options.aiStatus.providerLabel ?? 'the configured service')}.</small></label>
+            <label>Reviewed specification<select id="story-spec-template"><option value="">Retained context only</option>${templateOptions}</select><small>Only reviewed specifications are available.</small></label>
+          </div>
+          <button class="secondary full" id="suggest-stories" type="button">Generate suggestions</button>
+          <p id="suggestion-status" class="status" role="status" aria-live="polite"></p>
+          <p id="applied-spec" class="applied-spec" role="status" aria-live="polite" hidden></p>
+          <div id="suggestion-list" class="suggestion-list" aria-live="polite"></div>
+          <div id="suggestion-actions" class="actions" hidden><label><input id="select-all-stories" type="checkbox"> Select all stories</label><button id="accept-suggestions" class="button" type="button" disabled>Accept selected suggestions</button></div>
+        </div>
+      </details>
+    `
+    : `<section class="rail-card assistance-unavailable"><b>Suggestions are unavailable</b><p>Manual authoring is available. An administrator can enable an approved server-side model; no browser key is used.</p></section>`;
 
   const authoring = !isReady
     ? `
@@ -63,53 +81,6 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
       `
       : `
         <section class="workspace-grid">
-          ${
-            options.aiStatus.configured && models.length
-              ? `
-                <section class="card assistant">
-                  <div class="section-heading">
-                    <div>
-                      <p class="eyebrow">OPTIONAL ASSISTANCE</p>
-                      <h2>Generate a draft to curate</h2>
-                    </div>
-                    <p>Suggestions are never saved or approved automatically.</p>
-                  </div>
-
-                  <div class="pickers">
-                    <label>
-                      Approved model
-                      <select id="story-ai-model">${modelOptions}</select>
-                      <small>Provided by ${escapeHtml(options.aiStatus.providerLabel ?? 'the configured service')}.</small>
-                    </label>
-                    <label>
-                      Reviewed Story specification
-                      <select id="story-spec-template">
-                        <option value="">Retained context only</option>
-                        ${templateOptions}
-                      </select>
-                      <small>Only reviewed specifications are available.</small>
-                    </label>
-                  </div>
-
-                  <button class="secondary full" id="suggest-stories" type="button">Generate suggestions</button>
-                  <p id="suggestion-status" class="status" role="status" aria-live="polite"></p>
-                  <p id="applied-spec" class="applied-spec" role="status" aria-live="polite" hidden></p>
-                  <div id="suggestion-list" class="suggestion-list" aria-live="polite"></div>
-                  <div id="suggestion-actions" class="actions" hidden>
-                    <label><input id="select-all-stories" type="checkbox"> Select all stories</label>
-                    <button id="accept-suggestions" class="button" type="button" disabled>Accept selected suggestions</button>
-                  </div>
-                </section>
-              `
-              : `
-                <section class="card assistant unavailable">
-                  <p class="eyebrow">OPTIONAL ASSISTANCE</p>
-                  <h2>Suggestions are unavailable</h2>
-                  <p>Manual authoring is available. An administrator can enable an approved server-side model; no browser key is used.</p>
-                </section>
-              `
-          }
-
           <form id="story-workshop-form" class="card story-form" novalidate>
             <div class="section-heading">
               <div>
@@ -152,23 +123,15 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
           </form>
 
           <aside class="card workspace-rail">
-            <div class="rail-card">
-              <p class="eyebrow">WHY THIS MATTERS</p>
-              <strong>Keep the story set reviewer-friendly.</strong>
-              <p>The cleanest submissions are short, specific, and easy to compare. The reviewer should be able to scan each story and understand the outcome without hunting through prose.</p>
-            </div>
+            ${assistance}
             <div class="rail-card">
               <p class="eyebrow">QUALITY BAR</p>
+              <strong>Make this easy to review.</strong>
               <ul>
                 <li>One user outcome per story</li>
                 <li>One clear user need</li>
                 <li>Given / When / Then must be concrete</li>
-                <li>Suggestions are optional, not authoritative</li>
               </ul>
-            </div>
-            <div class="rail-card subtle">
-              <p class="eyebrow">NEXT STEP</p>
-              <strong>${escapeHtml(stageCopy.note)}</strong>
             </div>
           </aside>
         </section>
@@ -190,6 +153,7 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
             <p class="eyebrow">CHANGE CASE / STORY BREAKDOWN</p>
             <h1>${escapeHtml(changeCase.title)}</h1>
             <p class="meta">${escapeHtml(changeCase.riskTier)} risk / ${escapeHtml(changeCase.state)} / Version ${escapeHtml(changeCase.projectionVersion)}</p>
+            <p class="header-summary">${escapeHtml(stageCopy.summary)}</p>
           </div>
           <aside class="header-rail" aria-label="Story breakdown guidance">
             <ol class="progress" aria-label="Story breakdown stages">
@@ -209,24 +173,8 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
                 <small>Use the approved story set</small>
               </li>
             </ol>
-            <section class="rail-card">
-              <p class="eyebrow">FOCUS FOR THIS STEP</p>
-              <strong>${escapeHtml(stageCopy.title)}</strong>
-              <p>${escapeHtml(stageCopy.note)}</p>
-            </section>
           </aside>
         </header>
-
-        <section class="card context">
-          <p class="eyebrow">CURRENT STEP</p>
-          <div class="context-grid">
-            <div>
-              <h2>${escapeHtml(stageCopy.title)}</h2>
-              <p>${escapeHtml(stageCopy.summary)}</p>
-            </div>
-            <p class="context-note">${escapeHtml(stageCopy.note)}</p>
-          </div>
-        </section>
 
         ${authoring}
       </main>
@@ -265,8 +213,8 @@ main {
 
 .page-header {
   display: grid;
-  grid-template-columns: minmax(0, 1.08fr) minmax(380px, 0.92fr);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 0.8fr);
+  gap: 28px;
   align-items: start;
   padding: 32px 32px 32px;
 }
@@ -347,13 +295,25 @@ select:focus-visible {
   font-size: 0.98rem;
 }
 
+.header-summary {
+  max-width: 52ch;
+  margin: 16px 0 0;
+  color: #52645f;
+  font-size: 1.02rem;
+  line-height: 1.55;
+}
+
 .progress {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  gap: 0;
   margin: 0;
   padding: 0;
   list-style: none;
+  overflow: hidden;
+  border: 1px solid #d5e0da;
+  border-radius: 16px;
+  background: #f8fbf9;
 }
 
 .progress li {
@@ -362,12 +322,14 @@ select:focus-visible {
   column-gap: 8px;
   row-gap: 3px;
   align-items: center;
-  padding: 10px 12px;
-  border: 1px solid #d5e0da;
-  border-radius: 14px;
-  background: #fff;
-  box-shadow: 0 1px 2px rgb(16 42 67 / 7%);
+  min-height: 76px;
+  padding: 12px;
+  border: 0;
+  border-left: 1px solid #d5e0da;
+  background: transparent;
 }
+
+.progress li:first-child { border-left: 0; }
 
 .progress li span {
   grid-row: span 2;
@@ -397,7 +359,6 @@ select:focus-visible {
 }
 
 .progress li.complete {
-  border-color: #a8d6b5;
   background: #f1fbf4;
 }
 
@@ -407,9 +368,8 @@ select:focus-visible {
 }
 
 .progress li.active {
-  border: 2px solid #2a78c4;
   background: #edf7ff;
-  box-shadow: 0 10px 24px rgb(42 120 196 / 10%);
+  box-shadow: inset 0 3px 0 #2a78c4;
 }
 
 .progress li.active span {
@@ -463,9 +423,7 @@ select:focus-visible {
   box-shadow: 0 1px 2px rgb(16 42 67 / 7%);
 }
 
-.context,
 .notice-card,
-.assistant,
 .story-form {
   padding: 20px;
 }
@@ -497,8 +455,8 @@ select:focus-visible {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 0.84fr) minmax(0, 1.46fr) minmax(220px, 0.66fr);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  gap: 18px;
   align-items: start;
 }
 
@@ -514,15 +472,10 @@ select:focus-visible {
   margin: 0;
 }
 
-.assistant.unavailable {
-  color: #52645f;
-}
-
 .pickers {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin: 18px 0 16px;
+  gap: 12px;
+  margin: 14px 0;
 }
 
 label {
@@ -657,9 +610,32 @@ textarea {
 .workspace-rail {
   display: grid;
   gap: 12px;
+  padding: 16px;
   position: sticky;
   top: 18px;
 }
+
+.assistance-panel {
+  border: 1px solid #d4e0da;
+  border-radius: 14px;
+  background: #f8fbf9;
+}
+
+.assistance-panel summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 14px;
+  cursor: pointer;
+  color: #174c41;
+}
+
+.assistance-panel summary span { display: grid; gap: 2px; }
+.assistance-panel summary small { color: #647872; }
+.assistance-panel[open] summary { border-bottom: 1px solid #d4e0da; }
+.assistance-body { padding: 0 14px 14px; }
+.assistance-unavailable b { color: #24473f; }
+.assistance-unavailable p { margin-bottom: 0; }
 
 .story-card {
   margin: 16px 0;
@@ -714,7 +690,7 @@ legend {
   }
 
   .progress {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -733,6 +709,12 @@ legend {
 
   .pickers {
     grid-template-columns: 1fr;
+  }
+
+  .progress li {
+    grid-template-columns: auto 1fr;
+    min-height: 70px;
+    padding: 9px;
   }
 
   .actions .button {

@@ -19,6 +19,8 @@ test('story review renders the focused decision surface and retained story evide
   assert.match(page, /story-decision-form/)
   assert.match(page, /Given/)
   assert.match(page, /--adx-brand/)
+  assert.match(page, /main > section\.layout,\s*main > section\.workspace\{\s*padding:var\(--adx-panel-inset\)/)
+  assert.match(page, /--adx-panel-inset:clamp\(18px,2\.2vw,28px\)/)
 })
 
 test('story review preserves separation of duty for the story author', () => {

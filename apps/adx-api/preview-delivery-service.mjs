@@ -29,7 +29,8 @@ export function createPreviewDeliveryService({
   const provider = createPreviewGitProvider({ providerId, repositories });
   return Object.freeze({
     async prepare({ scope, changeCase, timeline }) {
-      if (changeCase?.state !== "READY_FOR_DELIVERY")
+      const legacyDeliveryReview = changeCase?.state === "READY_FOR_DELIVERY" && !timeline.some((event) => event.eventType === "ChangeCaseDeliveryApproved.v1")
+      if (changeCase?.state !== "AWAITING_DELIVERY_REVIEW" && !legacyDeliveryReview)
         throw new ChangeCaseError(
           "DELIVERY_PREVIEW_NOT_READY",
           "A preview plan may be prepared only after Gate D independent verification completes.",

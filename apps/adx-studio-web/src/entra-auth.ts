@@ -6,6 +6,7 @@ const scopes = (import.meta.env.VITE_AZURE_SCOPES || 'openid profile email').spl
 let instance: PublicClientApplication | null = null
 let ready: Promise<PublicClientApplication | null> | null = null
 const workspaceAfterSignInKey = 'adx.optum.open-workspace-after-sign-in'
+const selectedIdentityProviderKey = 'adx.selected-identity-provider'
 
 async function getInstance() {
   if (!clientId || !authority) return null
@@ -24,7 +25,20 @@ export async function signInWithOptum() {
   const msal = await getInstance()
   if (!msal) throw new Error('Optum SSO is not configured. Set VITE_AZURE_CLIENTID and VITE_AZURE_AUTHORITY.')
   sessionStorage.setItem(workspaceAfterSignInKey, '1')
+  sessionStorage.setItem(selectedIdentityProviderKey, 'entra')
   await msal.loginRedirect({ scopes })
+}
+
+export function noteGoogleSignIn() {
+  sessionStorage.setItem(selectedIdentityProviderKey, 'google')
+}
+
+export function shouldRecoverWithOptum() {
+  return sessionStorage.getItem(selectedIdentityProviderKey) !== 'google'
+}
+
+export function clearSelectedIdentityProvider() {
+  sessionStorage.removeItem(selectedIdentityProviderKey)
 }
 
 export function consumeWorkspaceAfterOptumSignIn() {

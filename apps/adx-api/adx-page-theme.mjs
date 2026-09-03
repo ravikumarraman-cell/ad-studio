@@ -21,6 +21,7 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     --adx-focus:#d98a00;
     --adx-shadow:0 18px 42px rgb(16 43 67 / 12%);
     --adx-shadow-soft:0 10px 28px rgb(16 43 67 / 8%);
+    --adx-panel-inset:clamp(18px,2.2vw,28px);
     --adx-radius:16px;
     --adx-radius-lg:24px;
     --adx-display:Georgia,"Times New Roman",serif;
@@ -72,6 +73,11 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     border-radius:var(--adx-radius-lg);
     box-shadow:var(--adx-shadow);
     backdrop-filter:blur(12px);
+  }
+  /* A review panel always has the same breathing room as its cards. */
+  main > section.layout,
+  main > section.workspace{
+    padding:var(--adx-panel-inset);
   }
   .topbar,
   .hero,
@@ -157,7 +163,10 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
   h3{font-size:1.15rem;line-height:1.2}
   p{color:var(--adx-copy)}
   a{color:var(--adx-brand)}
-  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;word-break:break-word}
+  .identifier,
+  .provenance,
+  .decision-provenance{overflow-wrap:anywhere;word-break:break-word}
   button,
   .button,
   .review-link,
@@ -202,7 +211,7 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     transform:translateY(-1px);
     text-decoration:none;
   }
-  input,
+  input:not([type="checkbox"]):not([type="radio"]),
   select,
   textarea{
     width:100%;
@@ -213,8 +222,24 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     box-shadow:inset 0 1px 0 rgba(255,255,255,.86);
     font:inherit;
   }
+  input[type="checkbox"],
+  input[type="radio"]{
+    width:auto;
+    min-width:0;
+    padding:0;
+    border-radius:50%;
+    box-shadow:none;
+    flex:0 0 auto;
+  }
   input::placeholder,
   textarea::placeholder{color:var(--adx-muted);opacity:1}
+  fieldset,
+  form,
+  label,
+  [class*="grid"],
+  [class*="column"],
+  [class*="panel"],
+  [class*="card"]{min-width:0}
   .status,
   .live-status,
   .muted,
@@ -268,6 +293,8 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
       margin:10px 16px 0;
     }
     .signed-in-indicator strong{max-width:14rem}
+    main > section.layout,
+    main > section.workspace{padding:16px}
     main{padding:22px 14px 44px}
   }
   @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}

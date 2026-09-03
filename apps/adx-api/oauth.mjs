@@ -9,6 +9,13 @@ export function createPkceTransaction() {
   return { state: base64url(randomBytes(24)), verifier, challenge: createHash('sha256').update(verifier).digest('base64url') }
 }
 
+// The callback can arrive on the API host while the UI is served from another
+// local origin. This one-time value lets the API issue the session cookie on
+// the UI origin without ever putting an identity token in the URL.
+export function createBrowserSessionHandoffCode() {
+  return base64url(randomBytes(32))
+}
+
 export function oidcAuthorizationUrl({ authorizationEndpoint, clientId, redirectUri, transaction, scope = 'openid email profile' }) {
   const url = new URL(authorizationEndpoint)
   url.search = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: 'code', scope, state: transaction.state, code_challenge: transaction.challenge, code_challenge_method: 'S256', access_type: 'offline' }).toString()

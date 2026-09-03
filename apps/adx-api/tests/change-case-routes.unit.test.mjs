@@ -14,3 +14,10 @@ test('story release planning routes resolve and protect GitHub milestone discove
   assert.equal(match[3], 'story-release-planning')
   assert.equal(authorizationAction('GET', 'story-milestones'), 'resource.write')
 })
+
+test('outcome recording routes require reviewer authorization', () => {
+  const match = matchChangeCaseRoute('/v1/workspaces/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/change-cases/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/outcome-record')
+  assert.ok(match)
+  assert.equal(match[3], 'outcome-record')
+  assert.equal(authorizationAction('POST', 'outcome-record'), 'resource.review')
+})

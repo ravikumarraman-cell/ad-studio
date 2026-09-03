@@ -288,6 +288,8 @@ ADX_UI_ORIGIN=http://localhost:5173/
 
 `ADX_OIDC_AUDIENCE` is the OAuth client ID in this local Google adapter. The API uses Google's published JWKS endpoint by default; set `ADX_OIDC_JWKS_URI` only when using a different compatible identity setup.
 
+The provider callback remains at `127.0.0.1:3100`. ADX then makes a one-time, token-free handoff through the UI proxy at `localhost:5173`, which issues the Google session cookie to the same browser origin as the workspace. This keeps Google and Optum SSO independent when both are configured.
+
 If a local configuration already sets `ADX_OIDC_JWKS_URI`, it must use Google’s signing-key endpoint rather than an issuer-relative URL:
 
 ```dotenv

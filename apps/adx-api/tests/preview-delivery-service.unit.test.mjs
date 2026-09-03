@@ -6,7 +6,7 @@ const scope = { organizationId: "org", workspaceId: "workspace" };
 const changeCase = {
   id: "case-1",
   title: "Care day workspace",
-  state: "READY_FOR_DELIVERY",
+  state: "AWAITING_DELIVERY_REVIEW",
 };
 const binding = {
   candidateDigest: "sha256:candidate",

@@ -35,6 +35,7 @@ test("creates only a provenance-marked draft pull request from verified changes"
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
       const path = new URL(url).pathname + new URL(url).search;
+      if (path.includes("/git/commits/")) return json({ sha: "a".repeat(40) });
       if (path.includes("/pulls?")) return json([]);
       if (path.includes("/git/ref/")) return response(404, {});
       if (path.endsWith("/git/refs"))
@@ -101,8 +102,10 @@ test("creates only a provenance-marked draft pull request from verified changes"
 test("returns a matching existing draft PR without mutating GitHub", async () => {
   const client = createGitHubDraftPrClient({
     token: "test-token",
-    fetchImpl: async () =>
-      json([
+    fetchImpl: async (url) =>
+      new URL(url).pathname.includes("/git/commits/")
+        ? json({ sha: "a".repeat(40) })
+        : json([
         {
           number: 42,
           html_url: "https://github.com/example/ad-studio/pull/42",
@@ -110,7 +113,7 @@ test("returns a matching existing draft PR without mutating GitHub", async () =>
           draft: true,
           body: "<!-- adx-preview:sha256:plan -->",
         },
-      ]),
+        ]),
   });
   assert.deepEqual(await client.create({ plan, exported }), {
     deduplicated: true,
@@ -144,6 +147,7 @@ test("removes a newly created preview branch when materialization fails", async 
     fetchImpl: async (url, options = {}) => {
       calls.push({ url, options });
       const path = new URL(url).pathname + new URL(url).search;
+      if (path.includes("/git/commits/")) return json({ sha: "a".repeat(40) });
       if (path.includes("/pulls?")) return json([]);
       if (path.includes("/git/ref/")) return response(404, {});
       if (path.endsWith("/git/refs") && options.method === "POST")
@@ -159,9 +163,14 @@ test("removes a newly created preview branch when materialization fails", async 
       throw new Error(`Unexpected ${options.method ?? "GET"} ${path}`);
     },
   });
-  await assert.rejects(() => client.create({ plan, exported }), {
-    code: "GITHUB_DRAFT_PR_CONFLICT",
-  });
+  await assert.rejects(
+    () => client.create({ plan, exported }),
+    (error) =>
+      error.code === "GITHUB_DRAFT_PR_CONFLICT" &&
+      error.message === "GitHub rejected the request while trying to write a candidate file to the preview branch: Invalid request." &&
+      error.details.operation === "write a candidate file to the preview branch" &&
+      error.details.providerMessage === "Invalid request",
+  );
   assert.equal(
     calls.some(
       (call) =>
@@ -170,6 +179,76 @@ test("removes a newly created preview branch when materialization fails", async 
     ),
     true,
   );
+});
+
+test("identifies a GitHub preview-branch validation failure precisely", async () => {
+  const client = createGitHubDraftPrClient({
+    token: "test-token",
+    fetchImpl: async (url, options = {}) => {
+      const path = new URL(url).pathname + new URL(url).search;
+      if (path.includes("/git/commits/")) return json({ sha: "a".repeat(40) });
+      if (path.includes("/pulls?")) return json([]);
+      if (path.includes("/git/ref/")) return response(404, {});
+      if (path.endsWith("/git/refs") && options.method === "POST")
+        return response(422, { message: "Reference already exists" });
+      throw new Error(`Unexpected ${options.method ?? "GET"} ${path}`);
+    },
+  });
+  await assert.rejects(
+    () => client.create({ plan, exported }),
+    (error) =>
+      error.code === "GITHUB_DRAFT_PR_CONFLICT" &&
+      error.message === "GitHub rejected the request while trying to create the preview branch: Reference already exists." &&
+      error.details.providerStatus === 422 &&
+      error.details.operation === "create the preview branch",
+  );
+});
+
+test("reports GitHub's draft-PR validation details", async () => {
+  const client = createGitHubDraftPrClient({
+    token: "test-token",
+    fetchImpl: async (url, options = {}) => {
+      const path = new URL(url).pathname + new URL(url).search;
+      if (path.includes("/git/commits/")) return json({ sha: "a".repeat(40) });
+      if (path.includes("/pulls?")) return json([]);
+      if (path.includes("/git/ref/")) return response(404, {});
+      if (path.endsWith("/git/refs") && options.method === "POST") return json({});
+      if (path.includes("/contents/src/new.mjs?")) return response(404, {});
+      if (path.includes("/contents/src/old.mjs?")) return response(404, {});
+      if (path.endsWith("/contents/src/new.mjs")) return json({});
+      if (path.endsWith("/pulls") && options.method === "POST")
+        return response(422, { message: "Validation Failed", errors: [{ field: "base", code: "missing" }] });
+      if (path.includes("/git/refs/heads/") && options.method === "DELETE") return response(204, {});
+      throw new Error(`Unexpected ${options.method ?? "GET"} ${path}`);
+    },
+  });
+  await assert.rejects(
+    () => client.create({ plan, exported: { ...exported, changes: [exported.changes[0]] } }),
+    (error) =>
+      error.message === "GitHub rejected the request while trying to create the draft pull request: Validation Failed; base: missing." &&
+      error.details.providerMessage === "Validation Failed; base: missing",
+  );
+});
+
+test("rejects a source commit that is absent from the registered GitHub repository before writing a branch", async () => {
+  const calls = [];
+  const client = createGitHubDraftPrClient({
+    token: "test-token",
+    fetchImpl: async (url, options = {}) => {
+      calls.push({ url, options });
+      if (new URL(url).pathname.includes("/git/commits/")) return response(404, { message: "Not Found" });
+      throw new Error("GitHub must not receive a preview-branch or PR request");
+    },
+  });
+  await assert.rejects(
+    () => client.create({ plan, exported }),
+    (error) =>
+      error.code === "GITHUB_DRAFT_PR_BASE_COMMIT_NOT_FOUND" &&
+      error.retryable === true &&
+      error.details.baseCommit === exported.baseCommit &&
+      error.message.includes("source commit does not exist"),
+  );
+  assert.equal(calls.length, 1);
 });
 
 function json(value) {

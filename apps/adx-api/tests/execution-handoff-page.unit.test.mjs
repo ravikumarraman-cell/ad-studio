@@ -4,6 +4,7 @@ import {
   describeExecutionFailure,
   renderExecutionHandoffPage,
 } from "../execution-handoff-page.mjs";
+import { accessiblePageFoundation } from "../response-utils.mjs";
 
 const changeCase = {
   title: "Referral decision communication",
@@ -65,6 +66,9 @@ test("execution handoff requests a bounded implementation run instead of attesti
   assert.match(page, /aria-busy="false"/);
   assert.match(page, /@media \(prefers-reduced-motion:reduce\)/);
   assert.match(page, /status\.setAttribute\("aria-busy","true"\)/);
+  assert.match(page, /\.runner-choice input\{margin-top:2px;accent-color:var\(--accent\)\}/);
+  assert.match(page, /\.confirm input\{margin-top:\.25rem;accent-color:var\(--accent\)\}/);
+  assert.match(accessiblePageFoundation, /input\[type="checkbox"\],input\[type="radio"\]\{width:auto!important/);
 });
 
 test("execution handoff does not expose submission controls outside execution readiness", () => {

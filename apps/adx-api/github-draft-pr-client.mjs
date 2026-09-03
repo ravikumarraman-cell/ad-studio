@@ -12,6 +12,19 @@ export function createGitHubDraftPrClient({
     async create({ plan, exported }) {
       const repository = parseRepository(plan?.repository?.canonicalRemote);
       validatePlan(plan, exported);
+      const baseCommit = await request(
+        fetchImpl,
+        token,
+        repository,
+        `/git/commits/${encodeURIComponent(exported.baseCommit)}`,
+        { allowNotFound: true },
+      );
+      if (!baseCommit)
+        throw new ChangeCaseError(
+          "GITHUB_DRAFT_PR_BASE_COMMIT_NOT_FOUND",
+          "The preview plan's source commit does not exist in the registered GitHub repository. Update the server-owned source checkout to a commit available on that remote, then rebuild the preview plan and retry.",
+          { retryable: true, severity: "warning", details: { baseCommit: exported.baseCommit } },
+        );
       const marker = `<!-- adx-preview:${plan.pullRequest.digest} -->`;
       const existing = await request(
         fetchImpl,
@@ -188,8 +201,16 @@ async function request(
   if (response.status === 409 || response.status === 422)
     throw new ChangeCaseError(
       "GITHUB_DRAFT_PR_CONFLICT",
-      "GitHub rejected the draft pull request because its branch or content changed.",
-      { retryable: false, severity: "warning" },
+      `GitHub rejected the request while trying to ${githubOperation(method, path)}: ${githubValidationReason(payload)}.`,
+      {
+        retryable: false,
+        severity: "warning",
+        details: {
+          providerStatus: response.status,
+          operation: githubOperation(method, path),
+          providerMessage: githubValidationReason(payload),
+        },
+      },
     );
   throw new ChangeCaseError(
     "GITHUB_DRAFT_PR_REQUEST_FAILED",
@@ -200,6 +221,30 @@ async function request(
       details: { providerStatus: response.status },
     },
   );
+}
+
+function githubOperation(method, path) {
+  if (method === "POST" && path === "/git/refs") return "create the preview branch";
+  if (["PUT", "DELETE"].includes(method) && path.startsWith("/contents/")) return "write a candidate file to the preview branch";
+  if (method === "POST" && path === "/pulls") return "create the draft pull request";
+  return "apply the retained preview plan";
+}
+
+function githubValidationReason(payload) {
+  const message = safeProviderText(payload?.message);
+  const details = Array.isArray(payload?.errors)
+    ? payload.errors
+      .map((item) => safeProviderText(item?.message) || [safeProviderText(item?.field), safeProviderText(item?.code)].filter(Boolean).join(": "))
+      .filter(Boolean)
+      .slice(0, 3)
+    : [];
+  return [message, ...details.filter((detail) => detail !== message)].join("; ") || "GitHub did not provide a validation reason";
+}
+
+function safeProviderText(value) {
+  return typeof value === "string"
+    ? value.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 300)
+    : "";
 }
 
 function parseRepository(remote) {

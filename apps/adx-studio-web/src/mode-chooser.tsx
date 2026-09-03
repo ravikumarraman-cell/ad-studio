@@ -1,5 +1,5 @@
 import './mode-chooser.css'
-import { signInWithOptum } from './entra-auth'
+import { noteGoogleSignIn, signInWithOptum } from './entra-auth'
 import { useState } from 'react'
 
 export function ModeChooser({ onChoose, workspaceReady }: { onChoose: (mode: 'real' | 'demo') => void; workspaceReady: boolean }) {
@@ -36,7 +36,7 @@ export function ModeChooser({ onChoose, workspaceReady }: { onChoose: (mode: 're
           <p>Sign in to continue work already assigned to your identity and workspace.</p>
           <div className="adx-home-sign-in-actions">
             <button className="adx-primary" onClick={() => void startOptumSignIn()}>Sign in with Optum SSO</button>
-            <a className="adx-secondary" href="/auth/login?provider=google">Sign in with Google</a>
+            <a className="adx-secondary" href="/auth/login?provider=google" onClick={noteGoogleSignIn}>Sign in with Google</a>
           </div>
           {signInError && <p className="adx-home-sign-in-error" role="alert">{signInError}</p>}
         </div>}

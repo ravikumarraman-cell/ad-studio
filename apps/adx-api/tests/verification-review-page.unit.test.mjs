@@ -19,6 +19,8 @@ test('verification page reports elapsed time while the governed verifier request
   assert.match(page, /aria-busy="false"/)
   assert.match(page, /@media \(prefers-reduced-motion:reduce\)/)
   assert.match(page, /status\.setAttribute\("aria-busy","true"\)/)
+  assert.match(page, /main > section\.layout,\s*main > section\.workspace\{\s*padding:var\(--adx-panel-inset\)/)
+  assert.match(page, /main > section\.layout,\s*main > section\.workspace\{padding:16px\}/)
 })
 
 test('verification page does not offer a run outside the awaiting-verification state', () => {
