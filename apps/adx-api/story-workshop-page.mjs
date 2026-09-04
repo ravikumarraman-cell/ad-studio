@@ -46,8 +46,8 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
   });
   const assistance = options.aiStatus.configured && models.length
     ? `
-      <details class="assistance-panel">
-        <summary><span><b>Optional assistance</b><small>Generate ideas to curate; nothing is saved automatically.</small></span></summary>
+      <section class="assistance-panel" aria-label="Story decomposition agent">
+        <div class="assistance-heading"><span><b>Story decomposition agent</b><small>${escapeHtml(options.aiStatus.providerLabel ?? 'Approved AI')} · suggestions stay editable and are never saved automatically.</small></span></div>
         <div class="assistance-body">
           <div class="pickers">
             <label>Approved model<select id="story-ai-model">${modelOptions}</select><small>Provided by ${escapeHtml(options.aiStatus.providerLabel ?? 'the configured service')}.</small></label>
@@ -59,7 +59,7 @@ function renderStoryWorkshopPage(changeCase, governance, options) {
           <div id="suggestion-list" class="suggestion-list" aria-live="polite"></div>
           <div id="suggestion-actions" class="actions" hidden><label><input id="select-all-stories" type="checkbox"> Select all stories</label><button id="accept-suggestions" class="button" type="button" disabled>Accept selected suggestions</button></div>
         </div>
-      </details>
+      </section>
     `
     : `<section class="rail-card assistance-unavailable"><b>Suggestions are unavailable</b><p>Manual authoring is available. An administrator can enable an approved server-side model; no browser key is used.</p></section>`;
 
@@ -621,18 +621,17 @@ textarea {
   background: #f8fbf9;
 }
 
-.assistance-panel summary {
+.assistance-heading {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 13px 14px;
-  cursor: pointer;
   color: #174c41;
 }
 
-.assistance-panel summary span { display: grid; gap: 2px; }
-.assistance-panel summary small { color: #647872; }
-.assistance-panel[open] summary { border-bottom: 1px solid #d4e0da; }
+.assistance-heading span { display: grid; gap: 2px; }
+.assistance-heading small { color: #647872; }
+.assistance-heading { border-bottom: 1px solid #d4e0da; }
 .assistance-body { padding: 0 14px 14px; }
 .assistance-unavailable b { color: #24473f; }
 .assistance-unavailable p { margin-bottom: 0; }

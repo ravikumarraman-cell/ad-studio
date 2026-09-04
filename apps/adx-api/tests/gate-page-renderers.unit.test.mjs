@@ -103,6 +103,9 @@ test('Gate A.5 renders response-derived applied-spec evidence and select-all con
   )
 
   assert.match(page, /id="applied-spec"[^>]*role="status"[^>]*aria-live="polite"/)
+  assert.match(page, /Story decomposition agent/)
+  assert.match(page, /UHG Azure OpenAI|Local/)
+  assert.doesNotMatch(page, /<details class="assistance-panel"/)
   assert.match(page, /id="select-all-stories" type="checkbox"/)
   assert.match(page, /body:JSON\.stringify\(\{model:document\.getElementById\('story-ai-model'\)\.value,templateId:document\.getElementById\('story-spec-template'\)\.value\}\)/)
   assert.match(page, /const receiptTemplate=body\.receipt\?\.template/)
