@@ -24,6 +24,21 @@ test('Gate A renders the authorized intake classification action', () => {
   assert.match(page, /"classifyEndpoint":"\/classify"/)
 })
 
+test('Gate A renders retained GitHub issue details safely on demand', () => {
+  const page = intakeGatePage(
+    changeCase,
+    { intent: {}, sources: [{ sourceContent: JSON.stringify({ source: 'github-private-milestone-issue-v1', repository: 'optum-eeps/cloud-asset-inventory', milestone: { number: 3, title: 'Platform readiness' }, issue: { number: 42, title: '<unsafe title>', body: 'Retained issue details\nwith a second line.', labels: ['priority'], htmlUrl: 'https://github.com/optum-eeps/cloud-asset-inventory/issues/42' } }) }] },
+    { canWrite: true, classifyEndpoint: '/classify', storyWorkshopUrl: '/stories' },
+  )
+
+  assert.match(page, /RETAINED GITHUB SOURCE/)
+  assert.match(page, /Imported GitHub issue #42/)
+  assert.match(page, /Retained issue details/)
+  assert.match(page, /Open original issue/)
+  assert.doesNotMatch(page, /<unsafe title>/)
+  assert.match(page, /&lt;unsafe title&gt;/)
+})
+
 test('Gate A exposes the next story action only after risk classification', () => {
   const page = intakeGatePage(
     { ...changeCase, state: 'RISK_REVIEW' },

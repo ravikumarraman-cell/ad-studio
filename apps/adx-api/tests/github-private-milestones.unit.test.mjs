@@ -26,3 +26,16 @@ test('private GitHub milestone reads use only the server credential and exclude 
 test('private GitHub client requires a configured server credential', () => {
   assert.throws(() => createPrivateGitHubMilestoneClient(), /GITHUB_PRIVATE_READ_TOKEN_REQUIRED/)
 })
+
+test('private GitHub client identifies an untrusted TLS issuer precisely', async () => {
+  const client = createPrivateGitHubMilestoneClient({ token: 'server-only-token', fetchImpl: async () => {
+    const error = new TypeError('fetch failed')
+    error.cause = Object.assign(new Error('unable to get local issuer certificate'), { code: 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY' })
+    throw error
+  } })
+
+  await assert.rejects(
+    () => client.listMilestones({ owner: 'optum-eeps', repository: 'cloud-asset-inventory' }),
+    (error) => error.code === 'GITHUB_PRIVATE_TLS_CERTIFICATE_INVALID' && /custom CA bundle/.test(error.message)
+  )
+})

@@ -22,7 +22,12 @@ function githubUrl(owner, repository, path) {
 
 async function githubJson(fetchImpl, token, url) {
   let response
-  try { response = await fetchImpl(url, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'adx-private-milestone-import' } }) } catch { throw new ChangeCaseError('GITHUB_PRIVATE_UNAVAILABLE', 'GitHub could not be reached. Try again shortly.', { retryable: true, severity: 'warning' }) }
+  try { response = await fetchImpl(url, { headers: { accept: 'application/vnd.github+json', authorization: `Bearer ${token}`, 'user-agent': 'adx-private-milestone-import' } }) } catch (error) {
+    if (error?.cause?.code === 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY') {
+      throw new ChangeCaseError('GITHUB_PRIVATE_TLS_CERTIFICATE_INVALID', 'GitHub’s TLS certificate could not be verified. A custom CA bundle may be stale; remove NODE_EXTRA_CA_CERTS and SSL_CERT_FILE, or replace them with a valid organization CA bundle, then restart the ADX API.', { retryable: false, severity: 'warning' })
+    }
+    throw new ChangeCaseError('GITHUB_PRIVATE_UNAVAILABLE', 'GitHub could not be reached. Try again shortly.', { retryable: true, severity: 'warning' })
+  }
   const payload = await response.json().catch(() => null)
   if (response.ok) return payload
   if (response.status === 401 || response.status === 403) throw new ChangeCaseError('GITHUB_PRIVATE_FORBIDDEN', 'The server GitHub credential cannot read this private repository.', { retryable: false, severity: 'warning' })

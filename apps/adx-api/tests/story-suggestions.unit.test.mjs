@@ -21,6 +21,7 @@ test('Gemini requests JSON story suggestions with a server-side key', async () =
   assert.equal(captured.init.headers['x-goog-api-key'], 'gemini-secret')
   const request = JSON.parse(captured.init.body)
   assert.equal(request.generationConfig.responseMimeType, 'application/json')
+  assert.equal(request.generationConfig.maxOutputTokens, 800)
   assert.match(request.systemInstruction.parts[0].text, /ADX product-analysis assistant/)
   assert.doesNotMatch(captured.init.body, /gemini-secret/)
 })
@@ -32,6 +33,7 @@ test('OpenAI remains the default provider for existing configuration', async () 
   assert.equal(suggested.provider, 'OPENAI_RESPONSES')
   assert.equal(captured.url, 'https://api.openai.com/v1/responses')
   assert.equal(captured.init.headers.authorization, 'Bearer openai-secret')
+  assert.equal(JSON.parse(captured.init.body).max_output_tokens, 800)
 })
 
 test('UHG Azure OpenAI drafts stories through the injected server-owned gateway adapter', async () => {
@@ -45,7 +47,7 @@ test('UHG Azure OpenAI drafts stories through the injected server-owned gateway 
   assert.equal(suggested.provider, 'UHG_AZURE_OPENAI')
   assert.equal(suggested.providerLabel, 'UHG Azure OpenAI')
   assert.equal(suggested.providerRequestId, 'uhg-request-1')
-  assert.equal(captured.maxTokens, 1_200)
+  assert.equal(captured.maxTokens, 800)
   assert.equal(captured.temperature, 1)
   assert.match(captured.system, /ADX product-analysis assistant/)
   assert.match(captured.prompt, /health-auth-service/)
@@ -62,7 +64,7 @@ test('UHG Claude drafts stories through the injected server-owned gateway adapte
   assert.equal(suggested.provider, 'UHG_ANTHROPIC')
   assert.equal(suggested.providerLabel, 'UHG Claude')
   assert.equal(suggested.providerRequestId, 'claude-request-1')
-  assert.equal(captured.maxTokens, 1_200)
+  assert.equal(captured.maxTokens, 800)
   assert.equal(captured.temperature, 1)
 })
 
@@ -102,8 +104,24 @@ test('Ollama generates structured local story suggestions without an API key', a
   assert.equal(JSON.parse(captured.init.body).stream, false)
   assert.equal(JSON.parse(captured.init.body).keep_alive, '10m')
   assert.equal(JSON.parse(captured.init.body).options.num_ctx, 2048)
-  assert.equal(request.options.num_predict, 768)
-  assert.match(request.system, /1 to 3 distinct/)
+  assert.equal(request.options.num_predict, 800)
+  assert.match(request.system, /1 to 10 distinct/)
+})
+
+test('story suggestion token limits are lean by default and bounded when overridden', () => {
+  const service = createStorySuggestionService({ provider: 'openai', apiKey: 'openai-secret', model: 'model', maxTokens: 950, fetchImpl: async () => response({ output_text: JSON.stringify(result) }) })
+  assert.equal(service.status().configured, true)
+  assert.throws(() => createStorySuggestionService({ provider: 'openai', apiKey: 'openai-secret', model: 'model', maxTokens: 1250 }), { code: 'STORY_AI_TOKEN_LIMIT_INVALID' })
+})
+
+test('story suggestions allow up to ten distinct stories', async () => {
+  const outcomes = ['appointment scheduler calendar clinic provider', 'prescription refill pharmacy dosage formulary', 'insurance claim deductible coverage reimbursement', 'contact preference notifications channel consent', 'dependent guardian profile relationship permissions', 'payment invoice billing balance transaction', 'security alert login device anomaly', 'accessibility contrast motion typography keyboard', 'care-team message clinician inbox conversation', 'data export privacy archive download portability']
+  const stories = outcomes.map((outcome) => ({ title: `Manage ${outcome}`, narrative: `As a member, I want to manage ${outcome}, so that I can control this part of my account.`, scenarios: [{ given: 'the member is signed in', when: `they open ${outcome}`, then: `they can manage ${outcome}` }] }))
+  const service = createStorySuggestionService({ provider: 'openai', apiKey: 'key', model: 'approved-model', fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers(), json: async () => ({ output_text: JSON.stringify({ stories }) }) }) })
+
+  const suggested = await service.suggest({ changeCase: { title: 'Improve account tools', riskTier: 'R2' }, governance: { intent: { outcome: 'Members manage their account', acceptanceCriteria: 'Members can manage account tools.', targetRepository: 'health-x', assets: [] } }, correlationId: 'test' })
+
+  assert.equal(suggested.suggestions.length, 10)
 })
 
 test('near-duplicate AI stories are returned only once', async () => {

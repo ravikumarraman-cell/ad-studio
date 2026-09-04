@@ -318,6 +318,7 @@ const storySuggestions = createStorySuggestionService({
   apiKey: process.env.ADX_STORY_AI_API_KEY,
   model: process.env.ADX_STORY_AI_MODEL,
   models: process.env.ADX_STORY_AI_MODELS,
+  maxTokens: process.env.ADX_STORY_AI_MAX_TOKENS,
   ollamaBaseUrl: process.env.ADX_STORY_AI_OLLAMA_BASE_URL,
   gatewayAdapter: uhgAzureOpenAiStoryGateway,
   anthropicGatewayAdapter: uhgClaudeStoryGateway,
