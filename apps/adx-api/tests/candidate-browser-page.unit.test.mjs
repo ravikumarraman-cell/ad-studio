@@ -90,3 +90,16 @@ test('candidate browser rejects a path traversal request', async () => {
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('candidate browser fails closed when the candidate root is not a browsable directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adx-candidate-browser-'))
+  try {
+    const candidateRoot = join(root, 'candidate-root.txt')
+    await writeFile(candidateRoot, 'safe\n')
+    const page = await renderCandidateBrowserPage({ candidateRoot, baseUrl: '/generated-candidate' })
+    assert.match(page, /Generated candidate unavailable/)
+    assert.match(page, /generated candidate is unavailable/i)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})

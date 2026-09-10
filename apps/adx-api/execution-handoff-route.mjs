@@ -7,6 +7,8 @@ export function handleExecutionHandoffRoute({
   traceId,
   session,
   current,
+  execution,
+  governance,
   scope,
   workspaceId,
   changeCaseId,
@@ -25,18 +27,22 @@ export function handleExecutionHandoffRoute({
   const statusEndpoint = `${base}/execution`;
   const evidenceReviewUrl = `${base}/evidence-review`;
   const candidateUrl = `${base}/generated-candidate`;
+  const handoffUrl = `${base}/execution-handoff`;
   return writeHtml(
     response,
     200,
     renderExecutionHandoffPage(current, {
+      projectRepository: governance?.intent?.targetRepository ?? null,
       canSubmit: writeDecision.outcome === "ALLOW",
       submitReason:
         writeDecision.outcome === "ALLOW" ? null : writeDecision.reason,
+      execution,
       signedInRoles: membershipRoles,
       dispatchEndpoint,
       statusEndpoint,
       evidenceReviewUrl,
       candidateUrl,
+      handoffUrl,
       providers,
       templates: listAgentSpecTemplates("coding"),
     }),

@@ -30,9 +30,12 @@ export class LocalCodingAgentBroker {
     const workspace = join(scratchRoot, basename(candidate) || 'candidate')
     try {
       await cp(source, workspace, { recursive: true, dereference: false, verbatimSymlinks: true })
+      const sourceDigest = await digestTree(source)
       await writeFile(join(workspace, '.adx-agent-task.json'), JSON.stringify({ schema: 'adx-local-coding-agent-task-v1', provider: provider.provider, task: normalizedTask }))
       const result = await this.run({ executable: provider.executable, providerArguments: provider.arguments, cwd: workspace, prompt: buildPrompt(normalizedTask), maxOutputBytes: 64 * 1024, timeoutMs })
       if (result.code !== 0 || result.timedOut || result.quotaExceeded) return Object.freeze({ accepted: false, promoted: false, provider: provider.provider, ...result, errorCode: localFailureCode(result), candidateDigest: null })
+      const workspaceDigest = await digestTree(workspace, { ignorePaths: ['.adx-agent-task.json'] })
+      if (workspaceDigest === sourceDigest) return Object.freeze({ accepted: false, promoted: false, provider: provider.provider, ...result, errorCode: 'CODING_AGENT_RUN_NO_CHANGES', candidateDigest: null })
       await rm(candidate, { recursive: true, force: true })
       await rename(workspace, candidate)
       return Object.freeze({ accepted: true, promoted: true, provider: provider.provider, ...result, candidateDigest: await digestTree(candidate) })
@@ -81,10 +84,11 @@ function runProvider({ executable, providerArguments, cwd, prompt, maxOutputByte
   })
 }
 
-async function digestTree(root) {
+async function digestTree(root, { ignorePaths = [] } = {}) {
   const files = []
   const { readdir, readFile } = await import('node:fs/promises')
-  async function collect(current) { for (const entry of await readdir(current, { withFileTypes: true })) { const fullPath = join(current, entry.name); if (entry.isDirectory()) await collect(fullPath); else if (entry.isFile()) { const bytes = await readFile(fullPath); files.push({ path: fullPath.slice(root.length + 1), bytes: bytes.length, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }) } } }
+  const ignore = new Set(ignorePaths.map((path) => String(path).trim()).filter(Boolean))
+  async function collect(current) { for (const entry of await readdir(current, { withFileTypes: true })) { const fullPath = join(current, entry.name); const relativePath = fullPath.slice(root.length + 1); if (ignore.has(relativePath)) continue; if (entry.isDirectory()) await collect(fullPath); else if (entry.isFile()) { const bytes = await readFile(fullPath); files.push({ path: relativePath, bytes: bytes.length, digest: `sha256:${createHash('sha256').update(bytes).digest('hex')}` }) } } }
   await collect(root)
   return sha256(files.sort((left, right) => left.path.localeCompare(right.path)))
 }

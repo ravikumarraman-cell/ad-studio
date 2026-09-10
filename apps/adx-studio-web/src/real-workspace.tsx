@@ -45,6 +45,7 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
         : `Open Gate ${gate.id}`
   const latestRun = selected ? executionsByCase[selected.id]?.runs[0] : undefined
   const latestEvent = selected && latestRun ? [...(executionsByCase[selected.id]?.events ?? [])].reverse().find((event) => event.runId === latestRun.id) : undefined
+  const executionHandoffPath = selected ? `/v1/workspaces/${activeWorkspace}/change-cases/${selected.id}/execution-handoff#run-summary` : ''
   const workspace = memberships.find((item) => item.workspaceId === activeWorkspace)
   const cancellationModal = cancellationMode ? <CancelChangeCasesModal workspace={workspace} selected={selected} changeCases={cancellableCases} mode={cancellationMode} onClose={() => setCancellationMode(null)} onCompleted={() => { setSelectedId(''); setCancellationMode(null); onRefresh() }} /> : null
 
@@ -82,7 +83,7 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
             <p className="adx-eyebrow">NOW · GATE {gate.id}</p>
             <h2>{selected.title}</h2>
             <p className="adx-focus-question">{gate.purpose}</p>
-            {latestRun && <section className={`adx-run-status adx-run-${latestRun.status.toLowerCase()}`} aria-live="polite"><p className="adx-eyebrow">CODING AGENT</p><strong>{runLabel(latestRun.status)}</strong><span>{latestEvent?.errorCode ? `Diagnostic: ${latestEvent.errorCode}` : latestRun.adapterId}</span><small>Updated {new Date(latestRun.updatedAt).toLocaleString()}</small></section>}
+            {latestRun && <section className={`adx-run-status adx-run-${latestRun.status.toLowerCase()}`} aria-live="polite"><p className="adx-eyebrow">CODING AGENT</p><strong>{latestRun.status === 'RUNNING' ? <a href={executionHandoffPath} title="Open the live execution page">Open live execution</a> : runLabel(latestRun.status)}</strong><span>{latestEvent?.errorCode ? `Diagnostic: ${latestEvent.errorCode}` : latestRun.adapterId}</span><small>Updated {new Date(latestRun.updatedAt).toLocaleString()}</small></section>}
             <section className="adx-next-action"><div><p className="adx-eyebrow">YOUR NEXT ACTION</p><strong>{nextActionLabel}</strong><small>Available through your {workspace?.roles.join(', ') ?? 'current'} workspace role.</small></div><a className="adx-primary" href={path}>{nextActionButton}</a></section>
             {selected.state !== 'OUTCOME_RECORDED' && <button className="adx-danger adx-delete-case" onClick={() => setCancellationMode('selected')}>Delete Change Case</button>}
             <details className="adx-journey"><summary>Show the full journey</summary><ol>{gates.map((item, index) => <li key={item.id} className={gateState(index, current)}><strong>Gate {item.id} · {item.name}</strong><span>{item.purpose}</span></li>)}</ol></details>

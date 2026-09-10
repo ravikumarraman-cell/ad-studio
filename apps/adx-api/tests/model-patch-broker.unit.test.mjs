@@ -102,6 +102,46 @@ test("model-patch broker applies only a validated writable-file replacement in a
   );
 });
 
+test("model-patch broker records model-request and model-response phases before validation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  const phases = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: gateway({
+      schema: "adx-model-patch-response-v1",
+      patches: [{ path: "src/marker.js", content: 'export const marker = "after"\n' }],
+      featureSpotlight: null,
+    }),
+    validate: async () => ({
+      code: 0,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+    }),
+  });
+  await broker.execute({
+    adapter,
+    task,
+    repository,
+    onProgress: async (phase) => phases.push(phase),
+  });
+  assert.deepEqual(phases, [
+    "CONTEXT_COLLECTION",
+    "MODEL_REQUEST",
+    "MODEL_RESPONSE",
+    "VALIDATION",
+    "CANDIDATE_PROMOTION",
+  ]);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("model-patch broker retries one malformed model response with deterministic structured output", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -112,12 +152,12 @@ test("model-patch broker retries one malformed model response with deterministic
     'export const marker = "before"\n',
   );
   const calls = [];
-  const response = {
-    schema: "adx-model-patch-response-v1",
-    patches: [
-      { path: "src/marker.js", content: 'export const marker = "after"\n' },
-    ],
-  };
+    const response = {
+      schema: "adx-model-patch-response-v1",
+      patches: [
+        { path: "src/marker.js", content: 'export const marker = "after"\n' },
+      ],
+    };
   const broker = new ModelPatchBroker({
     enabled: true,
     sourceRoot: source,
@@ -200,10 +240,154 @@ test("model-patch broker classifies a failed validation command", async () => {
     await readFile(join(source, "src", "marker.js"), "utf8"),
     'export const marker = "before"\n',
   );
-  await assert.rejects(
-    () => readFile(join(candidate, "src", "marker.js"), "utf8"),
-    { code: "ENOENT" },
+  assert.equal(
+    await readFile(join(candidate, "src", "marker.js"), "utf8"),
+    'export const marker = "after"\n',
   );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker forwards the execution timeout to the model gateway", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  let timeoutMs = null;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true, model: "gpt-5.6-terra" }),
+      complete: async (request) => {
+        timeoutMs = request.timeoutMs;
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: "sha256:response",
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/marker.js", content: 'export const marker = "after"\n' },
+            ],
+          }),
+        };
+      },
+    },
+    validate: async () => ({
+      code: 0,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+    }),
+  });
+  const result = await broker.execute({ adapter, task, repository, timeoutMs: 4321 });
+  assert.equal(result.promoted, true);
+  assert.equal(timeoutMs, 4321);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker rejects a validated no-op run that leaves the source unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(
+    join(source, "src", "marker.js"),
+    'export const marker = "before"\n',
+  );
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: gateway({
+      schema: "adx-model-patch-response-v1",
+      patches: [
+        { path: "src/marker.js", content: 'export const marker = "before"\n' },
+      ],
+    }),
+    validate: async () => ({
+      code: 0,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+    }),
+  });
+  const result = await broker.execute({ adapter, task, repository });
+  assert.equal(result.errorCode, "MODEL_PATCH_NO_CHANGES");
+  assert.equal(result.promoted, false);
+  assert.equal(result.candidateDigest, null);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker retries from pristine source after a failed validation and carries the failure context into the repair prompt", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  const calls = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true, model: "gpt-5.6-terra" }),
+      complete: async (request) => {
+        calls.push(JSON.parse(request.prompt));
+        const attempt = calls.length;
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: `sha256:response-${attempt}`,
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              {
+                path: "src/marker.js",
+                content:
+                  attempt === 1
+                    ? 'export const marker = "needs-fix"\n'
+                    : 'export const marker = "fixed"\n',
+              },
+            ],
+          }),
+        };
+      },
+    },
+    validate: async ({ cwd }) => {
+      const current = await readFile(join(cwd, "src", "marker.js"), "utf8");
+      if (current.includes("needs-fix")) {
+        return {
+          code: 1,
+          signal: null,
+          timedOut: false,
+          outputBytes: 21,
+          outputDigest: "sha256:attempt-1",
+          outputExcerpt: "expected fixed marker\n",
+        };
+      }
+      assert.equal(current, 'export const marker = "fixed"\n');
+      return {
+        code: 0,
+        signal: null,
+        timedOut: false,
+        outputBytes: 0,
+        outputDigest: "sha256:attempt-2",
+      };
+    },
+  });
+  const result = await broker.execute({ adapter, task, repository });
+  assert.equal(result.promoted, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].previousValidationIssue, null);
+  assert.deepEqual(calls[1].previousValidationIssue, {
+    validationCommand: "node --test",
+    validationCategory: "CHECK_FAILED",
+    validationOutputExcerpt: "expected fixed marker\n",
+    validationFailureReason: null,
+  });
   await rm(root, { recursive: true, force: true });
 });
 
@@ -213,6 +397,7 @@ test("standalone Health-X permits only its production verifier and links read-on
   const candidate = join(root, "candidate");
   await mkdir(join(source, "app"), { recursive: true });
   await mkdir(join(source, "scripts"), { recursive: true });
+  await mkdir(join(source, "docs"), { recursive: true });
   await mkdir(join(source, "node_modules"), { recursive: true });
   await writeFile(
     join(source, "app", "marker.js"),
@@ -222,6 +407,7 @@ test("standalone Health-X permits only its production verifier and links read-on
     join(source, "scripts", "verify-production.mjs"),
     "// The product progress label must match the two canonical action lists.\n",
   );
+  await writeFile(join(source, "docs", "ignored.md"), "ignored\n");
   const healthXTask = {
     objective: "Replace the marker.",
     changeDigest: "sha256:case-digest",
@@ -250,6 +436,10 @@ test("standalone Health-X permits only its production verifier and links read-on
         assert.equal(
           context.find((file) => file.path === "app/marker.js").writable,
           true,
+        );
+        assert.equal(
+          context.some((file) => file.path === "docs/ignored.md"),
+          false,
         );
         return {
           model: "gpt-5.6-terra",
@@ -337,6 +527,83 @@ test("model-patch broker emits a fallback reason when validation is silent", asy
     validationOutputExcerpt: null,
     validationFailureReason: "Validation exited with code 1 and produced no output.",
   });
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker restores the warmed candidate workspace before a fresh run", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  let promptCount = 0;
+  let validationPhase = 1;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true, model: "gpt-5.6-terra" }),
+      complete: async (request) => {
+        promptCount += 1;
+        const files = JSON.parse(request.prompt).files;
+        const marker = files.find((file) => file.path === "src/marker.js");
+        if (promptCount === 2) {
+          assert.equal(marker.content, 'export const marker = "before"\n');
+        }
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: `sha256:response-${promptCount}`,
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              {
+                path: "src/marker.js",
+                content:
+                  validationPhase === 1
+                    ? 'export const marker = "first"\n'
+                    : 'export const marker = "second"\n',
+              },
+            ],
+          }),
+        };
+      },
+    },
+    validate: async ({ cwd }) => {
+      const current = await readFile(join(cwd, "src", "marker.js"), "utf8");
+      if (validationPhase === 1) {
+        return {
+          code: 1,
+          signal: null,
+          timedOut: false,
+          outputBytes: 0,
+          outputDigest: "sha256:test",
+          outputExcerpt: "first run should fail\n",
+        };
+      }
+      return {
+        code: current.includes("second") ? 0 : 1,
+        signal: null,
+        timedOut: false,
+        outputBytes: 0,
+        outputDigest: "sha256:test",
+        outputExcerpt: current.includes("second") ? null : "second run should reset to source\n",
+      };
+    },
+  });
+  const first = await broker.execute({ adapter, task, repository });
+  assert.equal(first.promoted, false);
+  assert.equal(
+    await readFile(join(candidate, "src", "marker.js"), "utf8"),
+    'export const marker = "first"\n',
+  );
+  validationPhase = 2;
+  const second = await broker.execute({ adapter, task, repository });
+  assert.equal(second.promoted, true);
+  assert.equal(
+    await readFile(join(candidate, "src", "marker.js"), "utf8"),
+    'export const marker = "second"\n',
+  );
   await rm(root, { recursive: true, force: true });
 });
 

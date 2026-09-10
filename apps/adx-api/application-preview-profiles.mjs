@@ -1,8 +1,9 @@
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 export function createApplicationPreviewProfiles({
   sourceRoot,
   candidateRoot,
+  repositoryId,
   dockerfilePath = "Dockerfile",
 }) {
   if (
@@ -13,10 +14,15 @@ export function createApplicationPreviewProfiles({
   )
     return new Map();
   const dockerfile = normalizeDockerfilePath(dockerfilePath);
+  const resolvedRepositoryId =
+    typeof repositoryId === "string" && repositoryId.trim()
+      ? repositoryId.trim()
+      : basename(String(sourceRoot).replace(/[\\/]+$/, ""));
   const profile = ({ id, label, context, comparisonRole, candidateBound }) =>
     Object.freeze({
       id,
       label,
+      repositoryId: resolvedRepositoryId,
       comparisonRole,
       candidateBound,
       dockerfile: resolve(context, dockerfile),

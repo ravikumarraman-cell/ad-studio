@@ -186,6 +186,7 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     box-shadow:0 10px 24px rgb(12 124 98 / 18%);
     font-weight:800;
   }
+    [hidden]{display:none!important}
   .button:hover,
   button:hover{
     transform:translateY(-1px);

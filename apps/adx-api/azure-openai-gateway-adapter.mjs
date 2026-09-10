@@ -17,7 +17,7 @@ export function createAzureOpenAiGatewayAdapter({ endpoint, apiVersion = '2025-0
   const configured = Boolean(gateway && configuration && typeof tokenProvider === 'function' && fetchImpl)
   return Object.freeze({
     status: () => Object.freeze({ configured, provider: configured ? 'AZURE_OPENAI_GATEWAY' : null, deployment: configured ? configuration.deployment : null, model: configured ? configuration.model : null, projectId: configured ? configuration.projectId : null, endpoint: configured ? gateway.origin : null, apiVersion: configured ? apiVersion : null }),
-    async complete({ system, prompt, correlationId, maxTokens = 2_000, temperature = 1, responseSchema = null }) {
+    async complete({ system, prompt, correlationId, maxTokens = 2_000, temperature = 1, responseSchema = null, timeoutMs = 900_000 }) {
       if (!configured) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_NOT_CONFIGURED', 'The Azure OpenAI gateway adapter requires its approved endpoint, deployment, project ID, Azure AD token provider, and fetch implementation.', { severity: 'warning' })
       const request = normalizeRequest({ system, prompt, correlationId, maxTokens, temperature, responseSchema })
       const accessToken = await tokenProvider({ scope: defaultScope, audience: gateway.origin, deployment: configuration.deployment, projectId: configuration.projectId, correlationId: request.correlationId })
@@ -28,7 +28,7 @@ export function createAzureOpenAiGatewayAdapter({ endpoint, apiVersion = '2025-0
       // the retry to inherit that connection's state.
       const headers = Object.freeze({ accept: 'application/json', 'content-type': 'application/json', connection: 'close', 'x-client-request-id': request.correlationId, projectId: configuration.projectId, 'x-idp': 'azuread', [configuration.credentialHeaderName]: credentialValue(configuration.credentialHeaderName, accessToken) })
       const baseBody = { model: configuration.model, messages: [{ role: 'system', content: request.system }, { role: 'user', content: request.prompt }], max_completion_tokens: request.maxTokens, temperature: request.temperature }
-      const { response, payload } = await sendCompatibleGatewayRequest(fetchImpl, gateway.url, headers, { ...baseBody, ...(request.responseSchema ? { response_format: { type: 'json_schema', json_schema: request.responseSchema } } : {}) })
+      const { response, payload } = await sendCompatibleGatewayRequest(fetchImpl, gateway.url, headers, { ...baseBody, ...(request.responseSchema ? { response_format: { type: 'json_schema', json_schema: request.responseSchema } } : {}) }, timeoutMs)
       const providerRequestId = response.headers.get('x-request-id') ?? response.headers.get('x-ms-request-id') ?? response.headers.get('apim-request-id') ?? null
       if (!response.ok) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_FAILED', failureMessage(response.status), { retryable: response.status === 429 || response.status >= 500, severity: 'warning', details: { provider: 'AZURE_OPENAI_GATEWAY', providerStatus: response.status, providerRequestId, gatewayError: safeGatewayError(payload?.error) } })
       const text = payload?.choices?.[0]?.message?.content
@@ -98,16 +98,26 @@ function normalizeResponseSchema(value) {
   return Object.freeze({ name: String(value.name).trim(), strict: true, schema: value.schema })
 }
 
-async function sendGatewayRequest(fetchImpl, url, headers, body) {
+async function sendGatewayRequest(fetchImpl, url, headers, body, timeoutMs) {
   let lastError = null
   for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const controller = new AbortController()
+    const timeout = Number.isInteger(timeoutMs) && timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null
     let response
     try {
-      response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body) })
+      response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal })
     } catch {
+      if (controller.signal.aborted) {
+        lastError = new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_TIMEOUT', 'The Azure OpenAI gateway request timed out before returning a completion.', { retryable: true, severity: 'warning', details: { provider: 'AZURE_OPENAI_GATEWAY' } })
+        throw lastError
+      }
       lastError = new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' })
       if (attempt < 2) continue
       throw lastError
+    } finally {
+      if (timeout) clearTimeout(timeout)
     }
     const payload = await response.json().catch(() => null)
     if (!transientGatewayStatuses.has(response.status)) return { response, payload }
@@ -118,12 +128,12 @@ async function sendGatewayRequest(fetchImpl, url, headers, body) {
   throw lastError ?? new ChangeCaseError('AZURE_OPENAI_GATEWAY_UNAVAILABLE', 'The configured Azure OpenAI gateway could not be reached.', { retryable: true, severity: 'warning' })
 }
 
-async function sendCompatibleGatewayRequest(fetchImpl, url, headers, body) {
+async function sendCompatibleGatewayRequest(fetchImpl, url, headers, body, timeoutMs) {
   let currentBody = body
   let result
   const applied = new Set()
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    result = await sendGatewayRequest(fetchImpl, url, headers, currentBody)
+    result = await sendGatewayRequest(fetchImpl, url, headers, currentBody, timeoutMs)
     const adjustment = compatibleBodyAdjustment(result.response, result.payload, currentBody)
     if (!adjustment || applied.has(adjustment.kind)) return result
     applied.add(adjustment.kind)
@@ -136,6 +146,22 @@ function compatibleBodyAdjustment(response, payload, body) {
   if (rejectsTemperatureValue(response, payload) && Object.hasOwn(body, 'temperature')) return { kind: 'temperature', body: withoutTemperature(body) }
   if (rejectsStructuredOutput(response, payload, body) && Object.hasOwn(body, 'response_format')) return { kind: 'response_format', body: withoutResponseFormat(body) }
   if (rejectsMaxCompletionTokens(response, payload) && Object.hasOwn(body, 'max_completion_tokens')) return { kind: 'max_completion_tokens', body: legacyTokenBody(body) }
+  if (response.status === 400 && !hasStructuredGatewayHint(payload)) {
+    const genericAdjustment = genericCompatibilityAdjustment(body)
+    if (genericAdjustment) return genericAdjustment
+  }
+  return null
+}
+
+function hasStructuredGatewayHint(payload) {
+  const error = payload?.error
+  return Boolean(token(error?.code) || token(error?.param) || token(error?.type))
+}
+
+function genericCompatibilityAdjustment(body) {
+  if (Object.hasOwn(body, 'response_format')) return { kind: 'response_format', body: withoutResponseFormat(body) }
+  if (Object.hasOwn(body, 'max_completion_tokens')) return { kind: 'max_completion_tokens', body: legacyTokenBody(body) }
+  if (Object.hasOwn(body, 'temperature')) return { kind: 'temperature', body: withoutTemperature(body) }
   return null
 }
 

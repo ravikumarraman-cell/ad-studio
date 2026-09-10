@@ -59,6 +59,21 @@ test('gateway falls back when structured-output schema validation is rejected', 
   assert.equal(requests[1].response_format, undefined)
 })
 
+test('gateway still retries a compatibility 400 even when the gateway omits structured error details', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => {
+    requests.push(JSON.parse(init.body))
+    return requests.length === 1
+      ? response({ error: { message: 'bad request' } }, { status: 400 })
+      : response({ choices: [{ message: { content: 'ready' } }] })
+  } })
+  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-generic-400-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+  assert.equal(result.text, 'ready')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[0].response_format.type, 'json_schema')
+  assert.equal(requests[1].response_format, undefined)
+})
+
 test('gateway falls back to the legacy token-limit field when required by its route', async () => {
   const requests = []
   const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'unsupported_parameter', param: 'max_completion_tokens' } }, { status: 400 }) : response({ choices: [{ message: { content: 'ready' } }] }) } })
@@ -188,6 +203,20 @@ test('Azure OpenAI gateway adapter supports an explicit API-key gateway contract
   await adapter.complete({ system: 'Be concise.', prompt: 'Reply ready.', correlationId: 'trace-3' })
   assert.equal(captured.headers['api-key'], 'azure-ad-short-lived-access-token-value')
   assert.equal(captured.headers.authorization, undefined)
+})
+
+test('Azure OpenAI gateway adapter aborts a hung request when the timeout expires', async () => {
+  const adapter = createAzureOpenAiGatewayAdapter({
+    ...configuration,
+    fetchImpl: async (_url, init) => new Promise((resolve, reject) => {
+      init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+    }),
+  })
+
+  await assert.rejects(
+    () => adapter.complete({ system: 'Be concise.', prompt: 'Explain.', correlationId: 'trace-timeout', timeoutMs: 1 }),
+    (error) => error.code === 'AZURE_OPENAI_GATEWAY_REQUEST_TIMEOUT',
+  )
 })
 
 test('Azure OpenAI gateway adapter fails closed without an HTTPS endpoint and Azure AD token provider', () => {

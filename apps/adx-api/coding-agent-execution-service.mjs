@@ -11,6 +11,7 @@ export class CodingAgentExecutionService {
     broker,
     resolveAdapter,
     policy,
+    heartbeatIntervalMs = 5_000,
   }) {
     if (
       !executionRepository ||
@@ -25,6 +26,7 @@ export class CodingAgentExecutionService {
     this.broker = broker;
     this.resolveAdapter = resolveAdapter;
     this.policy = policy;
+    this.heartbeatIntervalMs = heartbeatIntervalMs;
   }
 
   configured() {
@@ -144,12 +146,19 @@ export class CodingAgentExecutionService {
     issued,
   }) {
     let result;
+    let heartbeatTimer = null;
     try {
       const lease = await this.executionRepository.dispatchContext({
         scope,
         leaseId: issued.leaseId,
         runId: issued.runId,
       });
+      heartbeatTimer = setInterval(() => {
+        void this.executionRepository
+          .heartbeatRun({ scope, runId: issued.runId })
+          .catch(() => {});
+      }, this.heartbeatIntervalMs);
+      heartbeatTimer.unref?.();
       result = await this.broker.execute({
         adapter,
         task,
@@ -164,6 +173,8 @@ export class CodingAgentExecutionService {
       });
     } catch (error) {
       result = failureResult(error);
+    } finally {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
     }
     const completionResult = toCompletionResult(result);
     const completion = await this.executionRepository.completeDispatch({

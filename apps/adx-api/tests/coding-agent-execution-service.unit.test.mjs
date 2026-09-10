@@ -17,16 +17,17 @@ const policy = {
   taskFor: (item) => ({ objective: item.title, changeDigest: 'sha256:case-digest', allowedCommands: ['node --test'] })
 }
 
-function harness(result) {
+function harness(result, { heartbeatIntervalMs = 5_000 } = {}) {
   const calls = []
   const executionRepository = {
     issueLease: async (input) => { calls.push(['issueLease', input]); return { leaseId: 'lease-1', runId: 'run-1', status: 'ACTIVE' } },
     dispatchContext: async (input) => { calls.push(['dispatchContext', input]); return { limits: { maxDurationSeconds: 60 } } },
+    heartbeatRun: async (input) => { calls.push(['heartbeatRun', input]); return true },
     completeDispatch: async (input) => { calls.push(['completeDispatch', input]); return { status: input.result.code === 0 ? 'COMPLETED' : 'FAILED' } }
   }
   const changeCaseRepository = { transition: async (input) => { calls.push(['transition', input]); return { newState: 'AWAITING_VERIFICATION' } } }
   const broker = { configured: () => true, execute: async () => { if (result instanceof Error) throw result; return result } }
-  const service = new CodingAgentExecutionService({ executionRepository, changeCaseRepository, broker, resolveAdapter: () => adapter, policy })
+  const service = new CodingAgentExecutionService({ executionRepository, changeCaseRepository, broker, resolveAdapter: () => adapter, policy, heartbeatIntervalMs })
   return { service, calls }
 }
 
@@ -74,4 +75,17 @@ test('starting bounded implementation returns the run identity before the broker
   assert.deepEqual(started, { accepted: true, lease: { leaseId: 'lease-1', runId: 'run-1', status: 'ACTIVE' }, runId: 'run-1', status: 'LEASED' })
   assert.deepEqual(calls.map(([name]) => name), ['issueLease', 'dispatchContext'])
   completeBroker({ accepted: true, promoted: true, provider: 'LOCAL_TEST', code: 0, outputDigest: 'sha256:output', outputBytes: 12, candidateDigest: 'sha256:candidate' })
+})
+
+test('bounded implementation heartbeats while the broker runs and stops after completion', async () => {
+  const successfulResult = { accepted: true, promoted: true, provider: 'LOCAL_TEST', code: 0, outputDigest: 'sha256:output', outputBytes: 12, candidateDigest: 'sha256:candidate' }
+  const { service, calls } = harness(successfulResult, { heartbeatIntervalMs: 5 })
+  service.broker.execute = () => new Promise((resolve) => setTimeout(() => resolve(successfulResult), 25))
+
+  await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-heartbeat' })
+  const completedHeartbeatCount = calls.filter(([name]) => name === 'heartbeatRun').length
+  await new Promise((resolve) => setTimeout(resolve, 15))
+
+  assert.ok(completedHeartbeatCount >= 1)
+  assert.equal(calls.filter(([name]) => name === 'heartbeatRun').length, completedHeartbeatCount)
 })

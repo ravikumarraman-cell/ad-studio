@@ -1,5 +1,5 @@
 import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const storyTemplateDirectory = resolve(import.meta.dirname, '../../templates')
@@ -10,18 +10,37 @@ const storyTemplateFiles = Object.freeze({
   'feature-decomposition-playbook': 'story-spec-playbook.md',
 })
 
+const storyDefinitions = Object.freeze([
+  ['user-value-slices', 'User-value slices', 'Small end-to-end outcomes with one persona and focused BDD evidence.'],
+  ['assurance-boundaries', 'Assurance boundaries', 'Privacy, authorization, audit, and recovery where retained context requires them.'],
+  ['delivery-slices', 'Delivery slices', 'Reviewable, independently releasable increments for a safe delivery sequence.'],
+  ['feature-decomposition-playbook', 'Feature decomposition playbook', 'Maps a business outcome through capabilities, epics, independently deliverable stories, risks, and tests.'],
+])
+
+function buildCodingDefinitions() {
+  return readdirSync(storyTemplateDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith('coding-spec-') && entry.name.endsWith('.md'))
+    .map((entry) => {
+      const id = entry.name.slice('coding-spec-'.length, -'.md'.length)
+      const { label, description, guidance } = readCodingTemplate(entry.name)
+      return Object.freeze([id, label, description, guidance])
+    })
+    .sort((left, right) => left[0].localeCompare(right[0]))
+}
+
+function readCodingTemplate(fileName) {
+  const content = readFileSync(resolve(storyTemplateDirectory, fileName), 'utf8').trim()
+  const lines = content.split(/\r?\n/)
+  const heading = lines.find((line) => line.startsWith('# '))?.slice(2).trim() ?? fileName.replace(/^coding-spec-/, '').replace(/\.md$/, '').split('-').map((part) => part ? part[0].toUpperCase() + part.slice(1) : part).join(' ')
+  const description = lines.find((line) => line.startsWith('## Goal'))
+    ? lines.slice(lines.indexOf('## Goal') + 1).find((line) => line.trim())?.replace(/^[-*]\s*/, '').trim() ?? ''
+    : lines.slice(1).find((line) => line.trim() && !line.startsWith('Version:'))?.trim() ?? ''
+  return Object.freeze({ label: heading, description, guidance: content })
+}
+
 const definitions = Object.freeze({
-  story: [
-    ['user-value-slices', 'User-value slices', 'Small end-to-end outcomes with one persona and focused BDD evidence.'],
-    ['assurance-boundaries', 'Assurance boundaries', 'Privacy, authorization, audit, and recovery where retained context requires them.'],
-    ['delivery-slices', 'Delivery slices', 'Reviewable, independently releasable increments for a safe delivery sequence.'],
-    ['feature-decomposition-playbook', 'Feature decomposition playbook', 'Maps a business outcome through capabilities, epics, independently deliverable stories, risks, and tests.'],
-  ],
-  coding: [
-    ['evidence-first-feature', 'Evidence-first feature', 'New capability with source anchors, non-goals, and criterion-level validation.', 'Implement only approved scope. Before edits identify controlling code, tests, a falsifiable hypothesis, and smallest validation. Do not invent APIs or configuration. Report criterion evidence, changed files, and residual risk.'],
-    ['bug-fix-proof', 'Bug fix with proof', 'Root-cause repair with a regression test or a stated test limitation.', 'Locate the controlling failure path before editing. Fix the root cause, not a symptom. Do not hide errors or broaden fallbacks. Prove the regression case and report intentionally unchanged behavior.'],
-    ['safe-refactor', 'Safe refactor', 'Maintainability improvement with preserved observable behavior.', 'Identify the behavior contract first. Keep the refactor local and reversible. Do not combine feature work, dependency changes, generated artifacts, or formatting churn. Validate behavior preservation and report remaining follow-up.'],
-  ],
+  story: storyDefinitions,
+  coding: buildCodingDefinitions(),
 })
 
 const catalogs = Object.freeze(Object.fromEntries(Object.entries(definitions).map(([kind, entries]) => [kind, Object.freeze(entries.map(([id, label, description, guidance]) => {

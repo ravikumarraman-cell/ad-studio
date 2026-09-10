@@ -18,6 +18,17 @@ test("Health-X preview profiles use the standalone repository Dockerfile by defa
   );
 });
 
+test("preview profiles preserve the configured repository identity", () => {
+  const profiles = createApplicationPreviewProfiles({
+    sourceRoot: "/projects/cloud-asset-inventory/frontend",
+    candidateRoot: "/candidates/cloud-asset-inventory",
+    repositoryId: "cloud-asset-inventory",
+  });
+
+  assert.equal(profiles.get("health-x-before").repositoryId, "cloud-asset-inventory");
+  assert.equal(profiles.get("health-x-after").repositoryId, "cloud-asset-inventory");
+});
+
 test("Health-X preview profiles permit a canonical nested Dockerfile override", () => {
   const profiles = createApplicationPreviewProfiles({
     sourceRoot: "/projects/ad-studio",

@@ -1,19 +1,6 @@
 import { adxPageThemeCss } from './adx-page-theme.mjs';
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character])
-}
-
-function shortDigest(value) {
-  const digest = String(value ?? '')
-  return digest.length > 25 ? `${digest.slice(0, 16)}...${digest.slice(-8)}` : digest
-}
-
-function evidenceRow(item, index) {
-  const passed = item.status === 'PASS'
-  const artifacts = Array.isArray(item.artifacts) ? item.artifacts : []
-  return `<article class="evidence-row ${passed ? 'passed' : 'failed'}"><div class="evidence-marker" aria-hidden="true">${passed ? 'PASS' : 'FAIL'}</div><div class="evidence-summary"><div class="evidence-head"><strong>Verification run ${index}</strong><span class="status-chip ${passed ? 'good' : 'bad'}">${escapeHtml(item.status)}</span></div><p>${escapeHtml(item.verifierId)} <span aria-hidden="true">/</span> ${escapeHtml(item.verifierVersion)} <span aria-hidden="true">/</span> ${artifacts.length} retained artifact${artifacts.length === 1 ? '' : 's'}</p></div><details><summary>Inspect provenance</summary><dl><dt>Candidate</dt><dd><code title="${escapeHtml(item.candidateDigest)}">${escapeHtml(item.candidateDigest)}</code></dd><dt>Evidence</dt><dd><code title="${escapeHtml(item.evidenceDigest)}">${escapeHtml(item.evidenceDigest)}</code></dd><dt>Runtime</dt><dd><code title="${escapeHtml(item.runtimeImageDigest)}">${escapeHtml(item.runtimeImageDigest)}</code></dd><dt>Configuration</dt><dd><code title="${escapeHtml(item.configDigest)}">${escapeHtml(item.configDigest)}</code></dd><dt>Command</dt><dd><code title="${escapeHtml(item.commandDigest)}">${escapeHtml(item.commandDigest)}</code></dd></dl>${artifacts.length ? `<ul class="artifacts">${artifacts.map((artifact) => `<li><code>${escapeHtml(artifact.digest)}</code><span>${escapeHtml(artifact.mediaType)} · ${escapeHtml(artifact.bytes)} bytes</span></li>`).join('')}</ul>` : ''}</details></article>`
-}
+import { escapeHtml, shortDigest } from './review-page-utils.mjs';
+import { renderEvidenceList, renderPanel, renderEvidenceRow as evidenceRow } from './gate-page-components.mjs';
 
 export function renderVerificationReviewPage(changeCase, evidence, { canRun, canReview, handoffUrl, candidateUrl, runEndpoint, decisionEndpoint, previewUrl, verifierConfigured, verifierIssue = 'LOCAL_VERIFIER_CANDIDATE_REQUIRED' }) {
   const passes = evidence.filter((item) => item.status === 'PASS')
@@ -25,14 +12,41 @@ export function renderVerificationReviewPage(changeCase, evidence, { canRun, can
   const gateLabel = canComplete ? 'Ready for an independent decision' : candidate ? 'A reviewer decision is required' : failures.length ? 'A corrected candidate is required' : runReady ? 'Ready to collect evidence' : 'Waiting on workflow prerequisites'
   const gateTone = canComplete ? 'ready' : candidate ? 'review' : failures.length ? 'attention' : runReady ? 'active' : 'waiting'
   let actionPanel = changeCase.state === 'READY_FOR_EXECUTION'
-    ? `<section class="action-panel blocked"><p class="panel-label">PREREQUISITE</p><h2>Submit a candidate before verification</h2><p>Gate D opens after an authorized contributor has produced a server-configured candidate. This handoff does not imply execution quality or approval.</p><a class="button secondary" href="${escapeHtml(handoffUrl)}">Open execution handoff</a></section>`
+    ? renderPanel({
+      className: 'action-panel blocked',
+      kicker: 'PREREQUISITE',
+      title: 'Submit a candidate before verification',
+      body: 'Gate D opens after an authorized contributor has produced a server-configured candidate. This handoff does not imply execution quality or approval.',
+      footer: `<a class="button secondary" href="${escapeHtml(handoffUrl)}">Open execution handoff</a>`,
+    })
     : !awaitingVerification
-      ? `<section class="action-panel blocked"><p class="panel-label">GATE UNAVAILABLE</p><h2>Verification is not open</h2><p>This Change Case is <strong>${escapeHtml(changeCase.state)}</strong>. Gate D can retain evidence only while the case is awaiting verification.</p></section>`
+      ? renderPanel({
+        className: 'action-panel blocked',
+        kicker: 'GATE UNAVAILABLE',
+        title: 'Verification is not open',
+        body: `This Change Case is <strong>${escapeHtml(changeCase.state)}</strong>. Gate D can retain evidence only while the case is awaiting verification.`,
+      })
       : !verifierConfigured
-        ? `<section class="action-panel blocked"><p class="panel-label">VERIFIER UNAVAILABLE</p><h2>Independent verification is not ready</h2><p>The server-side candidate checkout cannot be verified yet.</p><code>${escapeHtml(verifierIssue)}</code><p class="muted">The browser cannot select a filesystem path, runtime, or command.</p></section>`
+        ? renderPanel({
+          className: 'action-panel blocked',
+          kicker: 'VERIFIER UNAVAILABLE',
+          title: 'Independent verification is not ready',
+          body: `The server-side candidate checkout cannot be verified yet.<code>${escapeHtml(verifierIssue)}</code><span class="muted">The browser cannot select a filesystem path, runtime, or command.</span>`,
+        })
         : runReady
-          ? `<section class="action-panel run"><p class="panel-label">NEXT STEP · INDEPENDENT VERIFICATION</p><h2>Review, then collect fresh evidence</h2><p>${candidateUrl ? `First <a class="text-link" href="${escapeHtml(candidateUrl)}">review generated code</a>${canRun ? ' and make any needed correction.' : '.'} ` : ''}ADX verifies the exact saved candidate in a read-only, networkless container before delivery can continue.</p>${canRun ? '<button id="run-verifier" class="button primary" type="button">Run independent verification</button><p id="run-status" class="live-status" role="status" aria-live="polite"></p>' : ''}</section>`
-          : `<section class="action-panel blocked"><p class="panel-label">REQUEST REQUIRED</p><h2>Awaiting an authorized verification request</h2><p>You can inspect retained evidence. A workspace contributor must request the verifier run.</p></section>`
+          ? renderPanel({
+            className: 'action-panel run',
+            kicker: 'NEXT STEP · INDEPENDENT VERIFICATION',
+            title: 'Review, then collect fresh evidence',
+            body: `${candidateUrl ? `First <a class="text-link" href="${escapeHtml(candidateUrl)}">review generated code</a>${canRun ? ' and make any needed correction.' : '.'} ` : ''}ADX verifies the exact saved candidate in a read-only, networkless container before delivery can continue.`,
+            content: canRun ? '<button id="run-verifier" class="button primary" type="button">Run independent verification</button><p id="run-status" class="live-status" role="status" aria-live="polite"></p>' : '',
+          })
+          : renderPanel({
+            className: 'action-panel blocked',
+            kicker: 'REQUEST REQUIRED',
+            title: 'Awaiting an authorized verification request',
+            body: 'You can inspect retained evidence. A workspace contributor must request the verifier run.',
+          })
   if (runReady) actionPanel = actionPanel.replace(
     '<button id="run-verifier" class="button primary" type="button">Run independent verification</button><p id="run-status" class="live-status" role="status" aria-live="polite"></p>',
     '<button id="run-verifier" class="button primary" type="button"><span class="busy-indicator" aria-hidden="true"></span><span class="button-label">Run independent verification</span><span class="sr-only">Running independent verification</span></button><p id="run-status" class="live-status" role="status" aria-live="polite" aria-busy="false"></p><style>.busy-indicator{display:none;width:1em;height:1em;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:busy-spin .7s linear infinite}.is-busy .busy-indicator{display:inline-block}.button.is-busy{display:inline-flex;align-items:center;gap:.55em}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}@keyframes busy-spin{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.busy-indicator{animation:none}}</style><script>(()=>{const button=document.getElementById("run-verifier"),status=document.getElementById("run-status");if(!button||!status)return;button.addEventListener("click",()=>{button.classList.add("is-busy");status.setAttribute("aria-busy","true")});new MutationObserver(()=>{if(!button.disabled&&button.classList.contains("is-busy")){button.classList.remove("is-busy");status.setAttribute("aria-busy","false")}}).observe(button,{attributes:true,attributeFilter:["disabled"]})})()</script>',

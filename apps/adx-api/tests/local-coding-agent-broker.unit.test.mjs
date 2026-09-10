@@ -29,6 +29,17 @@ test('local broker classifies a nonzero provider exit without retaining its outp
   await rm(root, { recursive: true, force: true })
 })
 
+test('local broker rejects a successful no-op run that leaves the candidate unchanged', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adx-agent-broker-test-')); const source = join(root, 'source'); const candidate = join(root, 'candidate')
+  await mkdir(source, { recursive: true }); await writeFile(join(source, 'marker.txt'), 'before')
+  const broker = new LocalCodingAgentBroker({ enabled: true, sourceRoot: source, candidateRoot: candidate, run: async () => ({ code: 0, signal: null, output: 'implemented', outputDigest: 'sha256:output', outputBytes: 11, quotaExceeded: false, timedOut: false }) })
+  const result = await broker.execute({ adapter, task })
+  assert.equal(result.errorCode, 'CODING_AGENT_RUN_NO_CHANGES')
+  assert.equal(result.promoted, false)
+  assert.equal(result.candidateDigest, null)
+  await rm(root, { recursive: true, force: true })
+})
+
 test('local broker is disabled until explicitly enabled', async () => {
   const broker = new LocalCodingAgentBroker({ enabled: false, sourceRoot: '/tmp/source', candidateRoot: '/tmp/candidate' })
   await assert.rejects(() => broker.execute({ adapter, task }), { code: 'CODING_AGENT_EXECUTOR_DISABLED' })

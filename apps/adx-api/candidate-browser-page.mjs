@@ -12,7 +12,12 @@ const maxPreviewBytes = 64 * 1024
 export async function renderCandidateBrowserPage({ candidateRoot, sourceRoot, baseUrl, verificationUrl, requestedPath = '' }) {
   const root = await realpath(candidateRoot).catch(() => null)
   if (!root) return unavailablePage('The server-configured generated candidate is unavailable.')
-  const files = await listFiles(root)
+  let files
+  try {
+    files = await listFiles(root)
+  } catch {
+    return unavailablePage('The server-configured generated candidate is unavailable.')
+  }
   if (!files.length) return unavailablePage('The server-configured generated candidate contains no browsable files.')
   const selectedPath = normalizePath(requestedPath)
   const selected = selectedPath ? await readCandidateFile(root, selectedPath) : null

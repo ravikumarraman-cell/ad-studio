@@ -62,8 +62,13 @@ function inspectStoryQuality(suggestions) {
   const graph = validateStories(suggestions)
   const findings = []
   for (const story of graph.stories) {
-    if (!/^as a .+?, i want .+?, so that .+\.?$/i.test(story.narrative)) findings.push(Object.freeze({ severity: 'warning', code: 'NARRATIVE_FORM', storyKey: story.key, message: 'The narrative does not use the expected As a / I want / so that form.' }))
+    if (!isUserStoryNarrative(story.narrative)) findings.push(Object.freeze({ severity: 'warning', code: 'NARRATIVE_FORM', storyKey: story.key, message: 'The narrative does not use the expected As a / I want / so that form.' }))
     if (story.scenarios.length !== 1) findings.push(Object.freeze({ severity: 'warning', code: 'SCENARIO_SCOPE', storyKey: story.key, message: 'The agent should propose one focused BDD scenario per story.' }))
   }
   return Object.freeze({ stories: graph.stories, report: Object.freeze({ schema: 'adx-story-decomposition-quality-v1', storyDigest: graph.digest, validBdd: true, findingCount: findings.length, findings: Object.freeze(findings), authorAction: 'Review, edit, and explicitly submit these proposals. This agent run does not retain stories or advance a workflow gate.' }) })
+}
+
+function isUserStoryNarrative(narrative) {
+  const normalized = String(narrative ?? '').replace(/\s+/g, ' ').trim()
+  return /^as a .+?(?:,|\s) i want .+?(?:,|\s) so that .+\.?$/i.test(normalized)
 }

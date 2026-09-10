@@ -34,6 +34,7 @@ test("preview page offers only retained passing candidates and links an active l
   assert.match(page, /sha256:verified/);
   assert.doesNotMatch(page, /sha256:failed/);
   assert.match(page, /application-preview-start/);
+  assert.match(page, /\.status\.loading::before/);
 });
 
 test("preview page provides a side-by-side before and independently verified after view", () => {

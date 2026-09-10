@@ -14,7 +14,7 @@ import {
   InMemorySessionStore,
   TenantResourceStore,
 } from "../../packages/identity/src/index.mjs";
-import { createOidcVerifier } from "./oidc.mjs";
+import { createOidcVerifier, createOidcVerifierRegistry, describeOidcVerifierRegistry, verifyOidcTokenWithRegistry } from "./oidc.mjs";
 import {
   createBrowserSessionHandoffCode,
   createPkceTransaction,
@@ -203,6 +203,7 @@ const auditEvents = [];
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const verifyOidc = createOidcVerifier();
 const verifyEntraOidc = createOidcVerifier(oidcProvider(process.env, "entra") ?? {});
+const configuredOidcVerifiers = createOidcVerifierRegistry();
 const postgres = process.env.DATABASE_URL
   ? new PostgresTenantRepository(process.env.DATABASE_URL)
   : null;
@@ -248,6 +249,7 @@ const candidateRoot = modelPatchBroker.candidateRoot;
 const previewProfiles = createApplicationPreviewProfiles({
   sourceRoot: modelPatchProfile.sourceRoot,
   candidateRoot,
+  repositoryId: modelPatchProfile.repositoryId,
   dockerfilePath: process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE,
 });
 await validatePreviewRuntimeConfiguration(previewProfiles);
@@ -459,7 +461,7 @@ function resolveModelPatchProfile(environment) {
       [],
     ),
     readOnlyContextPaths: Object.freeze([]),
-    validationCommand: "node --test",
+    validationCommand: "npm --prefix frontend test -- --runInBand",
     linkSourceDependencies: false,
   });
 }
@@ -589,7 +591,25 @@ function oidcFailureMetadata(error) {
     code: typeof error.code === "string" ? error.code : null,
     causeCode: typeof error.cause?.code === "string" ? error.cause.code : null,
     message: typeof error.message === "string" ? error.message.slice(0, 180) : null,
+    verification: sanitizeOidcVerificationDetails(error.details),
   };
+}
+
+function sanitizeOidcVerificationDetails(details) {
+  if (!details || typeof details !== "object") return null;
+  const tokenIssuer = typeof details.tokenIssuer === "string" ? details.tokenIssuer : null;
+  const attempts = Array.isArray(details.attempts)
+    ? details.attempts
+        .map((attempt) => ({
+          providerId: typeof attempt?.providerId === "string" ? attempt.providerId : null,
+          issuer: typeof attempt?.issuer === "string" ? attempt.issuer : null,
+          errorCode: typeof attempt?.errorCode === "string" ? attempt.errorCode : null,
+          errorName: typeof attempt?.errorName === "string" ? attempt.errorName : null,
+          errorMessage: typeof attempt?.errorMessage === "string" ? attempt.errorMessage : null,
+        }))
+        .filter((attempt) => attempt.providerId || attempt.issuer || attempt.errorCode || attempt.errorName || attempt.errorMessage)
+    : [];
+  return tokenIssuer || attempts.length ? { tokenIssuer, attempts } : null;
 }
 function storyReviewPage(changeCase, governance) {
   const factors = governance.assessment?.explanation?.factors ?? [];
@@ -803,17 +823,24 @@ async function sessionFor(request, traceId) {
   const token = authorizationToken(request) ?? cookieOidcToken(request);
   if (!token) return null;
   try {
-    const principal = await (verifyEntraOidc ?? verifyOidc)?.(token);
+    const principal = await verifyOidcTokenWithRegistry(token, configuredOidcVerifiers.length ? configuredOidcVerifiers : [
+      ...(verifyOidc ? [{ providerId: 'google', issuer: 'https://accounts.google.com', verify: verifyOidc }] : []),
+      ...(verifyEntraOidc ? [{ providerId: 'entra', issuer: verifyEntraOidc.issuer ?? 'https://login.microsoftonline.com', verify: verifyEntraOidc }] : []),
+    ]);
     if (!principal) return null;
     const membershipsForPrincipal = postgres ? await postgres.memberships(principal.id) : [];
     return { principal, memberships: membershipsForPrincipal, sessionToken: sessions.create(principal, membershipsForPrincipal) };
   } catch (error) {
+    const verification = sanitizeOidcVerificationDetails(error.details);
     console.warn(JSON.stringify({
       service: "adx-api",
       event: "oidc.bearer.rejected",
       traceId,
       reason: oidcCallbackFailureReason(error),
       failure: oidcFailureMetadata(error),
+      verification,
+      verificationAttemptCount: verification?.attempts?.length ?? 0,
+      verificationTokenIssuer: verification?.tokenIssuer ?? null,
       token: tokenMetadata(token),
     }));
     return null;
@@ -1087,13 +1114,24 @@ function executionTask(changeCase, governance, templateId) {
       "CODING_AGENT_INTENT_REQUIRED",
       "A retained outcome and acceptance criteria are required for bounded implementation.",
     );
+  const storyRevision = governance?.stories;
+  const stories = Array.isArray(storyRevision?.stories) ? storyRevision.stories : [];
   const template = resolveAgentSpecTemplate("coding", templateId);
+  const storySummary = stories.length
+    ? `\n\nApproved stories (${stories.length}):\n${stories.map((story, index) => {
+        const narrative = String(story?.narrative ?? '').trim();
+        const title = String(story?.title ?? `Story ${index + 1}`).trim();
+        return `${index + 1}. ${title}${narrative ? ` — ${narrative}` : ''}`;
+      }).join('\n')}`
+    : "";
   return {
-    objective: `${changeCase.title}\n\nOutcome: ${intent.outcome}\n\nAcceptance criteria: ${intent.acceptanceCriteria}${template ? `\n\nReviewed coding specification: ${template.label} (v${template.version})\n${template.guidance}` : ""}`,
+    objective: `${changeCase.title}\n\nOutcome: ${intent.outcome}\n\nAcceptance criteria: ${intent.acceptanceCriteria}${storySummary}${template ? `\n\nReviewed coding specification: ${template.label} (v${template.version})\n${template.guidance}` : ""}`,
     changeDigest: sha256({
       changeCaseId: changeCase.id,
       projectionVersion: changeCase.projectionVersion,
       intentDigest: intent.intentDigest,
+      storyDigest: storyRevision?.storyDigest ?? null,
+      storyCount: stories.length,
       template: template
         ? {
             id: template.id,
@@ -2162,6 +2200,7 @@ const server = createServer(async (request, response) => {
         traceId,
         session,
         current,
+        governance: await changeCases.intakeView(scope, changeCaseId),
         scope,
         workspaceId,
         changeCaseId,
@@ -2288,6 +2327,8 @@ const server = createServer(async (request, response) => {
         traceId,
         session,
         current,
+        execution: await executions.view(scope, changeCaseId),
+        governance: await changeCases.intakeView(scope, changeCaseId),
         scope,
         workspaceId,
         changeCaseId,
@@ -2961,6 +3002,7 @@ server.listen(process.env.PORT || 3100, "127.0.0.1", () =>
       service: "adx-api",
       event: "listening",
       traceId: randomUUID(),
+      oidc: describeOidcVerifierRegistry(configuredOidcVerifiers),
     }),
   ),
 );

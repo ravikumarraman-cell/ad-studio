@@ -7,6 +7,7 @@ export async function handleApplicationPreviewRoute({
   traceId,
   session,
   current,
+  governance,
   scope,
   workspaceId,
   changeCaseId,
@@ -30,13 +31,28 @@ export async function handleApplicationPreviewRoute({
     action: "resource.write",
   });
   const base = changeCaseBasePath(workspaceId, changeCaseId);
+  const selectedRepository = normalizeRepositoryId(governance?.intent?.targetRepository);
+  const profiles = [...localPreviewManager.profiles.values()]
+    .filter(
+      (profile) =>
+        !selectedRepository || normalizeRepositoryId(profile.repositoryId) === selectedRepository,
+    )
+    .map(({ id, label, repositoryId }) => ({ id, label, repositoryId }));
+  const previews = localPreviewManager
+    .list()
+    .filter(
+      (preview) =>
+        preview.changeCaseId === changeCaseId &&
+        (!selectedRepository || normalizeRepositoryId(preview.repositoryId) === selectedRepository),
+    );
   return writeHtml(
     response,
     200,
     renderApplicationPreviewPage(current, {
-      profiles: [...localPreviewManager.profiles.values()].map(({ id, label }) => ({ id, label })),
+      projectRepository: governance?.intent?.targetRepository ?? null,
+      profiles,
       evidence: await evidenceRepository.list(scope, changeCaseId),
-      previews: localPreviewManager.list().filter((preview) => preview.changeCaseId === changeCaseId),
+      previews,
       spotlight: executions
         ? featureSpotlightFromEvents((await executions.view(scope, changeCaseId)).events)
         : null,
@@ -47,4 +63,8 @@ export async function handleApplicationPreviewRoute({
     traceId,
     session.principal,
   );
+}
+
+function normalizeRepositoryId(value) {
+  return String(value ?? "").trim().toLowerCase();
 }

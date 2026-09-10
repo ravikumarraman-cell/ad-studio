@@ -45,6 +45,10 @@ const validationCommands = Object.freeze({
     executable: "node",
     arguments: Object.freeze(["--test"]),
   }),
+  "npm --prefix frontend test -- --runInBand": Object.freeze({
+    executable: "npm",
+    arguments: Object.freeze(["--prefix", "frontend", "test", "--", "--runInBand"]),
+  }),
   "npm run verify:health-x": Object.freeze({
     executable: "npm",
     arguments: Object.freeze(["run", "verify:health-x"]),
@@ -54,6 +58,7 @@ const validationCommands = Object.freeze({
     arguments: Object.freeze(["run", "verify:production"]),
   }),
 });
+const executionStateCache = new Map();
 
 export class ModelPatchBroker {
   constructor({
@@ -117,46 +122,78 @@ export class ModelPatchBroker {
     const normalizedTask = normalizeTask(task, this.allowedValidationCommands);
     const writePaths = normalizeWritePaths(repository?.writePaths);
     await reportProgress(onProgress, "CONTEXT_COLLECTION");
-    const context = await collectContext(
+    const contextStartedAt = Date.now();
+    const executionState = getExecutionState({
       source,
+      candidate,
       writePaths,
-      this.readOnlyContextPaths,
-    );
-    timings.contextMs = elapsed(startedAt);
-    const scratchRoot = await mkdtemp(join(tmpdir(), "adx-model-patch-"));
-    const workspace = join(scratchRoot, basename(candidate) || "candidate");
+      readOnlyContextPaths: this.readOnlyContextPaths,
+      linkSourceDependencies: this.linkSourceDependencies,
+    });
     try {
-      const copyStartedAt = Date.now();
-      await cp(source, workspace, {
-        recursive: true,
-        dereference: false,
-        verbatimSymlinks: true,
-        filter: (path) => shouldCopyCandidatePath(source, path),
+      const workspaceReadyPromise = prepareCandidateWorkspace({
+        source,
+        candidate,
+        state: executionState,
+        shouldLinkSourceDependencies: this.linkSourceDependencies,
+        timings,
       });
-      if (this.linkSourceDependencies)
-        await linkSourceDependencies(source, workspace);
-      timings.workspaceCopyMs = elapsed(copyStartedAt);
-      const modelStartedAt = Date.now();
-      await reportProgress(onProgress, "MODEL_REQUEST");
-      const { completion, patches, featureSpotlight } =
-        await requestValidatedPatches({
+      const contextPromise = executionState.contextPromise.then((context) => {
+        timings.contextMs = elapsed(contextStartedAt);
+        return context;
+      });
+      const [context] = await Promise.all([contextPromise, workspaceReadyPromise]);
+      const sourceDigestPromise = executionState.sourceDigestPromise;
+      let validation = null;
+      let completion = null;
+      let patches = null;
+      let featureSpotlight = null;
+      let previousValidationIssue = null;
+      let touchedPaths = new Set();
+      for (let validationAttempt = 1; validationAttempt <= 2; validationAttempt += 1) {
+        if (validationAttempt > 1) {
+          await restoreCandidateWorkspacePaths({
+            source,
+            workspace: candidate,
+            paths: touchedPaths,
+          });
+          touchedPaths = new Set();
+        }
+        const modelStartedAt = Date.now();
+        await reportProgress(onProgress, "MODEL_REQUEST");
+        const response = await requestValidatedPatches({
           gateway: this.gateway,
           task: normalizedTask,
           context,
           writePaths,
+          previousValidationIssue,
+          timeoutMs,
         });
-      timings.modelMs = elapsed(modelStartedAt);
-      const patchStartedAt = Date.now();
-      for (const patch of patches) await writePatch(workspace, patch);
-      timings.patchMs = elapsed(patchStartedAt);
-      const validationStartedAt = Date.now();
-      await reportProgress(onProgress, "VALIDATION");
-      const validation = await this.validate({
-        cwd: workspace,
-        allowedCommands: normalizedTask.allowedCommands,
-        timeoutMs,
-      });
-      timings.validationMs = elapsed(validationStartedAt);
+        timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(modelStartedAt);
+        completion = response.completion;
+        patches = response.patches;
+        featureSpotlight = response.featureSpotlight;
+        await reportProgress(onProgress, "MODEL_RESPONSE");
+
+        const patchStartedAt = Date.now();
+        for (const patch of patches) {
+          await writePatch(candidate, patch);
+          touchedPaths.add(patch.path);
+        }
+        executionState.lastTouchedPaths = new Set(touchedPaths);
+        timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
+
+        const validationStartedAt = Date.now();
+        await reportProgress(onProgress, "VALIDATION");
+        validation = await this.validate({
+          cwd: candidate,
+          allowedCommands: normalizedTask.allowedCommands,
+          timeoutMs,
+        });
+        timings.validationMs = Number(timings.validationMs ?? 0) + elapsed(validationStartedAt);
+        if (validation.code === 0 && !validation.timedOut) break;
+        previousValidationIssue = validationIssueFor(validation, normalizedTask.allowedCommands[0]);
+      }
       if (validation.code !== 0 || validation.timedOut)
         return Object.freeze({
           accepted: false,
@@ -187,13 +224,36 @@ export class ModelPatchBroker {
           candidateDigest: null,
           timings: finalizedTimings(timings, startedAt),
         });
-      await reportProgress(onProgress, "CANDIDATE_PROMOTION");
-      await removeTransientCandidateOutputs(workspace);
       const promotionStartedAt = Date.now();
-      await mkdir(dirname(candidate), { recursive: true });
-      await rm(candidate, { recursive: true, force: true });
-      await rename(workspace, candidate);
-      const candidateDigest = await digestTree(candidate);
+      await removeTransientCandidateOutputs(candidate);
+      const [sourceDigest, workspaceDigest] = await Promise.all([
+        sourceDigestPromise,
+        digestTree(candidate),
+      ]);
+      if (workspaceDigest === sourceDigest)
+        return Object.freeze({
+          accepted: false,
+          promoted: false,
+          provider: provider.provider,
+          code: 1,
+          signal: null,
+          timedOut: false,
+          quotaExceeded: false,
+          outputBytes: validation.outputBytes,
+          outputDigest: validation.outputDigest,
+          errorCode: "MODEL_PATCH_NO_CHANGES",
+          errorDetails: {
+            failureStage: "EXECUTION",
+            validationCommand: normalizedTask.allowedCommands[0],
+            validationCategory: "CHECK_FAILED",
+            validationOutputExcerpt: validation.outputExcerpt ?? null,
+            validationFailureReason: "The validated candidate did not change the source checkout.",
+          },
+          candidateDigest: null,
+          timings: finalizedTimings(timings, startedAt),
+        });
+      await reportProgress(onProgress, "CANDIDATE_PROMOTION");
+      const candidateDigest = workspaceDigest;
       timings.promotionMs = elapsed(promotionStartedAt);
       return Object.freeze({
         accepted: true,
@@ -215,14 +275,70 @@ export class ModelPatchBroker {
       if (error && typeof error === "object")
         error.executionTimings = finalizedTimings(timings, startedAt);
       throw error;
-    } finally {
-      await rm(scratchRoot, { recursive: true, force: true }).catch(() => {});
     }
   }
 }
 
 async function reportProgress(onProgress, phase) {
   if (typeof onProgress === "function") await onProgress(phase);
+}
+
+function getExecutionState({
+  source,
+  candidate,
+  writePaths,
+  readOnlyContextPaths,
+  linkSourceDependencies,
+}) {
+  const key = sha256({
+    source,
+    candidate,
+    writePaths,
+    readOnlyContextPaths,
+    linkSourceDependencies,
+  });
+  let state = executionStateCache.get(key);
+  if (!state) {
+    state = {
+      sourceDigestPromise: digestTree(source),
+      contextPromise: collectContext(source, writePaths, readOnlyContextPaths),
+      lastTouchedPaths: new Set(),
+      workspaceSeeded: false,
+      seedPromise: null,
+    };
+    executionStateCache.set(key, state);
+  }
+  return state;
+}
+
+async function prepareCandidateWorkspace({
+  source,
+  candidate,
+  state,
+  shouldLinkSourceDependencies,
+  timings,
+}) {
+  if (state.lastTouchedPaths.size) {
+    await restoreCandidateWorkspacePaths({
+      source,
+      workspace: candidate,
+      paths: state.lastTouchedPaths,
+    });
+    state.lastTouchedPaths = new Set();
+    return;
+  }
+  if (state.workspaceSeeded) return;
+  if (!state.seedPromise) {
+    state.seedPromise = copyCandidateWorkspace({
+      source,
+      workspace: candidate,
+      shouldLinkSourceDependencies,
+      timings,
+    }).then(() => {
+      state.workspaceSeeded = true;
+    });
+  }
+  await state.seedPromise;
 }
 
 function elapsed(startedAt) {
@@ -237,6 +353,56 @@ function validationFailureReason(validation) {
   if (validation.signal) return `Validation exited on ${validation.signal} without output.`;
   const code = Number.isInteger(validation.code) ? validation.code : 1;
   return `Validation exited with code ${code} and produced no output.`;
+}
+
+function validationIssueFor(validation, validationCommand) {
+  return Object.freeze({
+    validationCommand,
+    validationCategory: validation.timedOut
+      ? "TIMED_OUT"
+      : validation.signal
+        ? "SIGNALED"
+        : "CHECK_FAILED",
+    validationOutputExcerpt: validation.outputExcerpt ?? null,
+    validationFailureReason: validationFailureReason(validation),
+  });
+}
+
+async function copyCandidateWorkspace({ source, workspace, shouldLinkSourceDependencies, timings }) {
+  const copyStartedAt = Date.now();
+  await rm(workspace, { recursive: true, force: true });
+  if (process.platform === "darwin") {
+    await copyCandidateWorkspaceWithClone(source, workspace);
+  } else {
+    await cp(source, workspace, {
+      recursive: true,
+      dereference: false,
+      verbatimSymlinks: true,
+      filter: (path) => shouldCopyCandidatePath(source, path),
+    });
+  }
+  await pruneCandidateWorkspace(workspace, source);
+  if (shouldLinkSourceDependencies) await linkSourceDependencies(source, workspace);
+  timings.workspaceCopyMs = Number(timings.workspaceCopyMs ?? 0) + elapsed(copyStartedAt);
+}
+
+async function restoreCandidateWorkspacePaths({ source, workspace, paths }) {
+  for (const path of paths) {
+    const sourcePath = join(source, path);
+    const candidatePath = join(workspace, path);
+    const sourceStat = await stat(sourcePath).catch(() => null);
+    if (!sourceStat) {
+      await rm(candidatePath, { recursive: true, force: true });
+      continue;
+    }
+    await mkdir(dirname(candidatePath), { recursive: true });
+    await cp(sourcePath, candidatePath, {
+      recursive: sourceStat.isDirectory(),
+      dereference: false,
+      verbatimSymlinks: true,
+      force: true,
+    });
+  }
 }
 function finalizedTimings(timings, startedAt) {
   return Object.freeze({
@@ -350,24 +516,14 @@ async function checkedOutRoot(value) {
 }
 
 async function collectContext(root, writePaths, readOnlyContextPaths) {
-  const entries = [];
-  async function visit(current) {
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
-      const fullPath = join(current, entry.name);
-      if (entry.isDirectory()) await visit(fullPath);
-      else if (entry.isFile()) entries.push(fullPath);
-    }
-  }
-  await visit(root);
+  const allowedPaths = new Map();
+  for (const path of await expandContextPaths(root, writePaths)) allowedPaths.set(path, true);
+  for (const path of readOnlyContextPaths) if (!allowedPaths.has(path)) allowedPaths.set(path, false);
+
   let bytes = 0;
   const files = [];
-  for (const fullPath of entries.sort()) {
-    const path = relative(root, fullPath);
-    const writable = isWritable(path, writePaths);
-    const readOnly = readOnlyContextPaths.includes(path);
-    if ((!writable && !readOnly) || isSensitivePath(path)) continue;
-    const content = await readFile(fullPath, "utf8").catch(() => null);
+  for (const [path, writable] of [...allowedPaths.entries()].sort((left, right) => left[0].localeCompare(right[0]))) {
+    const content = await readFile(join(root, path), "utf8").catch(() => null);
     if (
       content === null ||
       content.includes("\u0000") ||
@@ -387,11 +543,39 @@ async function collectContext(root, writePaths, readOnlyContextPaths) {
   return Object.freeze(files);
 }
 
+async function expandContextPaths(root, writePaths) {
+  const collected = new Set();
+  for (const pattern of writePaths) {
+    if (pattern.endsWith("/**")) {
+      const directory = join(root, pattern.slice(0, -3));
+      if (await stat(directory).catch(() => null)) await collectContextFiles(directory, root, collected);
+      continue;
+    }
+    const target = join(root, pattern);
+    const targetStat = await stat(target).catch(() => null);
+    if (!targetStat) continue;
+    if (targetStat.isDirectory()) await collectContextFiles(target, root, collected);
+    else if (targetStat.isFile()) collected.add(relative(root, target));
+  }
+  return [...collected].filter((path) => path && !isSensitivePath(path)).sort();
+}
+
+async function collectContextFiles(directory, root, collected) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory() && ignoredDirectories.has(entry.name)) continue;
+    const fullPath = join(directory, entry.name);
+    const relativePath = relative(root, fullPath);
+    if (entry.isDirectory()) await collectContextFiles(fullPath, root, collected);
+    else if (entry.isFile() && relativePath && !isSensitivePath(relativePath)) collected.add(relativePath);
+  }
+}
+
 function buildPatchPrompt(
   task,
   files,
   attempt = 1,
   previousResponseIssue = null,
+  previousValidationIssue = null,
 ) {
   return JSON.stringify({
     schema: "adx-model-patch-request-v1",
@@ -415,6 +599,7 @@ function buildPatchPrompt(
     },
     attempt,
     previousResponseIssue,
+    previousValidationIssue,
     rules: [
       "Return JSON only.",
       "Change only supplied writable paths. Files marked writable:false are read-only verification context and must never be included in patches.",
@@ -426,7 +611,7 @@ function buildPatchPrompt(
   });
 }
 
-async function requestValidatedPatches({ gateway, task, context, writePaths }) {
+async function requestValidatedPatches({ gateway, task, context, writePaths, previousValidationIssue = null, timeoutMs = 900_000 }) {
   let lastError;
   for (let attempt = 1; attempt <= maxModelAttempts; attempt += 1) {
     const completion = await gateway.complete({
@@ -437,11 +622,13 @@ async function requestValidatedPatches({ gateway, task, context, writePaths }) {
         context,
         attempt,
         lastError?.details?.responseIssue,
+        previousValidationIssue,
       ),
       correlationId: randomUUID(),
       maxTokens: 8192,
       temperature: 0,
       responseSchema: modelPatchResponseSchema,
+      timeoutMs,
     });
     try {
       return Object.freeze({
@@ -727,6 +914,56 @@ async function removeTransientCandidateOutputs(workspace) {
       rm(join(workspace, path), { recursive: true, force: true }),
     ),
   );
+}
+
+async function pruneCandidateWorkspace(workspace, source) {
+  await Promise.all(
+    Array.from(ignoredDirectories, (directory) =>
+      rm(join(workspace, directory), { recursive: true, force: true }),
+    ),
+  );
+  await pruneSensitiveFiles(workspace, source, "");
+}
+
+async function pruneSensitiveFiles(workspace, source, relativePath) {
+  for (const entry of await readdir(join(source, relativePath || "."), {
+    withFileTypes: true,
+  })) {
+    const nextRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      if (ignoredDirectories.has(entry.name)) continue;
+      await pruneSensitiveFiles(workspace, source, nextRelativePath);
+      continue;
+    }
+    if (!entry.isFile() || !isSensitivePath(nextRelativePath)) continue;
+    await rm(join(workspace, nextRelativePath), { force: true });
+  }
+}
+
+async function copyCandidateWorkspaceWithClone(source, workspace) {
+  await new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn("/bin/cp", ["-cR", source, workspace], {
+      stdio: ["ignore", "pipe", "pipe"],
+      shell: false,
+    });
+    let stderr = "";
+    const capture = (chunk) => {
+      stderr = appendOutputExcerpt(stderr, chunk);
+    };
+    child.stdout.on("data", capture);
+    child.stderr.on("data", capture);
+    child.once("error", rejectPromise);
+    child.once("close", (code, signal) => {
+      if (code === 0 && signal === null) return resolvePromise();
+      const error = new ChangeCaseError(
+        "MODEL_PATCH_CANDIDATE_COPY_FAILED",
+        stderr || "Failed to clone the candidate workspace.",
+      );
+      error.code = code ?? 1;
+      error.signal = signal;
+      rejectPromise(error);
+    });
+  });
 }
 
 async function digestTree(root) {

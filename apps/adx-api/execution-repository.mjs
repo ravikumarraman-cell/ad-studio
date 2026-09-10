@@ -9,7 +9,7 @@ import {
 import { authorizeResolvedEgress } from "./network-governance.mjs";
 
 export class PostgresExecutionRepository {
-  constructor({ connectionString, signer }) {
+  constructor({ connectionString, signer, heartbeatTimeoutSeconds = 30 }) {
     if (
       !connectionString ||
       !signer?.privateKey ||
@@ -23,6 +23,7 @@ export class PostgresExecutionRepository {
       idleTimeoutMillis: 10_000,
     });
     this.signer = signer;
+    this.heartbeatTimeoutSeconds = heartbeatTimeoutSeconds;
   }
   async scoped(scope, work) {
     const client = await this.pool.connect();
@@ -57,6 +58,16 @@ export class PostgresExecutionRepository {
         throw new ChangeCaseError(
           "EXECUTION_LEASE_NOT_ALLOWED",
           "Execution leases require an execution-ready Change Case.",
+        );
+      await this.#expireStaleRuns(client, scope, changeCaseId);
+      const activeRunRow = await client.query(
+        "SELECT id,status FROM adx_agent_run WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status IN ('LEASED','RUNNING') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+        [changeCaseId, scope.organizationId, scope.workspaceId],
+      );
+      if (activeRunRow.rowCount)
+        throw new ChangeCaseError(
+          "EXECUTION_RUN_ALREADY_IN_PROGRESS",
+          "A bounded implementation is already in progress for this Change Case.",
         );
       const lease = createExecutionLease({
         changeCaseId,
@@ -411,6 +422,7 @@ export class PostgresExecutionRepository {
     const allowedPhases = new Set([
       "CONTEXT_COLLECTION",
       "MODEL_REQUEST",
+      "MODEL_RESPONSE",
       "VALIDATION",
       "CANDIDATE_PROMOTION",
     ]);
@@ -430,6 +442,10 @@ export class PostgresExecutionRepository {
           "Execution run was not found.",
         );
       if (current.rows[0].status !== "RUNNING") return false;
+      await client.query(
+        "UPDATE adx_agent_run SET updated_at=now() WHERE id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='RUNNING'",
+        [runId, scope.organizationId, scope.workspaceId],
+      );
       const event = this.#event({
         runId,
         sequence: await this.#nextSequence(client, runId),
@@ -439,6 +455,18 @@ export class PostgresExecutionRepository {
       await this.#insertEvent(client, scope, event);
       return true;
     });
+  }
+  async heartbeatRun({ scope, runId }) {
+    return this.scoped(scope, async (client) =>
+      Boolean(
+        (
+          await client.query(
+            "UPDATE adx_agent_run SET updated_at=now() WHERE id=$1 AND organization_id=$2 AND workspace_id=$3 AND status IN ('LEASED','RUNNING')",
+            [runId, scope.organizationId, scope.workspaceId],
+          )
+        ).rowCount,
+      ),
+    );
   }
   async completeDispatch({ scope, leaseId, runId, result, request }) {
     return this.scoped(scope, async (client) => {
@@ -569,6 +597,7 @@ export class PostgresExecutionRepository {
   }
   async view(scope, changeCaseId) {
     return this.scoped(scope, async (client) => ({
+      ...(await this.#expireStaleRuns(client, scope, changeCaseId)),
       leases: (
         await client.query(
           'SELECT id,status,lease_digest AS "leaseDigest",issued_at AS "issuedAt",expires_at AS "expiresAt",revoked_at AS "revokedAt",revoke_reason AS "revokeReason" FROM adx_execution_lease WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 ORDER BY issued_at DESC',
@@ -593,6 +622,83 @@ export class PostgresExecutionRepository {
           typeof row?.eventType === "string",
       ),
     }));
+  }
+  async #expireStaleRuns(client, scope, changeCaseId) {
+    const expiredLeases = await client.query(
+      "UPDATE adx_execution_lease SET status='EXPIRED' WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='ACTIVE' AND expires_at <= now() RETURNING id",
+      [changeCaseId, scope.organizationId, scope.workspaceId],
+    );
+    const leaseIds = expiredLeases.rows.map((row) => row.id).filter(Boolean);
+    if (leaseIds.length)
+      await client.query(
+        "UPDATE adx_agent_run SET status='FAILED',updated_at=now() WHERE lease_id = ANY($1::uuid[]) AND organization_id=$2 AND workspace_id=$3 AND status IN ('LEASED','RUNNING')",
+        [leaseIds, scope.organizationId, scope.workspaceId],
+      );
+
+    const expiredRunsWithoutTerminalEvent = await client.query(
+      "SELECT run.id,run.lease_id AS \"leaseId\",lease.expires_at AS \"leaseExpiredAt\" FROM adx_agent_run run JOIN adx_execution_lease lease ON lease.id=run.lease_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 AND run.status='FAILED' AND lease.status='EXPIRED' AND NOT EXISTS (SELECT 1 FROM adx_agent_run_event event WHERE event.run_id=run.id AND event.event_type IN ('AgentRunCompleted.v1','AgentRunFailed.v1','AgentRunQuotaExceeded.v1','AgentRunCancellationObserved.v1')) FOR UPDATE OF run",
+      [changeCaseId, scope.organizationId, scope.workspaceId],
+    );
+    for (const run of expiredRunsWithoutTerminalEvent.rows) {
+      const terminalEvent = await client.query(
+        "SELECT 1 FROM adx_agent_run_event WHERE run_id=$1 AND event_type IN ('AgentRunCompleted.v1','AgentRunFailed.v1','AgentRunQuotaExceeded.v1','AgentRunCancellationObserved.v1') LIMIT 1",
+        [run.id],
+      );
+      if (terminalEvent.rowCount) continue;
+      const event = this.#event({
+        runId: run.id,
+        sequence: await this.#nextSequence(client, run.id),
+        eventType: "AgentRunFailed.v1",
+        payload: {
+          leaseId: run.leaseId,
+          errorCode: "EXECUTION_LEASE_EXPIRED",
+          errorDetails: {
+            reason:
+              "The bounded implementation did not complete before its signed execution lease expired.",
+            leaseExpiredAt: run.leaseExpiredAt,
+          },
+          artifacts: [],
+        },
+      });
+      await this.#insertEvent(client, scope, event);
+    }
+
+    const interruptedRuns = await client.query(
+      "SELECT run.id,run.lease_id AS \"leaseId\" FROM adx_agent_run run JOIN adx_execution_lease lease ON lease.id=run.lease_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 AND run.status IN ('LEASED','RUNNING') AND lease.status='ACTIVE' AND run.updated_at <= now() - ($4::integer * interval '1 second') FOR UPDATE OF run,lease",
+      [
+        changeCaseId,
+        scope.organizationId,
+        scope.workspaceId,
+        this.heartbeatTimeoutSeconds,
+      ],
+    );
+    for (const run of interruptedRuns.rows) {
+      await client.query(
+        "UPDATE adx_execution_lease SET status='REVOKED',revoked_at=now(),revoked_by='system:execution-reconciler',revoke_reason='EXECUTION_RUNNER_HEARTBEAT_LOST' WHERE id=$1 AND organization_id=$2 AND workspace_id=$3 AND status='ACTIVE'",
+        [run.leaseId, scope.organizationId, scope.workspaceId],
+      );
+      const failed = await client.query(
+        "UPDATE adx_agent_run SET status='FAILED',updated_at=now() WHERE id=$1 AND organization_id=$2 AND workspace_id=$3 AND status IN ('LEASED','RUNNING') RETURNING id",
+        [run.id, scope.organizationId, scope.workspaceId],
+      );
+      if (!failed.rowCount) continue;
+      const event = this.#event({
+        runId: run.id,
+        sequence: await this.#nextSequence(client, run.id),
+        eventType: "AgentRunFailed.v1",
+        payload: {
+          leaseId: run.leaseId,
+          errorCode: "EXECUTION_RUNNER_HEARTBEAT_LOST",
+          errorDetails: {
+            reason:
+              "The API worker stopped reporting progress before the run completed.",
+          },
+          artifacts: [],
+        },
+      });
+      await this.#insertEvent(client, scope, event);
+    }
+    return {};
   }
   async close() {
     await this.pool.end();
