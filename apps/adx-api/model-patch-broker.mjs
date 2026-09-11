@@ -31,7 +31,9 @@ const maxPatches = 12;
 const maxVerifierResponseAttempts = 3;
 const maxPatchResponseAttempts = 4;
 const maxSemanticFindings = 20;
-const maxCandidateRepairRounds = 3;
+const maxCandidateRepairRounds = 5;
+const maxCandidateValidationAttempts = 2;
+const maxCandidateEvidenceRepairAttempts = 1;
 const maxStoriesPerBatch = 1;
 const ignoredDirectories = new Set([
   ".git",
@@ -186,7 +188,12 @@ export class ModelPatchBroker {
       const completions = [];
       const storyEvidence = new Map();
       let requestedStories = normalizedTask.stories;
-      for (let validationAttempt = 1; validationAttempt <= 2; validationAttempt += 1) {
+      let evidenceRepairAttempts = 0;
+      for (
+        let validationAttempt = 1;
+        validationAttempt <= maxCandidateValidationAttempts;
+        validationAttempt += 1
+      ) {
         for (const batchTask of storyBatchTasks({
           ...normalizedTask,
           stories: requestedStories,
@@ -243,12 +250,14 @@ export class ModelPatchBroker {
         if (finalEvidenceIssue) {
           validation = failedValidation(finalEvidenceIssue);
           previousValidationIssue = finalEvidenceIssue;
-          if (validationAttempt < 2) {
+          if (evidenceRepairAttempts < maxCandidateEvidenceRepairAttempts) {
+            evidenceRepairAttempts += 1;
             requestedStories = storiesForValidationIssue(
               finalEvidenceIssue,
               normalizedTask.stories,
               storyCoverage,
             );
+            validationAttempt -= 1;
             continue;
           }
           break;
@@ -363,7 +372,7 @@ export class ModelPatchBroker {
             await reportProgress(onProgress, "MODEL_REQUEST");
             const response = await requestValidatedPatches({
               gateway: this.gateway,
-              task: repairTask,
+              task: repairContextTaskValue,
               context: repairContext,
               candidate,
               writePaths,
@@ -636,8 +645,23 @@ function storiesForValidationIssue(issue, stories, storyCoverage) {
 function repairContextTask(task, findings) {
   return {
     ...task,
-    objective: [task.objective, ...findings.map((finding) => finding.message)].join(" "),
+    objective: [
+      task.objective,
+      ...findings.flatMap((finding) => [
+        finding.message,
+        repairDirectiveForFinding(finding),
+      ]),
+    ].filter(Boolean).join(" "),
   };
+}
+
+function repairDirectiveForFinding(finding) {
+  const text = `${finding.code} ${finding.message}`.toLowerCase();
+  if (/reachab|routed|rendered|owner/.test(text))
+    return "Repair directive: patch and test the reachable routed owner itself, including its real data-loading path; a direct leaf/helper render or synthetic wrapper is not acceptance evidence.";
+  if (/workflow|handler|invok|caller|unreachable|guard/.test(text))
+    return `Repair directive: trace the exact caller payload through the public handler before every early guard, and add a regression that invokes that public handler with the caller-shaped event. For a finding that names multiple implementation owners, close and integration-test every named owner; testing a shared helper alone is insufficient. Named evidence paths: ${finding.evidencePaths.join(", ")}.`;
+  return "Repair directive: add an owner-level regression that reproduces the exact reported failure before changing the implementation.";
 }
 
 function repairIntegrationPriorityPaths(contextCatalog, task, evidencePaths) {
@@ -920,6 +944,13 @@ async function createContextCatalog(root, writePaths, readOnlyContextPaths) {
 async function collectContext(root, contextCatalog, task, priorityPaths = new Set()) {
   let bytes = 0;
   const files = [];
+  const priorityFileLimit = Math.max(
+    1024,
+    Math.min(
+      maxPriorityFileBytes,
+      Math.floor((maxContextBytes * 0.9) / Math.max(1, priorityPaths.size)),
+    ),
+  );
   const rankedPaths = rankContextPaths(contextCatalog, task).sort((left, right) =>
     Number(priorityPaths.has(right[0])) - Number(priorityPaths.has(left[0])),
   );
@@ -929,16 +960,11 @@ async function collectContext(root, contextCatalog, task, priorityPaths = new Se
     const contentBytes = Buffer.byteLength(content);
     if (contentBytes > maxInspectableFileBytes) continue;
     const priority = priorityPaths.has(path);
-    const fileLimit = priority ? maxPriorityFileBytes : maxFileBytes;
+    const fileLimit = priority ? priorityFileLimit : maxFileBytes;
     const truncated = contentBytes > fileLimit;
     const suppliedContent = truncated ? contextExcerpt(content, task, fileLimit) : content;
     const size = Buffer.byteLength(suppliedContent);
     if (bytes + size > maxContextBytes) {
-      if (priority)
-        throw new ChangeCaseError(
-          "MODEL_PATCH_VERIFIER_CONTEXT_EXCEEDED",
-          "Changed implementation and test evidence exceeded the bounded verifier context.",
-        );
       break;
     }
     bytes += size;
@@ -1094,6 +1120,8 @@ function buildPatchPrompt(
       "Include the exact supplied story key in a test name or assertion message so final accumulated evidence can be verified after later story requests.",
       "When previousValidationIssue reports a reachability, invocation, or data-flow defect, patch the existing application owner that closes that defect and test the owning integration. Cited evidence paths identify the failed evidence; they do not limit which supplied writable files may be patched.",
       "A repair response must close the exact reported defect. Do not return another isolated helper or direct helper test when the finding requires a reachable UI owner, route, handler, job, workflow owner, notification sender, or authoritative data source.",
+      "When previousValidationIssue reports a test-runtime or import failure, repair the test harness using existing repository conventions: mock unsupported static assets or modules before importing the owner, define a missing web global with a restorable mock instead of spying on an absent property, and do not change production behavior merely to satisfy the harness.",
+      "For Babel/Jest errors saying a jest.mock module factory cannot reference an out-of-scope variable, do not capture test helpers or fixtures in that factory. Use an inline jest.fn(), require values inside the factory when permitted, or declare a stable mock-prefixed variable before the factory according to the repository's Jest transform rules, then assert through the resulting mock.",
       "When a user-visible feature is added, include featureSpotlight and mark its visible root element with data-adx-feature equal to featureSpotlight.featureId. Otherwise set featureSpotlight to null.",
       "Do not add dependencies, run commands, request secrets, create commits, or claim verification.",
     ],
@@ -1103,6 +1131,7 @@ function buildPatchPrompt(
 
 async function requestValidatedPatches({ gateway, task, context, candidate, writePaths, previousValidationIssue = null, timeoutMs = 900_000 }) {
   let lastError;
+  const stagedPatches = new Map();
   for (let attempt = 1; attempt <= maxPatchResponseAttempts; attempt += 1) {
     const request = {
       system:
@@ -1127,8 +1156,9 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       task,
     });
     try {
+      const responseText = mergeStagedPatchResponse(completion.text, stagedPatches);
       const parsed = parseModelResponse(
-        completion.text,
+        responseText,
         writePaths,
         completion,
         task.stories,
@@ -1144,10 +1174,27 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         attempt === maxPatchResponseAttempts
       )
         throw withAttempts(error, attempt);
+      if (error?.details?.responseIssue === "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING") {
+        const partial = parseModelResponse(completion.text, writePaths, completion, []);
+        for (const patch of partial.patches) stagedPatches.set(patch.path, patch);
+        error.details.responseCorrection = `${error.details.responseCorrection} Previously accepted patches are retained transactionally for the next attempt. Emit the missing evidence patch; you do not need to repeat an already emitted path.`;
+      }
       lastError = error;
     }
   }
   throw lastError;
+}
+
+function mergeStagedPatchResponse(text, stagedPatches) {
+  if (!stagedPatches.size) return text;
+  const response = JSON.parse(unwrapJsonFence(text));
+  if (!Array.isArray(response?.patches)) return text;
+  const merged = new Map(stagedPatches);
+  for (const patch of response.patches) {
+    const path = typeof patch?.path === "string" ? patch.path.trim() : "";
+    if (path) merged.set(path, patch);
+  }
+  return JSON.stringify({ ...response, patches: [...merged.values()] });
 }
 
 async function validatePatchAnchors(root, patches, completion) {
@@ -1175,18 +1222,103 @@ async function validatePatchAnchors(root, patches, completion) {
         `Emit complete replacement content for new file ${patch.path}; anchored replacements are only valid for existing files.`,
       );
     for (const replacement of patch.replacements) {
-      const first = content.indexOf(replacement.oldText);
-      const last = content.lastIndexOf(replacement.oldText);
+      let first = content.indexOf(replacement.oldText);
+      let last = content.lastIndexOf(replacement.oldText);
+      let replacedLength = replacement.oldText.length;
+      if (first < 0) {
+        const whitespaceMatch = whitespaceEquivalentAnchorRange(content, replacement.oldText);
+        if (whitespaceMatch) {
+          first = whitespaceMatch.start;
+          last = whitespaceMatch.start;
+          replacedLength = whitespaceMatch.end - whitespaceMatch.start;
+        }
+      }
       if (first < 0 || first !== last)
         throw patchResponseError(
           "PATCH_ANCHOR_NOT_UNIQUE",
           `Anchored replacement for ${patch.path} must match exactly once.`,
           completion,
-          `For ${patch.path}, copy a larger exact oldText block from one supplied excerpt so it occurs exactly once in the current file. Do not shorten, paraphrase, or combine separate excerpts.`,
+          anchorCorrection(patch.path, content, replacement.oldText),
         );
-      content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacement.oldText.length)}`;
+      content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacedLength)}`;
     }
   }
+}
+
+function whitespaceEquivalentAnchorRange(content, oldText) {
+  const anchorLines = oldText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (anchorLines.length < 2) return null;
+  const contentLines = [];
+  const linePattern = /.*(?:\n|$)/g;
+  for (const match of content.matchAll(linePattern)) {
+    const text = match[0].endsWith("\n") ? match[0].slice(0, -1) : match[0];
+    if (!text.trim()) continue;
+    contentLines.push({ text: text.trim(), start: match.index, end: match.index + text.length });
+  }
+  const matches = [];
+  for (let index = 0; index <= contentLines.length - anchorLines.length; index += 1) {
+    if (anchorLines.every((line, offset) => contentLines[index + offset].text === line)) {
+      matches.push({
+        start: contentLines[index].start,
+        end: contentLines[index + anchorLines.length - 1].end,
+      });
+    }
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function anchorCorrection(path, content, oldText) {
+  const matchCount = oldText
+    ? content.split(oldText).length - 1
+    : 0;
+  const rejectedAnchor = JSON.stringify(oldText.slice(0, 500));
+  const currentExcerpt = matchCount === 0
+    ? currentAnchorExcerpt(content, oldText)
+    : null;
+  const excerptCorrection = currentExcerpt
+    ? ` Copy oldText exactly from this current candidate excerpt: ${JSON.stringify(currentExcerpt)}.`
+    : "";
+  return `For ${path}, the rejected oldText ${rejectedAnchor} matched ${matchCount} times. Do not reuse that exact oldText.${excerptCorrection} Select the intended occurrence and copy a larger contiguous block including adjacent unchanged lines until it occurs exactly once. Do not shorten, paraphrase, or combine separate excerpts.`;
+}
+
+function currentAnchorExcerpt(content, oldText) {
+  const contentLines = content.split("\n");
+  const anchorLines = [...new Set(oldText
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean))];
+  const normalizedContent = contentLines.map((line) => line.trim());
+  const candidates = [];
+  for (const anchorLine of anchorLines) {
+    for (let lineIndex = 0; lineIndex < normalizedContent.length; lineIndex += 1) {
+      if (normalizedContent[lineIndex] !== anchorLine) continue;
+      const neighborhood = new Set(
+        normalizedContent.slice(
+          Math.max(0, lineIndex - 12),
+          Math.min(normalizedContent.length, lineIndex + 13),
+        ),
+      );
+      const score = anchorLines.reduce(
+        (total, line) => total + (neighborhood.has(line) ? line.length + 1 : 0),
+        0,
+      );
+      candidates.push({ lineIndex, score, anchorLength: anchorLine.length });
+    }
+  }
+  candidates.sort(
+    (left, right) =>
+      right.score - left.score ||
+      right.anchorLength - left.anchorLength ||
+      left.lineIndex - right.lineIndex,
+  );
+  if (!candidates.length) return null;
+  const lineIndex = candidates[0].lineIndex;
+  const start = Math.max(0, lineIndex - 7);
+  const end = Math.min(contentLines.length, lineIndex + 10);
+  return contentLines.slice(start, end).join("\n");
 }
 
 async function verifyCandidateSemantics({

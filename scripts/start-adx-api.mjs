@@ -63,16 +63,17 @@ if (process.env.ADX_PREVIEW_NPMRC_FILE?.trim()) {
 
 const port = Number(process.env.PORT ?? 3100)
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('API_START_PORT_INVALID: PORT must be an integer between 1 and 65535.')
-await assertPortAvailable(port)
-console.log(`ADX API preflight passed. Starting on http://127.0.0.1:${port}`)
+const host = process.env.HOST?.trim() || '127.0.0.1'
+await assertPortAvailable(port, host)
+console.log(`ADX API preflight passed. Starting on http://${host}:${port}`)
 const runner = fileURLToPath(new URL('./run-adx-api-stage2.mjs', import.meta.url))
 const child = spawn(process.execPath, [runner], { env: process.env, stdio: 'inherit' })
 child.once('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0) })
 
-function assertPortAvailable(port) {
+function assertPortAvailable(port, host) {
   return new Promise((resolve, reject) => {
     const probe = createServer()
     probe.once('error', (error) => error.code === 'EADDRINUSE' ? reject(new Error(`API_START_PORT_IN_USE: Port ${port} is already in use. Stop the existing ADX API process, or start with PORT=<available-port> npm run api:start.`)) : reject(error))
-    probe.listen(port, '127.0.0.1', () => probe.close(resolve))
+    probe.listen(port, host, () => probe.close(resolve))
   })
 }

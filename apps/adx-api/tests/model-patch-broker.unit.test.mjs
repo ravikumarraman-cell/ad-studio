@@ -346,6 +346,7 @@ test("semantic verification rejects an isolated component and requires a reachab
   const repairPrompt = requests.filter((request) => request.name === "adx_model_patch_response")[1].prompt;
   assert.equal(repairPrompt.previousValidationIssue.validationCommand, "candidate verifier pipeline");
   assert.match(repairPrompt.previousValidationIssue.validationOutputExcerpt, /UI_NOT_REACHABLE/);
+  assert.match(repairPrompt.objective, /test the reachable routed owner itself/);
   assert.ok(repairPrompt.files.some((file) => file.path === "src/app.js"));
   await rm(root, { recursive: true, force: true });
 });
@@ -498,6 +499,94 @@ test("semantic verification compacts all evidence files after an unclassified ga
     semanticPrompts[1].files.map((file) => file.path),
     semanticPrompts[0].files.map((file) => file.path),
   );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("semantic verification fits changed evidence and integration owners within its context budget", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src", "routes"), { recursive: true });
+  const filler = `${"// preserve integration context ".padEnd(100, ".")}\n`.repeat(70);
+  for (let number = 0; number < 12; number += 1) {
+    const evidencePath = number === 11
+      ? join(source, "src", `evidence-${number}.test.js`)
+      : join(source, "src", `evidence-${number}.js`);
+    await writeFile(evidencePath, `${filler}export const marker${number} = "before";\n`);
+    await writeFile(join(source, "src", "routes", `owner-${number}.js`), `${filler}export const owner${number} = "marker";\n`);
+  }
+  let semanticFiles = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    semanticVerification: true,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        if (request.responseSchema.name === "adx_candidate_semantic_verification") {
+          semanticFiles = JSON.parse(request.prompt).files;
+          return {
+            model: "gpt-5.6-terra",
+            responseDigest: "sha256:semantic-budget",
+            text: JSON.stringify({
+              schema: "adx-candidate-semantic-verification-v1",
+              passed: true,
+              findings: [],
+            }),
+          };
+        }
+        const patches = Array.from({ length: 12 }, (_, number) => ({
+          path: `src/evidence-${number}${number === 11 ? ".test" : ""}.js`,
+          content: null,
+          replacements: [{
+            oldText: `export const marker${number} = "before";`,
+            newText: number === 11
+              ? `// STORY-1\nexport const marker${number} = "after";`
+              : `export const marker${number} = "after";`,
+          }],
+        }));
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: "sha256:coding-budget",
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches,
+            featureSpotlight: null,
+            storyCoverage: [{
+              storyKey: "STORY-1",
+              implementationPaths: patches.slice(0, -1).map((patch) => patch.path),
+              testPaths: [patches.at(-1).path],
+            }],
+          }),
+        };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Show marker",
+        narrative: "As a user, I want a marker, so that status is visible.",
+        scenarios: [{ given: "a marker", when: "it is viewed", then: "status is visible" }],
+      }],
+    },
+    repository,
+  });
+
+  assert.equal(result.promoted, true, JSON.stringify(result));
+  assert.equal(semanticFiles.length, 24);
+  assert.equal(
+    semanticFiles.reduce((total, file) => total + Buffer.byteLength(file.content), 0) <= 160 * 1024,
+    true,
+  );
+  assert.equal(semanticFiles.some((file) => file.path === "src/routes/owner-0.js"), true);
+  assert.equal(semanticFiles.some((file) => file.content.includes('marker0 = "after"')), true);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -894,7 +983,11 @@ test("model-patch broker retries a non-unique anchor before writing the batch", 
   assert.equal(result.promoted, true, JSON.stringify(result));
   assert.equal(requests.length, 2);
   assert.equal(requests[1].previousResponseIssue, "PATCH_ANCHOR_NOT_UNIQUE");
-  assert.match(requests[1].previousResponseCorrection, /copy a larger exact oldText block/);
+  assert.equal(
+    requests[1].previousResponseCorrection.includes('rejected oldText "// repeated" matched 2200 times'),
+    true,
+  );
+  assert.match(requests[1].previousResponseCorrection, /Do not reuse that exact oldText/);
   assert.equal(
     (await readFile(join(candidate, "src", "large-tenant.test.js"), "utf8")),
     'test("STORY-1 tenant status", () => {})\n',
@@ -1298,15 +1391,14 @@ test("model-patch broker tells a retry when a story has no patched test evidence
       status: () => ({ configured: true }),
       complete: async (request) => {
         calls.push(request);
-        const includeTestPatch = calls.length === 3;
+        const completingTestPatch = calls.length === 2;
         return {
           text: JSON.stringify({
             schema: "adx-model-patch-response-v1",
             patches: [
-              { path: "src/marker.js", content: 'export const marker = "after"\n' },
-              ...(includeTestPatch
-                ? [{ path: "src/marker.test.js", content: 'export const expected = "after"\n' }]
-                : []),
+              completingTestPatch
+                ? { path: "src/marker.test.js", content: 'export const expected = "after"\n' }
+                : { path: "src/marker.js", content: 'export const marker = "after"\n' },
             ],
             featureSpotlight: null,
             storyCoverage: [{
@@ -1336,12 +1428,14 @@ test("model-patch broker tells a retry when a story has no patched test evidence
   });
 
   assert.equal(result.promoted, true);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 2);
   assert.match(calls[1].prompt, /"previousResponseIssue":"STORY_COVERAGE_PATCHED_EVIDENCE_MISSING"/);
   assert.match(calls[1].prompt, /Missing implementation patches: none/);
   assert.match(calls[1].prompt, /Missing test patches: src\/marker\.test\.js/);
   assert.match(calls[1].prompt, /Exact emitted patch paths: src\/marker\.js/);
-  assert.match(calls[2].prompt, /A path named in storyCoverage does not count unless that exact path is also present in patches/);
+  assert.match(calls[1].prompt, /Previously accepted patches are retained transactionally/);
+  assert.equal(await readFile(join(candidate, "src", "marker.js"), "utf8"), 'export const marker = "after"\n');
+  assert.equal(await readFile(join(candidate, "src", "marker.test.js"), "utf8"), 'export const expected = "after"\n');
   await rm(root, { recursive: true, force: true });
 });
 

@@ -3030,7 +3030,7 @@ const server = createServer(async (request, response) => {
   return write(response, 404, { code: "NOT_FOUND" }, traceId);
 });
 
-server.listen(process.env.PORT || 3100, "127.0.0.1", () =>
+server.listen(process.env.PORT || 3100, process.env.HOST?.trim() || "127.0.0.1", () =>
   console.log(
     JSON.stringify({
       service: "adx-api",

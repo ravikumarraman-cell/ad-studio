@@ -23,3 +23,57 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  adx-api:
+    build:
+      context: .
+    command: npm run api:start
+    env_file:
+      - .env.local
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3100
+      DATABASE_URL: postgresql://adx:adx_local_only@postgres:5432/adx
+      ADX_UI_ORIGIN: http://localhost:${ADX_STUDIO_PORT:-5175}/
+      ADX_EVIDENCE_S3_ENDPOINT: http://minio:9000
+      ADX_LEDGER_SIGNING_PRIVATE_KEY_FILE: /run/keys/private.pem
+      ADX_LEDGER_SIGNING_PUBLIC_KEY_FILE: /run/keys/public.pem
+      ADX_PREVIEW_SOURCE_ROOT: /workspace/source
+      ADX_PREVIEW_CANDIDATE_ROOT: /workspace/candidate
+      ADX_PREVIEW_NPMRC_FILE: /run/secrets/npmrc
+      ADX_CODING_MODEL_SOURCE_ROOT: /workspace/source
+      ADX_CODING_MODEL_CANDIDATE_ROOT: /workspace/candidate
+      ADX_LOCAL_CODING_AGENT_SOURCE_ROOT: /workspace/source
+      ADX_LOCAL_VERIFIER_CANDIDATE_ROOT: /workspace/candidate
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - ./.adx-ledger-private.pem:/run/keys/private.pem:ro
+      - ./.adx-ledger-public.pem:/run/keys/public.pem:ro
+      - ${HOME}/.npmrc:/run/secrets/npmrc:ro
+      - ${ADX_DOCKER_SOURCE_ROOT:-../cloud-asset-inventory}:/workspace/source:ro
+      - ${ADX_DOCKER_CANDIDATE_ROOT:-../../adx-cloud-asset-inventory-candidate}:/workspace/candidate
+      - /var/run/docker.sock:/var/run/docker.sock
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  adx-studio:
+    build:
+      context: .
+    command: npm run dev -- --port 5173
+    environment:
+      HOST: 0.0.0.0
+      ADX_API_ORIGIN: http://adx-api:3100
+    ports:
+      - "127.0.0.1:${ADX_STUDIO_PORT:-5175}:5173"
+    depends_on:
+      adx-api:
+        condition: service_healthy

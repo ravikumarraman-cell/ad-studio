@@ -1,0 +1,17 @@
+.git
+.env
+.env.*
+!.env.example
+.adx-ledger-*.pem
+node_modules
+**/node_modules
+dist
+**/dist
+coverage
+**/coverage
+test-results
+**/test-results
+playwright-report
+**/playwright-report
+.DS_Store
+npm-debug.log*
