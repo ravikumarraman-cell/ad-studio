@@ -107,6 +107,266 @@ test("model-patch broker applies only a validated writable-file replacement in a
   );
 });
 
+test("model-patch broker prioritizes task-relevant files before applying the context byte budget", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  for (let index = 0; index < 8; index += 1) {
+    await writeFile(join(source, "src", `early-${index}.js`), "x".repeat(22 * 1024));
+  }
+  await writeFile(join(source, "src", "tenant-search.js"), 'export const marker = "before"\n');
+  await writeFile(join(source, "src", "tenant-search.test.js"), 'export const expected = "before"\n');
+  const requests = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        requests.push(request);
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: "sha256:response",
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/tenant-search.js", content: 'export const marker = "after"\n' },
+              { path: "src/tenant-search.test.js", content: 'export const expected = "after"\n' },
+            ],
+            featureSpotlight: {
+              featureId: "tenant-search",
+              title: "Tenant search",
+              summary: "Tenant search behavior is available.",
+            },
+          }),
+        };
+      },
+    },
+    validate: async () => ({
+      code: 0,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+    }),
+  });
+
+  await broker.execute({
+    adapter,
+    task: { ...task, objective: "Implement tenant search behavior." },
+    repository,
+  });
+
+  const paths = JSON.parse(requests[0].prompt).files.map((file) => file.path);
+  assert.deepEqual(paths.slice(0, 2), ["src/tenant-search.js", "src/tenant-search.test.js"]);
+  assert.equal(paths.includes("src/early-7.js"), false);
+});
+
+test("model-patch broker accumulates bounded story batches before final validation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  for (let index = 1; index <= 3; index += 1) {
+    await writeFile(join(source, "src", `story-${index}.js`), `export const value = "before-${index}"\n`);
+    await writeFile(join(source, "src", `story-${index}.test.js`), `export const expected = "before-${index}"\n`);
+  }
+  const requests = [];
+  let validationCount = 0;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        const prompt = JSON.parse(request.prompt);
+        requests.push(prompt);
+        const storyNumbers = prompt.stories.map((story) => story.key.split("-").at(-1));
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: `sha256:batch-${requests.length}`,
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: storyNumbers.flatMap((number) => [
+              { path: `src/story-${number}.js`, content: `export const value = "after-${number}"\n` },
+              { path: `src/story-${number}.test.js`, content: `export const expected = "after-${number}"\n` },
+            ]),
+            featureSpotlight: null,
+            storyCoverage: storyNumbers.map((number) => ({
+              storyKey: `STORY-${number}`,
+              implementationPaths: [`src/story-${number}.js`],
+              testPaths: [`src/story-${number}.test.js`],
+            })),
+          }),
+        };
+      },
+    },
+    validate: async ({ cwd }) => {
+      validationCount += 1;
+      assert.equal(await readFile(join(cwd, "src", "story-1.js"), "utf8"), 'export const value = "after-1"\n');
+      assert.equal(await readFile(join(cwd, "src", "story-3.js"), "utf8"), 'export const value = "after-3"\n');
+      return {
+        code: 0,
+        signal: null,
+        timedOut: false,
+        outputBytes: 0,
+        outputDigest: "sha256:test",
+      };
+    },
+  });
+  const stories = [1, 2, 3].map((number) => ({
+    key: `STORY-${number}`,
+    title: `Story ${number}`,
+    narrative: `As a user, I want behavior ${number}, so that it is available.`,
+    scenarios: [{ given: `state ${number}`, when: "it is viewed", then: "the behavior is shown" }],
+  }));
+
+  const result = await broker.execute({ adapter, task: { ...task, stories }, repository });
+
+  assert.deepEqual(requests.map((request) => request.stories.map((story) => story.key)), [
+    ["STORY-1"],
+    ["STORY-2"],
+    ["STORY-3"],
+  ]);
+  assert.equal(
+    requests[1].files.find((file) => file.path === "src/story-1.js").content,
+    'export const value = "after-1"\n',
+  );
+  assert.deepEqual(result.storyCoverage.map((entry) => entry.storyKey), ["STORY-1", "STORY-2", "STORY-3"]);
+  assert.equal(validationCount, 1);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker applies exact anchored replacements to oversized files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  const anchor = 'export const tenantStatus = "before";';
+  await writeFile(join(source, "src", "large-tenant.js"), `${"// tenant context\n".repeat(1800)}${anchor}\n`);
+  await writeFile(join(source, "src", "large-tenant.test.js"), 'test("existing", () => {})\n');
+  let observedTruncatedContext = false;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        const prompt = JSON.parse(request.prompt);
+        observedTruncatedContext = prompt.files.some((file) =>
+          file.path === "src/large-tenant.js" && file.truncated === true && file.content.includes(anchor));
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: "sha256:anchored",
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              {
+                path: "src/large-tenant.js",
+                content: null,
+                replacements: [{ oldText: anchor, newText: 'export const tenantStatus = "after";' }],
+              },
+              {
+                path: "src/large-tenant.test.js",
+                content: 'test("STORY-1 tenant status", () => {})\n',
+                replacements: [],
+              },
+            ],
+            featureSpotlight: null,
+            storyCoverage: [{
+              storyKey: "STORY-1",
+              implementationPaths: ["src/large-tenant.js"],
+              testPaths: ["src/large-tenant.test.js"],
+            }],
+          }),
+        };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+  const storyTask = {
+    ...task,
+    stories: [{
+      key: "STORY-1",
+      title: "Show tenant status",
+      narrative: "As a user, I want tenant status, so that readiness is visible.",
+      scenarios: [{ given: "a tenant", when: "it is viewed", then: "status is shown" }],
+    }],
+  };
+
+  const result = await broker.execute({ adapter, task: storyTask, repository });
+
+  assert.equal(result.promoted, true, JSON.stringify(result));
+  assert.equal(observedTruncatedContext, true);
+  const candidateContent = await readFile(join(candidate, "src", "large-tenant.js"), "utf8");
+  assert.equal(candidateContent.includes('tenantStatus = "after"'), true);
+  assert.equal(candidateContent.includes("// tenant context"), true);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker rejects later batches that remove earlier story test evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "feature.js"), 'export const value = "before"\n');
+  await writeFile(join(source, "src", "feature.test.js"), 'test("existing", () => {})\n');
+  let requestCount = 0;
+  let validationCount = 0;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        requestCount += 1;
+        const storyKey = JSON.parse(request.prompt).stories[0].key;
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: `sha256:${storyKey}-${requestCount}`,
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/feature.js", content: `export const value = "${storyKey}"\n` },
+              { path: "src/feature.test.js", content: `test("${storyKey}", () => {})\n` },
+            ],
+            featureSpotlight: null,
+            storyCoverage: [{
+              storyKey,
+              implementationPaths: ["src/feature.js"],
+              testPaths: ["src/feature.test.js"],
+            }],
+          }),
+        };
+      },
+    },
+    validate: async () => {
+      validationCount += 1;
+      return { code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" };
+    },
+  });
+  const stories = [1, 2].map((number) => ({
+    key: `STORY-${number}`,
+    title: `Story ${number}`,
+    narrative: `As a user, I want behavior ${number}, so that it remains available.`,
+    scenarios: [{ given: "a feature", when: "it changes", then: `behavior ${number} remains` }],
+  }));
+
+  const result = await broker.execute({ adapter, task: { ...task, stories }, repository });
+
+  assert.equal(result.promoted, false);
+  assert.equal(result.errorCode, "MODEL_PATCH_VALIDATION_FAILED");
+  assert.match(JSON.stringify(result.errorDetails), /STORY-1.*removed/i);
+  assert.equal(requestCount, 4);
+  assert.equal(validationCount, 0);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("model-patch broker requires implementation and test patches for every approved story", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -220,8 +480,53 @@ test("model-patch broker rejects implementation files relabeled as story tests",
       repository,
     }),
     (error) => error.code === "MODEL_PATCH_RESPONSE_INVALID" &&
-      error.details?.responseIssue === "STORY_COVERAGE_INVALID",
+      error.details?.responseIssue === "STORY_COVERAGE_PATH_OVERLAP",
   );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker accepts standard Python test filenames outside a tests directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.py"), 'marker = "before"\n');
+  await writeFile(join(source, "src", "test_marker.py"), 'def test_marker():\n    assert True\n');
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: gateway({
+      schema: "adx-model-patch-response-v1",
+      patches: [
+        { path: "src/marker.py", content: 'marker = "after"\n' },
+        { path: "src/test_marker.py", content: 'def test_marker():\n    assert "after" == "after"\n' },
+      ],
+      featureSpotlight: null,
+      storyCoverage: [{
+        storyKey: "STORY-1",
+        implementationPaths: ["src/marker.py"],
+        testPaths: ["src/test_marker.py"],
+      }],
+    }),
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Show marker",
+        narrative: "As a user, I want to see the marker, so that I know its state.",
+        scenarios: [{ given: "a marker", when: "it is viewed", then: "its state is shown" }],
+      }],
+    },
+    repository,
+  });
+
+  assert.equal(result.promoted, true);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -316,6 +621,116 @@ test("model-patch broker retries one malformed model response with deterministic
   assert.equal(calls[0].temperature, 0);
   assert.equal(calls[0].responseSchema.strict, true);
   assert.match(calls[1].prompt, /"previousResponseIssue":"NON_JSON"/);
+});
+
+test("model-patch broker tells a retry when a story has no patched test evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  await writeFile(join(source, "src", "marker.test.js"), 'export const expected = "before"\n');
+  const calls = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        calls.push(request);
+        const includeTestPatch = calls.length === 2;
+        return {
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/marker.js", content: 'export const marker = "after"\n' },
+              ...(includeTestPatch
+                ? [{ path: "src/marker.test.js", content: 'export const expected = "after"\n' }]
+                : []),
+            ],
+            featureSpotlight: null,
+            storyCoverage: [{
+              storyKey: "STORY-1",
+              implementationPaths: ["src/marker.js"],
+              testPaths: ["src/marker.test.js"],
+            }],
+          }),
+          finishReason: "stop",
+        };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Show marker",
+        narrative: "As a user, I want to see the marker, so that I know its state.",
+        scenarios: [{ given: "a marker", when: "it is viewed", then: "its state is shown" }],
+      }],
+    },
+    repository,
+  });
+
+  assert.equal(result.promoted, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].prompt, /"previousResponseIssue":"STORY_COVERAGE_PATCHED_EVIDENCE_MISSING"/);
+  assert.match(calls[1].prompt, /Add patches for the missing story evidence or use emitted patch paths: src\/marker\.test\.js/);
+  assert.match(calls[1].prompt, /Exact emitted patch paths: src\/marker\.js/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker removes extra unpatched references from valid story evidence", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  await writeFile(join(source, "src", "marker.test.js"), 'export const expected = "before"\n');
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: gateway({
+      schema: "adx-model-patch-response-v1",
+      patches: [
+        { path: "src/marker.js", content: 'export const marker = "after"\n' },
+        { path: "src/marker.test.js", content: 'export const expected = "after"\n' },
+      ],
+      featureSpotlight: null,
+      storyCoverage: [{
+        storyKey: "STORY-1",
+        implementationPaths: ["src/marker.js", "src/existing-helper.js"],
+        testPaths: ["src/marker.test.js", "src/existing-helper.test.js"],
+      }],
+    }),
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Show marker",
+        narrative: "As a user, I want to see the marker, so that I know its state.",
+        scenarios: [{ given: "a marker", when: "it is viewed", then: "its state is shown" }],
+      }],
+    },
+    repository,
+  });
+
+  assert.deepEqual(result.storyCoverage, [{
+    storyKey: "STORY-1",
+    implementationPaths: ["src/marker.js"],
+    testPaths: ["src/marker.test.js"],
+  }]);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("model-patch broker classifies a failed validation command", async () => {

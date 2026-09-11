@@ -262,6 +262,21 @@ test("execution handoff explains transient gateway failures and validation failu
   assert.match(validationFailure.nextAction, /ADX already retried from a clean workspace/);
   assert.match(validationFailure.nextAction, /npm run verify:production/);
 
+  const storyCoverageFailure = describeExecutionFailure(
+    { responseIssue: "STORY_COVERAGE_INVALID" },
+    "MODEL_PATCH_RESPONSE_INVALID",
+  );
+  assert.match(storyCoverageFailure.summary, /every approved story/i);
+  assert.match(storyCoverageFailure.reason, /STORY_COVERAGE_INVALID/);
+  assert.match(storyCoverageFailure.nextAction, /implementation and test files/i);
+
+  const legacyResponseFailure = describeExecutionFailure(
+    {},
+    "MODEL_PATCH_RESPONSE_INVALID",
+  );
+  assert.match(legacyResponseFailure.reason, /before detailed model-response diagnostics/i);
+  assert.match(legacyResponseFailure.nextAction, /Retry once/i);
+
   const leaseExpiration = describeExecutionFailure(
     {
       reason: "The signed lease elapsed during context collection.",

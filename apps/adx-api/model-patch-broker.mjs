@@ -22,9 +22,11 @@ import { validateCodingAgentAdapter } from "./coding-agent-adapters.mjs";
 
 const maxContextBytes = 160 * 1024;
 const maxFileBytes = 24 * 1024;
+const maxInspectableFileBytes = 512 * 1024;
 const maxPatchBytes = 64 * 1024;
 const maxPatches = 12;
 const maxModelAttempts = 2;
+const maxStoriesPerBatch = 1;
 const ignoredDirectories = new Set([
   ".git",
   "node_modules",
@@ -58,6 +60,16 @@ const validationCommands = Object.freeze({
     executable: "npm",
     arguments: Object.freeze(["--prefix", "frontend", "test", "--", "--runInBand"]),
   }),
+  "cloud-asset-inventory verify": Object.freeze([
+    Object.freeze({
+      executable: "python3",
+      arguments: Object.freeze(["-m", "compileall", "-q", "backend", "jobs"]),
+    }),
+    Object.freeze({
+      executable: "npm",
+      arguments: Object.freeze(["--prefix", "frontend", "test", "--", "--runInBand"]),
+    }),
+  ]),
   "npm run verify:health-x": Object.freeze({
     executable: "npm",
     arguments: Object.freeze(["run", "verify:health-x"]),
@@ -147,17 +159,13 @@ export class ModelPatchBroker {
         shouldLinkSourceDependencies: this.linkSourceDependencies,
         timings,
       });
-      const contextPromise = executionState.contextPromise.then((context) => {
-        timings.contextMs = elapsed(contextStartedAt);
-        return context;
-      });
-      const [context] = await Promise.all([contextPromise, workspaceReadyPromise]);
+      await workspaceReadyPromise;
       const sourceDigestPromise = digestTree(source);
       let validation = null;
       let completion = null;
-      let patches = null;
       let featureSpotlight = null;
       let previousValidationIssue = null;
+      let storyCoverage = Object.freeze([]);
       let touchedPaths = new Set();
       for (let validationAttempt = 1; validationAttempt <= 2; validationAttempt += 1) {
         if (validationAttempt > 1) {
@@ -168,30 +176,65 @@ export class ModelPatchBroker {
           });
           touchedPaths = new Set();
         }
-        const modelStartedAt = Date.now();
-        await reportProgress(onProgress, "MODEL_REQUEST");
-        const response = await requestValidatedPatches({
-          gateway: this.gateway,
-          task: normalizedTask,
-          context,
-          writePaths,
-          previousValidationIssue,
-          timeoutMs,
-        });
-        timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(modelStartedAt);
-        completion = response.completion;
-        patches = response.patches;
-        featureSpotlight = response.featureSpotlight;
-        var storyCoverage = response.storyCoverage;
-        await reportProgress(onProgress, "MODEL_RESPONSE");
+        const coverage = [];
+        const completions = [];
+        const storyEvidence = new Map();
+        featureSpotlight = null;
+        for (const batchTask of storyBatchTasks(normalizedTask)) {
+          const batchContextStartedAt = Date.now();
+          const context = await collectContext(
+            candidate,
+            writePaths,
+            this.readOnlyContextPaths,
+            batchTask,
+          );
+          timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(batchContextStartedAt);
+          const modelStartedAt = Date.now();
+          await reportProgress(onProgress, "MODEL_REQUEST");
+          const response = await requestValidatedPatches({
+            gateway: this.gateway,
+            task: batchTask,
+            context,
+            writePaths,
+            previousValidationIssue,
+            timeoutMs,
+          });
+          timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(modelStartedAt);
+          completions.push(response.completion);
+          coverage.push(...response.storyCoverage);
+          featureSpotlight ??= response.featureSpotlight;
+          await reportProgress(onProgress, "MODEL_RESPONSE");
 
-        const patchStartedAt = Date.now();
-        for (const patch of patches) {
-          await writePatch(candidate, patch);
-          touchedPaths.add(patch.path);
+          const patchStartedAt = Date.now();
+          const previousTestContent = await readCandidateFiles(
+            candidate,
+            response.storyCoverage.flatMap((entry) => entry.testPaths),
+          );
+          for (const patch of response.patches) {
+            await writePatch(candidate, patch);
+            touchedPaths.add(patch.path);
+          }
+          await captureStoryEvidence(candidate, response.storyCoverage, previousTestContent, storyEvidence);
+          timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
         }
+        completion = combinedCompletion(completions);
+        storyCoverage = Object.freeze(coverage);
         executionState.lastTouchedPaths = new Set(touchedPaths);
-        timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
+
+        const finalEvidenceIssue = await finalCandidateEvidenceIssue({
+          source,
+          candidate,
+          stories: normalizedTask.stories,
+          storyCoverage,
+          storyEvidence,
+          touchedPaths,
+        });
+        if (finalEvidenceIssue) {
+          validation = failedValidation(finalEvidenceIssue);
+          previousValidationIssue = finalEvidenceIssue;
+          if (validationAttempt < 2) continue;
+          break;
+        }
 
         const validationStartedAt = Date.now();
         await reportProgress(onProgress, "VALIDATION");
@@ -311,7 +354,6 @@ function getExecutionState({
   let state = executionStateCache.get(key);
   if (!state) {
     state = {
-      contextPromise: collectContext(source, writePaths, readOnlyContextPaths),
       lastTouchedPaths: new Set(),
       workspaceSeeded: false,
       seedPromise: null,
@@ -517,6 +559,26 @@ function normalizeTaskStories(value) {
   return Object.freeze(stories);
 }
 
+function storyBatchTasks(task) {
+  if (!task.stories.length) return Object.freeze([task]);
+  const batches = [];
+  for (let index = 0; index < task.stories.length; index += maxStoriesPerBatch) {
+    batches.push(Object.freeze({
+      ...task,
+      stories: Object.freeze(task.stories.slice(index, index + maxStoriesPerBatch)),
+    }));
+  }
+  return Object.freeze(batches);
+}
+
+function combinedCompletion(completions) {
+  const last = completions.at(-1);
+  return Object.freeze({
+    ...last,
+    responseDigest: sha256(completions.map((completion) => completion.responseDigest)),
+  });
+}
+
 function normalizeWritePaths(paths) {
   if (!Array.isArray(paths) || !paths.length)
     throw new ChangeCaseError(
@@ -579,25 +641,24 @@ async function checkedOutRoot(value) {
   return root;
 }
 
-async function collectContext(root, writePaths, readOnlyContextPaths) {
+async function collectContext(root, writePaths, readOnlyContextPaths, task) {
   const allowedPaths = new Map();
   for (const path of await expandContextPaths(root, writePaths)) allowedPaths.set(path, true);
   for (const path of readOnlyContextPaths) if (!allowedPaths.has(path)) allowedPaths.set(path, false);
 
   let bytes = 0;
   const files = [];
-  for (const [path, writable] of [...allowedPaths.entries()].sort((left, right) => left[0].localeCompare(right[0]))) {
+  for (const [path, writable] of rankContextPaths(allowedPaths, task)) {
     const content = await readFile(join(root, path), "utf8").catch(() => null);
-    if (
-      content === null ||
-      content.includes("\u0000") ||
-      Buffer.byteLength(content) > maxFileBytes
-    )
-      continue;
-    const size = Buffer.byteLength(content);
+    if (content === null || content.includes("\u0000")) continue;
+    const contentBytes = Buffer.byteLength(content);
+    if (contentBytes > maxInspectableFileBytes) continue;
+    const truncated = contentBytes > maxFileBytes;
+    const suppliedContent = truncated ? contextExcerpt(content, task) : content;
+    const size = Buffer.byteLength(suppliedContent);
     if (bytes + size > maxContextBytes) break;
     bytes += size;
-    files.push({ path, content, writable });
+    files.push({ path, content: suppliedContent, writable, ...(truncated ? { truncated: true } : {}) });
   }
   if (!files.length)
     throw new ChangeCaseError(
@@ -605,6 +666,67 @@ async function collectContext(root, writePaths, readOnlyContextPaths) {
       "No readable files matched the model-patch writable path allowlist.",
     );
   return Object.freeze(files);
+}
+
+function contextExcerpt(content, task) {
+  const lines = content.split("\n");
+  const terms = contextSearchTerms(task);
+  const ranges = [[0, 35], [Math.max(0, lines.length - 140), lines.length]];
+  for (const term of terms) {
+    for (let index = 0; index < lines.length; index += 1) {
+      if (lines[index].toLowerCase().includes(term)) ranges.push([index - 6, index + 7]);
+    }
+  }
+  let excerpt = "";
+  const included = new Set();
+  for (const [rawStart, rawEnd] of ranges) {
+    const blockLines = [];
+    for (let index = Math.max(0, rawStart); index < Math.min(lines.length, rawEnd); index += 1) {
+      if (!included.has(index)) blockLines.push(lines[index]);
+    }
+    if (!blockLines.length) continue;
+    const current = blockLines.join("\n");
+    const addition = `${excerpt ? "\n\n[... omitted unchanged lines ...]\n\n" : ""}${current}`;
+    if (Buffer.byteLength(excerpt + addition) > maxFileBytes) continue;
+    excerpt += addition;
+    for (let index = Math.max(0, rawStart); index < Math.min(lines.length, rawEnd); index += 1)
+      included.add(index);
+  }
+  return excerpt;
+}
+
+function rankContextPaths(allowedPaths, task) {
+  const terms = contextSearchTerms(task);
+  return [...allowedPaths.entries()].sort((left, right) => {
+    const scoreDifference = contextPathScore(right[0], terms) - contextPathScore(left[0], terms);
+    return scoreDifference || left[0].localeCompare(right[0]);
+  });
+}
+
+function contextSearchTerms(task) {
+  const text = [
+    task.objective,
+    ...task.stories.flatMap((story) => [
+      story.title,
+      story.narrative,
+      ...story.scenarios.flatMap((scenario) => [scenario.given, scenario.when, scenario.then]),
+    ]),
+  ].join(" ");
+  const ignored = new Set([
+    "about", "after", "before", "being", "every", "given", "implement", "into",
+    "must", "should", "story", "that", "their", "then", "these", "this", "when",
+    "where", "with", "without",
+  ]);
+  return [...new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? [])
+    .filter((term) => term.length >= 4 && !ignored.has(term)))];
+}
+
+function contextPathScore(path, terms) {
+  const normalizedPath = path.toLowerCase().replace(/[^a-z0-9]+/g, " ");
+  return terms.reduce(
+    (score, term) => score + (normalizedPath.includes(term) ? term.length : 0),
+    0,
+  );
 }
 
 async function expandContextPaths(root, writePaths) {
@@ -639,6 +761,7 @@ function buildPatchPrompt(
   files,
   attempt = 1,
   previousResponseIssue = null,
+  previousResponseCorrection = null,
   previousValidationIssue = null,
 ) {
   return JSON.stringify({
@@ -652,7 +775,8 @@ function buildPatchPrompt(
       patches: [
         {
           path: "relative writable path",
-          content: "complete replacement file content",
+          content: "complete replacement file content, or null for anchored replacements",
+          replacements: [{ oldText: "exact existing text", newText: "replacement text" }],
         },
       ],
       featureSpotlight: {
@@ -671,13 +795,19 @@ function buildPatchPrompt(
     },
     attempt,
     previousResponseIssue,
+    previousResponseCorrection,
     previousValidationIssue,
     rules: [
       "Return JSON only.",
-      "Change only supplied writable paths. Files marked writable:false are read-only verification context and must never be included in patches.",
-      "Use complete replacement content for each changed file.",
+      "Modify existing files only when they are supplied with writable:true. You may create a new file under an approved writable root when necessary, especially a domain-local test file. Files marked writable:false are read-only verification context and must never be included in patches.",
+      "For files marked truncated:false, use complete replacement content and an empty replacements array.",
+      "For files marked truncated:true, set content to null and use minimal exact anchored replacements copied from one contiguous supplied excerpt. Each oldText must occur exactly once in the current file.",
       "Implement every supplied approved story and all of its Given/When/Then scenarios.",
-      "For every supplied story, include one storyCoverage entry whose implementationPaths and testPaths refer only to files in this patch response.",
+      "Implement only the story supplied in this request. Do not anticipate, claim, or implement stories that are not present in this request; later stories are handled by separate requests against the accumulated candidate.",
+      "For every supplied story, include exactly one storyCoverage entry whose implementationPaths and testPaths refer only to files in this patch response.",
+      "Each testPaths entry must be distinct from implementationPaths and use a recognizable test path: a test/tests/__tests__ directory, test_*.py, *_test.py, *.test.*, or *.spec.*.",
+      "Create or extend a test beside the owning implementation or in its established domain test directory. Never repurpose an unrelated test suite merely to satisfy storyCoverage.",
+      "Include the exact supplied story key in a test name or assertion message so final accumulated evidence can be verified after later story requests.",
       "When a user-visible feature is added, include featureSpotlight and mark its visible root element with data-adx-feature equal to featureSpotlight.featureId. Otherwise set featureSpotlight to null.",
       "Do not add dependencies, run commands, request secrets, create commits, or claim verification.",
     ],
@@ -696,6 +826,7 @@ async function requestValidatedPatches({ gateway, task, context, writePaths, pre
         context,
         attempt,
         lastError?.details?.responseIssue,
+        lastError?.details?.responseCorrection,
         previousValidationIssue,
       ),
       correlationId: randomUUID(),
@@ -742,8 +873,24 @@ const modelPatchResponseSchema = Object.freeze({
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["path", "content"],
-          properties: { path: { type: "string" }, content: { type: "string" } },
+          required: ["path", "content", "replacements"],
+          properties: {
+            path: { type: "string" },
+            content: { anyOf: [{ type: "string" }, { type: "null" }] },
+            replacements: {
+              type: "array",
+              maxItems: 20,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["oldText", "newText"],
+                properties: {
+                  oldText: { type: "string", minLength: 1 },
+                  newText: { type: "string" },
+                },
+              },
+            },
+          },
         },
       },
       featureSpotlight: {
@@ -819,6 +966,14 @@ function parseModelResponse(
   const patches = response.patches.map((patch) => {
     const path = typeof patch?.path === "string" ? patch.path.trim() : "";
     const content = typeof patch?.content === "string" ? patch.content : null;
+    const replacements = Array.isArray(patch?.replacements)
+      ? patch.replacements.map((replacement) => ({
+          oldText: typeof replacement?.oldText === "string" ? replacement.oldText : "",
+          newText: typeof replacement?.newText === "string" ? replacement.newText : null,
+        }))
+      : [];
+    const usesReplacement = content !== null;
+    const usesAnchors = replacements.length > 0;
     if (
       !path ||
       path.startsWith("/") ||
@@ -826,9 +981,13 @@ function parseModelResponse(
       path.split("/").includes("..") ||
       !isWritable(path, writePaths) ||
       isSensitivePath(path) ||
-      content === null ||
-      content.includes("\u0000") ||
-      Buffer.byteLength(content) > maxPatchBytes ||
+      usesReplacement === usesAnchors ||
+      (usesReplacement && (content.includes("\u0000") || Buffer.byteLength(content) > maxPatchBytes)) ||
+      (usesAnchors && replacements.some((replacement) =>
+        !replacement.oldText || replacement.newText === null || replacement.oldText.includes("\u0000") ||
+        replacement.newText.includes("\u0000") ||
+        Buffer.byteLength(replacement.oldText) + Buffer.byteLength(replacement.newText) > maxPatchBytes
+      )) ||
       seen.has(path)
     )
       throw patchResponseError(
@@ -837,7 +996,7 @@ function parseModelResponse(
         completion,
       );
     seen.add(path);
-    return Object.freeze({ path, content });
+    return Object.freeze({ path, content, replacements: Object.freeze(replacements.map(Object.freeze)) });
   });
   const storyCoverage = parseStoryCoverage(
     response.storyCoverage,
@@ -867,22 +1026,52 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
   const seen = new Set();
   const coverage = value.map((entry) => {
     const storyKey = typeof entry?.storyKey === "string" ? entry.storyKey.trim() : "";
-    const implementationPaths = normalizeCoveragePaths(entry?.implementationPaths);
-    const testPaths = normalizeCoveragePaths(entry?.testPaths);
-    const implementationPathSet = new Set(implementationPaths);
-    if (
-      !requiredKeys.has(storyKey) ||
-      seen.has(storyKey) ||
-      !implementationPaths.length ||
-      !testPaths.length ||
-      testPaths.some((path) => !isTestPath(path) || implementationPathSet.has(path)) ||
-      [...implementationPaths, ...testPaths].some((path) => !patchedPaths.has(path))
-    )
+    const declaredImplementationPaths = normalizeCoveragePaths(entry?.implementationPaths);
+    const declaredTestPaths = normalizeCoveragePaths(entry?.testPaths);
+    if (!requiredKeys.has(storyKey))
       throw patchResponseError(
-        "STORY_COVERAGE_INVALID",
-        "Every approved story must map to patched implementation and test files.",
+        "STORY_COVERAGE_KEY_INVALID",
+        "Story coverage must use an approved story key.",
         completion,
       );
+    if (seen.has(storyKey))
+      throw patchResponseError(
+        "STORY_COVERAGE_KEY_DUPLICATE",
+        "Story coverage must contain exactly one entry per approved story key.",
+        completion,
+      );
+    if (!declaredImplementationPaths.length || !declaredTestPaths.length)
+      throw patchResponseError(
+        "STORY_COVERAGE_PATHS_MISSING",
+        "Every approved story must map to implementation and test paths.",
+        completion,
+      );
+    const implementationPathSet = new Set(declaredImplementationPaths);
+    if (declaredTestPaths.some((path) => implementationPathSet.has(path)))
+      throw patchResponseError(
+        "STORY_COVERAGE_PATH_OVERLAP",
+        "Story implementation and test paths must be distinct.",
+        completion,
+      );
+    if (declaredTestPaths.some((path) => !isTestPath(path)))
+      throw patchResponseError(
+        "STORY_COVERAGE_TEST_PATH_INVALID",
+        "Story test paths must follow a recognized test-file convention.",
+        completion,
+      );
+    const implementationPaths = declaredImplementationPaths.filter((path) => patchedPaths.has(path));
+    const testPaths = declaredTestPaths.filter((path) => patchedPaths.has(path));
+    if (!implementationPaths.length || !testPaths.length) {
+      const unpatchedPaths = [...declaredImplementationPaths, ...declaredTestPaths].filter(
+        (path) => !patchedPaths.has(path),
+      );
+      throw patchResponseError(
+        "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
+        "Every approved story must retain patched implementation and test evidence.",
+        completion,
+        `Add patches for the missing story evidence or use emitted patch paths: ${unpatchedPaths.join(", ")}. Exact emitted patch paths: ${[...patchedPaths].join(", ")}.`,
+      );
+    }
     seen.add(storyKey);
     return Object.freeze({ storyKey, implementationPaths, testPaths });
   });
@@ -903,7 +1092,7 @@ function normalizeCoveragePaths(value) {
 }
 
 function isTestPath(path) {
-  return /(^|\/)(__tests__\/|tests?\/)|(^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i.test(path);
+  return /(^|\/)(__tests__\/|tests?\/)|(^|\/)(?:test_[^/]+|[^/]+_tests?)\.py$|(^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i.test(path);
 }
 
 function parseFeatureSpotlight(value, completion) {
@@ -934,7 +1123,7 @@ function unwrapJsonFence(text) {
   return match ? match[1].trim() : trimmed;
 }
 
-function patchResponseError(responseIssue, message, completion) {
+function patchResponseError(responseIssue, message, completion, responseCorrection = null) {
   const finishReason = completion?.finishReason ?? null;
   const safeFinishReason = ["stop", "length", "content_filter"].includes(
     finishReason,
@@ -949,6 +1138,10 @@ function patchResponseError(responseIssue, message, completion) {
   return new ChangeCaseError("MODEL_PATCH_RESPONSE_INVALID", message, {
     details: {
       responseIssue,
+      responseCorrection:
+        typeof responseCorrection === "string" && responseCorrection.length <= 2048
+          ? responseCorrection
+          : null,
       modelFinishReason: safeFinishReason,
       providerRequestId,
     },
@@ -970,7 +1163,76 @@ async function writePatch(root, patch) {
       "A model-patch path escaped the disposable candidate.",
     );
   await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, patch.content, "utf8");
+  if (patch.content !== null) {
+    await writeFile(target, patch.content, "utf8");
+    return;
+  }
+  let content = await readFile(target, "utf8").catch(() => null);
+  if (content === null)
+    throw new ChangeCaseError("MODEL_PATCH_ANCHOR_INVALID", "Anchored replacements require an existing candidate file.");
+  for (const replacement of patch.replacements) {
+    const first = content.indexOf(replacement.oldText);
+    const last = content.lastIndexOf(replacement.oldText);
+    if (first < 0 || first !== last)
+      throw new ChangeCaseError("MODEL_PATCH_ANCHOR_INVALID", "Every anchored replacement must match exactly once in the current candidate file.");
+    content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacement.oldText.length)}`;
+  }
+  await writeFile(target, content, "utf8");
+}
+
+async function readCandidateFiles(root, paths) {
+  return new Map(await Promise.all([...new Set(paths)].map(async (path) => [
+    path,
+    await readFile(join(root, path), "utf8").catch(() => ""),
+  ])));
+}
+
+async function captureStoryEvidence(candidate, coverageEntries, previousContent, storyEvidence) {
+  for (const coverage of coverageEntries) {
+    const evidence = [];
+    for (const path of coverage.testPaths) {
+      const beforeLines = new Set((previousContent.get(path) ?? "").split("\n"));
+      const after = await readFile(join(candidate, path), "utf8").catch(() => "");
+      const addedLines = after.split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length >= 8 && !beforeLines.has(line));
+      evidence.push({ path, addedLines });
+    }
+    storyEvidence.set(coverage.storyKey, evidence);
+  }
+}
+
+async function finalCandidateEvidenceIssue({ source, candidate, stories, storyCoverage, storyEvidence, touchedPaths }) {
+  for (const story of stories) {
+    const coverage = storyCoverage.find((entry) => entry.storyKey === story.key);
+    if (!coverage) return `Final candidate coverage is missing ${story.key}.`;
+    const evidence = storyEvidence.get(story.key) ?? [];
+    const retained = await Promise.all(evidence.map(async ({ path, addedLines }) => {
+      const content = await readFile(join(candidate, path), "utf8").catch(() => "");
+      return addedLines.length > 0 && addedLines.some((line) => content.includes(line));
+    }));
+    if (!retained.some(Boolean)) return `Final test evidence added for ${story.key} was removed by a later story batch.`;
+  }
+  for (const path of touchedPaths) {
+    const [before, after] = await Promise.all([
+      readFile(join(source, path), "utf8").catch(() => null),
+      readFile(join(candidate, path), "utf8").catch(() => null),
+    ]);
+    if (before !== null && after !== null && Buffer.byteLength(before) >= 4 * 1024 && Buffer.byteLength(after) < Buffer.byteLength(before) * 0.85)
+      return `Existing file ${path} lost more than 15 percent of its content; preserve unrelated behavior with a minimal edit.`;
+  }
+  return null;
+}
+
+function failedValidation(reason) {
+  return Object.freeze({
+    code: 1,
+    signal: null,
+    timedOut: false,
+    outputBytes: Buffer.byteLength(reason),
+    outputDigest: sha256(reason),
+    outputExcerpt: reason,
+  });
 }
 
 function isWritable(path, writePaths) {
@@ -1002,13 +1264,39 @@ function shouldCopyCandidatePath(root, path) {
   );
 }
 
-function runValidation({ cwd, allowedCommands, timeoutMs }) {
-  const command = validationCommands[allowedCommands?.[0]];
-  if (!command)
+async function runValidation({ cwd, allowedCommands, timeoutMs }) {
+  const configured = validationCommands[allowedCommands?.[0]];
+  if (!configured)
     throw new ChangeCaseError(
       "MODEL_PATCH_COMMAND_DENIED",
       "Validation requires an approved project command.",
     );
+  const commands = Array.isArray(configured) ? configured : [configured];
+  const startedAt = Date.now();
+  let outputBytes = 0;
+  let outputExcerpt = "";
+  for (const command of commands) {
+    const result = await runValidationCommand({
+      cwd,
+      command,
+      timeoutMs: Math.max(1, timeoutMs - elapsed(startedAt)),
+    });
+    outputBytes = Math.min(64 * 1024, outputBytes + result.outputBytes);
+    outputExcerpt = appendOutputExcerpt(outputExcerpt, result.outputExcerpt ?? "");
+    if (result.code !== 0 || result.signal || result.timedOut)
+      return Object.freeze({ ...result, outputBytes, outputExcerpt: outputExcerpt || null });
+  }
+  return Object.freeze({
+    code: 0,
+    signal: null,
+    timedOut: false,
+    outputBytes,
+    outputDigest: sha256({ commandCount: commands.length, outputBytes }),
+    outputExcerpt: outputExcerpt || null,
+  });
+}
+
+function runValidationCommand({ cwd, command, timeoutMs }) {
   return new Promise((resolvePromise) => {
     const child = spawn(command.executable, command.arguments, {
       cwd,

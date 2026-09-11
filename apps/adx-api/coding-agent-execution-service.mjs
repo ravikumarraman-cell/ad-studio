@@ -363,9 +363,23 @@ function safeErrorDetails(details) {
     "NON_JSON",
     "SCHEMA_INVALID",
     "PATCH_INVALID",
+    "STORY_COVERAGE_MISSING",
+    "STORY_COVERAGE_INCOMPLETE",
+    "STORY_COVERAGE_KEY_INVALID",
+    "STORY_COVERAGE_KEY_DUPLICATE",
+    "STORY_COVERAGE_PATHS_MISSING",
+    "STORY_COVERAGE_PATH_OVERLAP",
+    "STORY_COVERAGE_TEST_PATH_INVALID",
+    "STORY_COVERAGE_PATH_NOT_PATCHED",
+    "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
   ].includes(details?.responseIssue)
     ? details.responseIssue
     : null;
+  const responseCorrection =
+    typeof details?.responseCorrection === "string" &&
+    details.responseCorrection.length <= 2048
+      ? details.responseCorrection
+      : null;
   const modelFinishReason = ["stop", "length", "content_filter"].includes(
     details?.modelFinishReason,
   )
@@ -385,9 +399,13 @@ function safeErrorDetails(details) {
   ].includes(details?.failureStage)
     ? details.failureStage
     : null;
-  const validationCommand = ["node --test", "npm run verify:health-x"].includes(
-    details?.validationCommand,
-  )
+  const validationCommand = [
+    "node --test",
+    "npm run verify:health-x",
+    "npm run verify:production",
+    "npm --prefix frontend test -- --runInBand",
+    "cloud-asset-inventory verify",
+  ].includes(details?.validationCommand)
     ? details.validationCommand
     : null;
   const validationCategory = ["CHECK_FAILED", "TIMED_OUT", "SIGNALED"].includes(
@@ -418,6 +436,7 @@ function safeErrorDetails(details) {
     gatewayCode,
     gatewayParam,
     responseIssue,
+    responseCorrection,
     modelFinishReason,
     modelAttempts,
     failureStage,

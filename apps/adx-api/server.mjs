@@ -479,7 +479,10 @@ function resolveModelPatchProfile(environment) {
       [],
     ),
     readOnlyContextPaths: Object.freeze([]),
-    validationCommand: "npm --prefix frontend test -- --runInBand",
+    validationCommand:
+      profile === "cloud-asset-inventory"
+        ? "cloud-asset-inventory verify"
+        : "npm --prefix frontend test -- --runInBand",
     linkSourceDependencies: true,
   });
 }

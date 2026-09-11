@@ -1,6 +1,6 @@
 # Cloud Asset Inventory Coding-Agent Spec
 
-Version: 1.1.0
+Version: 1.2.0
 
 This spec is the default prompt/contract for implementing a feature in `cloud-asset-inventory` with the `ad-studio` coding agent.
 
@@ -37,7 +37,20 @@ The coding agent MUST implement every approved story and every Given/When/Then s
 
 The coding agent MUST NOT claim a story is covered merely because a file was touched, an existing regression suite passed, or coverage metadata names a path. If any story cannot be implemented and tested from the supplied context, the candidate is incomplete and MUST NOT be represented as complete.
 
-### 2.2 Minimal-Diff Contract
+### 2.2 Sequential Story Execution
+
+The executor supplies exactly one approved story per model request. For each request, the coding agent MUST:
+
+- Implement only the supplied story and all of its Given/When/Then scenarios.
+- Add or update meaningful tests for that story in the same response.
+- Create tests beside the owning implementation or in its established domain test directory; never repurpose an unrelated suite to satisfy coverage metadata.
+- Preserve every unrelated behavior and every change already present in the accumulated candidate.
+- Use the accumulated candidate as the source of truth; do not revert changes from earlier story requests.
+- Not anticipate, implement, or claim coverage for stories absent from the current request.
+
+After all story requests complete, the executor validates the combined candidate. Passing a per-story response contract does not prove the overall feature works; the accumulated candidate must still preserve existing behavior and satisfy all approved stories together.
+
+### 2.3 Minimal-Diff Contract
 
 The executor accepts complete replacement content for changed files. For every replacement, the coding agent MUST preserve unrelated imports, middleware, routes, handlers, comments, formatting, and behavior. It MUST NOT rewrite, condense, reorder, or modernize unrelated code. A small feature does not justify replacing an app factory, route registry, page shell, or shared configuration module wholesale.
 

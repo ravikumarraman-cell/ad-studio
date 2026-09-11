@@ -1029,6 +1029,7 @@ export function describeExecutionFailure(snapshot = {}, diagnosticCode = '') {
   const validationFailureReason = snapshot.validationFailureReason || snapshot.validationOutputExcerpt || '';
   const gatewayCode = snapshot.gatewayCode || '';
   const gatewayParam = snapshot.gatewayParam || '';
+  const responseIssue = snapshot.responseIssue || '';
 
   if (code === 'EXECUTION_LEASE_EXPIRED') {
     return Object.freeze({
@@ -1036,6 +1037,22 @@ export function describeExecutionFailure(snapshot = {}, diagnosticCode = '') {
       reason: snapshot.reason || 'The execution lease expired before the run produced a terminal result.',
       nextAction: 'Review the last recorded phase, then start a new bounded implementation attempt.',
       hint: snapshot.leaseExpiredAt ? `Lease expired ${snapshot.leaseExpiredAt}` : 'Execution lease expired',
+    });
+  }
+
+  if (code === 'MODEL_PATCH_RESPONSE_INVALID') {
+    const storyCoverageIssue = responseIssue.startsWith('STORY_COVERAGE_');
+    return Object.freeze({
+      summary: storyCoverageIssue
+        ? 'The model response did not prove every approved story was implemented and tested.'
+        : 'The model response did not satisfy the bounded patch contract.',
+      reason: responseIssue
+        ? `The response was rejected with ${responseIssue}.`
+        : 'The failed run was recorded before detailed model-response diagnostics were retained.',
+      nextAction: storyCoverageIssue
+        ? 'Retry once. The coding agent must patch genuine implementation and test files and map every approved story to both.'
+        : 'Retry once to capture the detailed response issue, then correct the rejected schema or patch paths.',
+      hint: responseIssue || 'Detailed response issue unavailable',
     });
   }
 
