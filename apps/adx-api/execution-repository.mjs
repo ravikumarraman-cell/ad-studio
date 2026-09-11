@@ -54,10 +54,13 @@ export class PostgresExecutionRepository {
           "CHANGE_CASE_NOT_FOUND",
           "Change Case was not found.",
         );
-      if (caseRow.rows[0].state !== "READY_FOR_EXECUTION")
+      if (
+        caseRow.rows[0].state !== "READY_FOR_EXECUTION" &&
+        caseRow.rows[0].state !== "AWAITING_VERIFICATION"
+      )
         throw new ChangeCaseError(
           "EXECUTION_LEASE_NOT_ALLOWED",
-          "Execution leases require an execution-ready Change Case.",
+          "Execution leases require an execution-ready Change Case or a candidate awaiting corrective verification.",
         );
       await this.#expireStaleRuns(client, scope, changeCaseId);
       const activeRunRow = await client.query(

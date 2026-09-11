@@ -133,6 +133,7 @@ test('issueLease rejects a second bounded implementation while a run is already 
       },
     ],
     events: [],
+    changeCaseState: 'AWAITING_VERIFICATION',
   })
 
   await assert.rejects(
@@ -185,4 +186,39 @@ test('view fails an active run whose worker heartbeat stopped and revokes its le
   assert.equal(snapshot.runs[0].status, 'FAILED')
   assert.equal(events[0].eventType, 'AgentRunFailed.v1')
   assert.equal(events[0].payload.errorCode, 'EXECUTION_RUNNER_HEARTBEAT_LOST')
+})
+
+test('view preserves an existing terminal cause after its lease expires', async () => {
+  const events = [{
+    runId: 'run-quota',
+    sequence: 4,
+    eventType: 'AgentRunQuotaExceeded.v1',
+    payload: { errorCode: 'EXECUTION_TOOL_QUOTA_EXCEEDED' },
+    occurredAt: new Date(Date.now() - 60_000).toISOString(),
+  }]
+  const { repository } = createRepository({
+    leases: [{
+      id: 'lease-quota',
+      status: 'EXPIRED',
+      leaseDigest: 'sha256:lease-quota',
+      issuedAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+      expiresAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    }],
+    runs: [{
+      id: 'run-quota',
+      leaseId: 'lease-quota',
+      adapterId: 'adapter-1',
+      adapterVersion: '1.0.0',
+      status: 'FAILED',
+      createdAt: new Date(Date.now() - 20 * 60_000).toISOString(),
+      updatedAt: new Date(Date.now() - 6 * 60_000).toISOString(),
+    }],
+    events,
+  })
+
+  await repository.view(scope, 'case-1')
+
+  assert.equal(events.length, 1)
+  assert.equal(events[0].eventType, 'AgentRunQuotaExceeded.v1')
+  assert.equal(events[0].payload.errorCode, 'EXECUTION_TOOL_QUOTA_EXCEEDED')
 })

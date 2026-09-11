@@ -29,6 +29,46 @@ test("preview profiles preserve the configured repository identity", () => {
   assert.equal(profiles.get("health-x-after").repositoryId, "cloud-asset-inventory");
 });
 
+test("preview profiles derive the canonical repository identity from the source checkout", () => {
+  const profiles = createApplicationPreviewProfiles({
+    sourceRoot: "/projects/cloud-asset-inventory",
+    candidateRoot: "/candidates/cloud-asset-inventory",
+  });
+
+  assert.equal(profiles.get("health-x-before").repositoryId, "cloud-asset-inventory");
+  assert.equal(profiles.get("health-x-after").repositoryId, "cloud-asset-inventory");
+});
+
+test("nested application profiles keep whole-candidate verification with a server-managed Dockerfile", () => {
+  const profiles = createApplicationPreviewProfiles({
+    sourceRoot: "/projects/cloud-asset-inventory",
+    candidateRoot: "/candidates/cloud-asset-inventory",
+    dockerfileRoot: "/projects/cloud-asset-inventory",
+    contextPath: "frontend",
+    containerPort: 80,
+    hostName: "localhost",
+    hostPort: 5173,
+    buildArgs: {
+      NODE_IMAGE: "node:22-alpine",
+      NGINX_IMAGE: "nginx:alpine",
+      environment: "stage",
+    },
+  });
+  const after = profiles.get("health-x-after");
+
+  assert.equal(after.context, "/candidates/cloud-asset-inventory/frontend");
+  assert.equal(after.digestRoot, "/candidates/cloud-asset-inventory");
+  assert.equal(after.dockerfile, "/projects/cloud-asset-inventory/frontend/Dockerfile");
+  assert.equal(after.containerPort, 80);
+  assert.equal(after.hostName, "localhost");
+  assert.equal(after.hostPort, 5173);
+  assert.deepEqual(after.buildArgs, {
+    NODE_IMAGE: "node:22-alpine",
+    NGINX_IMAGE: "nginx:alpine",
+    environment: "stage",
+  });
+});
+
 test("Health-X preview profiles permit a canonical nested Dockerfile override", () => {
   const profiles = createApplicationPreviewProfiles({
     sourceRoot: "/projects/ad-studio",

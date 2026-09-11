@@ -101,10 +101,13 @@ export class CodingAgentExecutionService {
         "CODING_AGENT_EXECUTOR_NOT_CONFIGURED",
         "Coding-agent execution is not configured for this ADX server.",
       );
-    if (changeCase?.state !== "READY_FOR_EXECUTION")
+    if (
+      changeCase?.state !== "READY_FOR_EXECUTION" &&
+      changeCase?.state !== "AWAITING_VERIFICATION"
+    )
       throw new ChangeCaseError(
         "EXECUTION_LEASE_NOT_ALLOWED",
-        "Bounded implementation requires an execution-ready Change Case.",
+        "Bounded implementation requires an execution-ready Change Case or a candidate awaiting corrective verification.",
       );
     if (
       !Number.isInteger(expectedVersion) ||

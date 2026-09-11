@@ -249,8 +249,26 @@ const candidateRoot = modelPatchBroker.candidateRoot;
 const previewProfiles = createApplicationPreviewProfiles({
   sourceRoot: modelPatchProfile.sourceRoot,
   candidateRoot,
-  repositoryId: modelPatchProfile.repositoryId,
+  repositoryId: process.env.ADX_APPLICATION_PREVIEW_REPOSITORY_ID,
   dockerfilePath: process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE,
+  dockerfileRoot:
+    modelPatchProfile.id === "cloud-asset-inventory"
+      ? modelPatchProfile.sourceRoot
+      : null,
+  contextPath:
+    modelPatchProfile.id === "cloud-asset-inventory" ? "frontend" : "",
+  containerPort: modelPatchProfile.id === "cloud-asset-inventory" ? 80 : 3000,
+  hostName:
+    modelPatchProfile.id === "cloud-asset-inventory" ? "localhost" : "127.0.0.1",
+  hostPort: modelPatchProfile.id === "cloud-asset-inventory" ? 5173 : null,
+  buildArgs:
+    modelPatchProfile.id === "cloud-asset-inventory"
+      ? {
+          NODE_IMAGE: "node:22-alpine",
+          NGINX_IMAGE: "nginx:alpine",
+          environment: "stage",
+        }
+      : {},
 });
 await validatePreviewRuntimeConfiguration(previewProfiles);
 const localPreviewManager = new LocalPreviewManager({
@@ -438,7 +456,7 @@ function resolveModelPatchProfile(environment) {
       linkSourceDependencies: true,
     });
   return Object.freeze({
-    id: "legacy",
+    id: profile === "cloud-asset-inventory" ? profile : "legacy",
     sourceRoot:
       environment.ADX_CODING_MODEL_SOURCE_ROOT ??
       environment.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT,
@@ -462,7 +480,7 @@ function resolveModelPatchProfile(environment) {
     ),
     readOnlyContextPaths: Object.freeze([]),
     validationCommand: "npm --prefix frontend test -- --runInBand",
-    linkSourceDependencies: false,
+    linkSourceDependencies: true,
   });
 }
 
@@ -1126,6 +1144,18 @@ function executionTask(changeCase, governance, templateId) {
     : "";
   return {
     objective: `${changeCase.title}\n\nOutcome: ${intent.outcome}\n\nAcceptance criteria: ${intent.acceptanceCriteria}${storySummary}${template ? `\n\nReviewed coding specification: ${template.label} (v${template.version})\n${template.guidance}` : ""}`,
+    stories: stories.map((story, index) => ({
+      key: String(story?.key ?? `STORY-${index + 1}`).trim(),
+      title: String(story?.title ?? `Story ${index + 1}`).trim(),
+      narrative: String(story?.narrative ?? "").trim(),
+      scenarios: Array.isArray(story?.scenarios)
+        ? story.scenarios.map((scenario) => ({
+            given: String(scenario?.given ?? "").trim(),
+            when: String(scenario?.when ?? "").trim(),
+            then: String(scenario?.then ?? "").trim(),
+          }))
+        : [],
+    })),
     changeDigest: sha256({
       changeCaseId: changeCase.id,
       projectionVersion: changeCase.projectionVersion,

@@ -55,6 +55,11 @@ test("model-patch broker applies only a validated writable-file replacement in a
     join(source, "src", "marker.js"),
     'export const marker = "before"\n',
   );
+  await mkdir(join(source, "src", "nested", "node_modules"), { recursive: true });
+  await writeFile(
+    join(source, "src", "nested", "node_modules", "ignored.js"),
+    "ignored\n",
+  );
   const broker = new ModelPatchBroker({
     enabled: true,
     sourceRoot: source,
@@ -100,6 +105,124 @@ test("model-patch broker applies only a validated writable-file replacement in a
     await readFile(join(source, "src", "marker.js"), "utf8"),
     'export const marker = "before"\n',
   );
+});
+
+test("model-patch broker requires implementation and test patches for every approved story", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  await writeFile(join(source, "src", "marker.test.js"), 'export const expected = "before"\n');
+  const requests = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        requests.push(request);
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: "sha256:response",
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/marker.js", content: 'export const marker = "after"\n' },
+              { path: "src/marker.test.js", content: 'export const expected = "after"\n' },
+            ],
+            featureSpotlight: null,
+            storyCoverage: [
+              {
+                storyKey: "STORY-1",
+                implementationPaths: ["src/marker.js"],
+                testPaths: ["src/marker.test.js"],
+              },
+            ],
+          }),
+        };
+      },
+    },
+    validate: async () => ({
+      code: 0,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+    }),
+  });
+  const storyTask = {
+    ...task,
+    stories: [
+      {
+        key: "STORY-1",
+        title: "Show marker",
+        narrative: "As a user, I want to see the marker, so that I know its state.",
+        scenarios: [{ given: "a marker", when: "it is viewed", then: "its state is shown" }],
+      },
+    ],
+  };
+
+  const result = await broker.execute({ adapter, task: storyTask, repository });
+
+  assert.equal(result.promoted, true);
+  assert.deepEqual(result.storyCoverage, [{
+    storyKey: "STORY-1",
+    implementationPaths: ["src/marker.js"],
+    testPaths: ["src/marker.test.js"],
+  }]);
+  assert.match(requests[0].prompt, /"stories":\[\{"key":"STORY-1"/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker rejects implementation files relabeled as story tests", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: gateway({
+      schema: "adx-model-patch-response-v1",
+      patches: [{ path: "src/marker.js", content: 'export const marker = "after"\n' }],
+      featureSpotlight: null,
+      storyCoverage: [{
+        storyKey: "STORY-1",
+        implementationPaths: ["src/marker.js"],
+        testPaths: ["src/marker.js"],
+      }],
+    }),
+    validate: async () => ({
+      code: 0,
+      signal: null,
+      timedOut: false,
+      outputBytes: 0,
+      outputDigest: "sha256:test",
+    }),
+  });
+
+  await assert.rejects(
+    broker.execute({
+      adapter,
+      task: {
+        ...task,
+        stories: [{
+          key: "STORY-1",
+          title: "Show marker",
+          narrative: "As a user, I want to see the marker, so that I know its state.",
+          scenarios: [{ given: "a marker", when: "it is viewed", then: "its state is shown" }],
+        }],
+      },
+      repository,
+    }),
+    (error) => error.code === "MODEL_PATCH_RESPONSE_INVALID" &&
+      error.details?.responseIssue === "STORY_COVERAGE_INVALID",
+  );
+  await rm(root, { recursive: true, force: true });
 });
 
 test("model-patch broker records model-request and model-response phases before validation", async () => {
@@ -399,6 +522,13 @@ test("standalone Health-X permits only its production verifier and links read-on
   await mkdir(join(source, "scripts"), { recursive: true });
   await mkdir(join(source, "docs"), { recursive: true });
   await mkdir(join(source, "node_modules"), { recursive: true });
+  await mkdir(join(source, "venv"), { recursive: true });
+  await mkdir(join(source, ".venv-smoke"), { recursive: true });
+  await mkdir(join(source, ".pytest_cache"), { recursive: true });
+  await mkdir(join(source, "app", "__pycache__"), { recursive: true });
+  await mkdir(join(source, "app", "node_modules"), { recursive: true });
+  await mkdir(join(source, "app", "nested", "node_modules"), { recursive: true });
+  await mkdir(join(source, "app", "nested", "dist"), { recursive: true });
   await writeFile(
     join(source, "app", "marker.js"),
     'export const marker = "before"\n',
@@ -408,6 +538,12 @@ test("standalone Health-X permits only its production verifier and links read-on
     "// The product progress label must match the two canonical action lists.\n",
   );
   await writeFile(join(source, "docs", "ignored.md"), "ignored\n");
+  await writeFile(join(source, "venv", "python"), "ignored\n");
+  await writeFile(join(source, ".venv-smoke", "python"), "ignored\n");
+  await writeFile(join(source, ".pytest_cache", "state"), "ignored\n");
+  await writeFile(join(source, "app", "__pycache__", "module.pyc"), "ignored\n");
+  await writeFile(join(source, "app", "nested", "node_modules", "dependency.js"), "ignored\n");
+  await writeFile(join(source, "app", "nested", "dist", "bundle.js"), "ignored\n");
   const healthXTask = {
     objective: "Replace the marker.",
     changeDigest: "sha256:case-digest",
@@ -462,6 +598,16 @@ test("standalone Health-X permits only its production verifier and links read-on
         (await lstat(join(cwd, "node_modules"))).isSymbolicLink(),
         true,
       );
+      assert.equal(
+        (await lstat(join(cwd, "app", "node_modules"))).isSymbolicLink(),
+        true,
+      );
+      assert.equal(await stat(join(cwd, "app", "nested", "node_modules")).catch(() => null), null);
+      assert.equal(await stat(join(cwd, "app", "nested", "dist")).catch(() => null), null);
+      assert.equal(await stat(join(cwd, "venv")).catch(() => null), null);
+      assert.equal(await stat(join(cwd, ".venv-smoke")).catch(() => null), null);
+      assert.equal(await stat(join(cwd, ".pytest_cache")).catch(() => null), null);
+      assert.equal(await stat(join(cwd, "app", "__pycache__")).catch(() => null), null);
       await mkdir(join(cwd, ".output"), {
         recursive: true,
       });

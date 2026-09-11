@@ -74,6 +74,19 @@ test('gateway still retries a compatibility 400 even when the gateway omits stru
   assert.equal(requests[1].response_format, undefined)
 })
 
+test('gateway never infers a legacy token field from an unstructured 400', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => {
+    requests.push(JSON.parse(init.body))
+    return response({ error: { message: 'bad request' } }, { status: 400 })
+  } })
+  await assert.rejects(() => adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-generic-token-safety', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } }), (error) => error.code === 'AZURE_OPENAI_GATEWAY_REQUEST_FAILED')
+  assert.equal(requests.length, 2)
+  assert.equal(requests[1].response_format, undefined)
+  assert.equal(requests[1].max_completion_tokens, 2_000)
+  assert.equal(requests.some((request) => Object.hasOwn(request, 'max_tokens')), false)
+})
+
 test('gateway falls back to the legacy token-limit field when required by its route', async () => {
   const requests = []
   const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'unsupported_parameter', param: 'max_completion_tokens' } }, { status: 400 }) : response({ choices: [{ message: { content: 'ready' } }] }) } })

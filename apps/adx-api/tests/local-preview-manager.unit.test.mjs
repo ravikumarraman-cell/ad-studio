@@ -6,7 +6,7 @@ import { LocalPreviewManager } from '../local-preview-manager.mjs'
 test('local preview manager builds and exposes only a registered digest-matched profile', async () => {
   const commands = []
   const manager = new LocalPreviewManager({
-    profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', npmRegistry: 'https://registry.example/npm/', npmrcSecretPath: import.meta.filename, containerPort: 8080, readinessPath: '/ready' }]]),
+    profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', npmRegistry: 'https://registry.example/npm/', npmrcSecretPath: import.meta.filename, buildArgs: { NODE_IMAGE: 'node:22-alpine' }, containerPort: 8080, readinessPath: '/ready' }]]),
     digestCandidate: async () => 'sha256:verified',
     runCommand: async (command) => { commands.push(command) },
     waitForReady: async (url) => assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/ready$/),
@@ -17,13 +17,41 @@ test('local preview manager builds and exposes only a registered digest-matched 
   assert.equal(commands[0][0], 'docker')
   assert.equal(commands[0][1], 'build')
   assert.ok(commands[0].includes('NPM_REGISTRY=https://registry.example/npm/'))
+  assert.ok(commands[0].includes('NODE_IMAGE=node:22-alpine'))
   assert.ok(commands[0].includes(`id=npmrc,src=${import.meta.filename}`))
   assert.equal(commands[1][1], 'run')
+})
+
+test('local preview manager uses a server-owned fixed callback origin', async () => {
+  const commands = []
+  const manager = new LocalPreviewManager({
+    profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', hostName: 'localhost', hostPort: 5173, containerPort: 80, readinessPath: '/' }]]),
+    digestCandidate: async () => 'sha256:verified',
+    runCommand: async (command) => { commands.push(command) },
+    waitForReady: async (url) => assert.equal(url, 'http://localhost:5173/'),
+  })
+
+  const result = await manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
+
+  assert.equal(result.preview.url, 'http://localhost:5173/')
+  assert.ok(commands[1].includes('127.0.0.1:5173:80'))
 })
 
 test('local preview manager rejects a source that differs from the verified candidate', async () => {
   const manager = new LocalPreviewManager({ profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', containerPort: 8080, readinessPath: '/' }]]), digestCandidate: async () => 'sha256:other' })
   await assert.rejects(() => manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' }), { code: 'LOCAL_PREVIEW_CANDIDATE_MISMATCH' })
+})
+
+test('local preview manager verifies the whole candidate when build context is nested', async () => {
+  const digested = []
+  const manager = new LocalPreviewManager({
+    profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate/frontend', digestRoot: '/candidate', containerPort: 8080, readinessPath: '/' }]]),
+    digestCandidate: async (root) => { digested.push(root); return 'sha256:verified' },
+    runCommand: async () => {},
+    waitForReady: async () => {},
+  })
+  await manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
+  assert.deepEqual(digested, ['/candidate'])
 })
 
 test('local preview manager rejects a corporate profile without a configured npm credential secret', async () => {

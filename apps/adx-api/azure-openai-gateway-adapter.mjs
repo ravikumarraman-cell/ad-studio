@@ -160,8 +160,6 @@ function hasStructuredGatewayHint(payload) {
 
 function genericCompatibilityAdjustment(body) {
   if (Object.hasOwn(body, 'response_format')) return { kind: 'response_format', body: withoutResponseFormat(body) }
-  if (Object.hasOwn(body, 'max_completion_tokens')) return { kind: 'max_completion_tokens', body: legacyTokenBody(body) }
-  if (Object.hasOwn(body, 'temperature')) return { kind: 'temperature', body: withoutTemperature(body) }
   return null
 }
 

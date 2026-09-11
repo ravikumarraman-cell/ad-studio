@@ -271,29 +271,25 @@ function renderEvents(events, emptyMessage = 'The coding agent has not produced 
 function renderRunHistory(snapshot) {
   const summary = byId('run-summary');
   if (!summary) return;
-  const attempts = groupRuns(snapshot);
+  const attempts = groupRuns(snapshot).slice(1);
   const existing = byId('run-history');
-  if (attempts.length <= 1) {
+  if (!attempts.length) {
     if (existing) existing.remove();
     return;
   }
 
   let section = existing;
   if (!section) {
-    section = document.createElement('section');
+    section = document.createElement('details');
     section.id = 'run-history';
     section.className = 'run-history';
-    section.style.marginTop = '16px';
     summary.insertAdjacentElement('afterend', section);
   }
+  section.open = false;
 
   const cards = attempts.map((attempt, index) => {
-    const isCurrent = index === 0;
     const attemptNumber = attempts.length - index;
-    const isActive = attempt.status === 'RUNNING' || attempt.status === 'LEASED';
-    const attemptLabel = isCurrent
-      ? 'Attempt ' + attemptNumber + (isActive ? ' · Current' : ' · Latest')
-      : 'Attempt ' + attemptNumber;
+    const attemptLabel = 'Attempt ' + attemptNumber;
     const latest = attempt.latestSummary;
     const statusTone = attempt.label.tone || 'waiting';
     const latestLine = latest
@@ -303,7 +299,7 @@ function renderRunHistory(snapshot) {
       const summaryItem = summarizeEvent(event);
       return '<li><time>' + eventTime(event.occurredAt) + '</time><strong>' + escapeMarkup(summaryItem.title) + '</strong><p>' + escapeMarkup(summaryItem.detail) + '</p></li>';
     }).join('');
-    return '<details class="attempt-card ' + statusTone + '"' + (isCurrent ? ' open' : '') + '><summary><div class="attempt-meta"><span class="attempt-pill">' + attemptLabel + '</span><strong>' + escapeMarkup(attempt.label.label) + '</strong><small>' + escapeMarkup(attempt.run?.adapterId || 'unknown adapter') + ' · ' + escapeMarkup(attempt.duration) + ' · ' + String(attempt.eventCount) + ' events</small></div><div class="attempt-summary"><span>' + escapeMarkup(latestLine) + '</span><strong>' + escapeMarkup(attempt.updatedAt ? eventTime(attempt.updatedAt) : 'No timestamp') + '</strong></div></summary><div class="attempt-body"><dl class="attempt-facts">' + [
+    return '<details class="attempt-card ' + statusTone + '"><summary><div class="attempt-meta"><span class="attempt-pill">' + attemptLabel + '</span><strong>' + escapeMarkup(attempt.label.label) + '</strong><small>' + escapeMarkup(attempt.run?.adapterId || 'unknown adapter') + ' · ' + escapeMarkup(attempt.duration) + ' · ' + String(attempt.eventCount) + ' events</small></div><div class="attempt-summary"><span>' + escapeMarkup(latestLine) + '</span><strong>' + escapeMarkup(attempt.updatedAt ? eventTime(attempt.updatedAt) : 'No timestamp') + '</strong></div></summary><div class="attempt-body"><dl class="attempt-facts">' + [
       ['Run ID', attempt.run?.id || 'Unavailable'],
       ['Status', attempt.status || 'Unavailable'],
       ['Started', attempt.startedAt ? new Date(attempt.startedAt).toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit', second: '2-digit' }) : 'Unavailable'],
@@ -312,7 +308,13 @@ function renderRunHistory(snapshot) {
     ].map(([label, value]) => '<div><dt>' + escapeMarkup(label) + '</dt><dd>' + escapeMarkup(value) + '</dd></div>').join('') + '</dl><div class="attempt-events"><p class="eyebrow">Attempt events</p><ul>' + (eventList || '<li><strong>No events retained</strong><p>This attempt has no visible event stream.</p></li>') + '</ul></div></div></details>';
   }).join('');
 
-  section.innerHTML = '<header class="history-head"><div><p class="eyebrow">RUN HISTORY</p><h3>Run attempts</h3><p>The latest attempt stays expanded. Earlier attempts remain collapsed until you need their event details.</p></div><span class="history-count">' + attempts.length + ' attempts</span></header><div class="history-stack">' + cards + '</div>';
+  const countLabel = attempts.length === 1 ? '1 previous run' : attempts.length + ' previous runs';
+  section.innerHTML = '<summary class="history-toggle"><span><span class="history-kicker">RUN HISTORY</span><strong>Previous runs</strong><small>Open only when you need earlier diagnostics.</small></span><span class="history-count">' + countLabel + '</span></summary><div class="history-stack">' + cards + '</div>';
+}
+
+function collapseRunHistory() {
+  const history = byId('run-history');
+  if (history) history.open = false;
 }
 
 function renderRunCommentary(snapshot) {
@@ -482,6 +484,19 @@ function renderRunSteps(snapshot) {
   if (detail) detail.textContent = 'The candidate will be exposed only after validation.';
 }
 
+function renderRunStepState(snapshot) {
+  const latest = currentRunEvents(snapshot).at(-1) || null;
+  if (!latest?.eventType && !latest?.kind) return;
+  const eventName = normalizeEventName(latest.eventType || latest.kind);
+  const entry = eventLabels[eventName] || { stage: phaseStages[String(latest.phase || '').toUpperCase()] || 'started', failed: false };
+  const active = stageOrder.indexOf(entry.stage);
+  document.querySelectorAll('.run-steps li').forEach((item, index) => {
+    item.classList.toggle('done', !entry.failed && index < active);
+    item.classList.toggle('active', !entry.failed && index === active);
+    item.classList.toggle('failed', Boolean(entry.failed) && index === active);
+  });
+}
+
 function scrollToLiveConsole() {
   const target = byId('run-summary') || byId('progress-console');
   if (!target || typeof target.scrollIntoView !== 'function') return;
@@ -560,6 +575,7 @@ function primeAcceptedRun(runId = null) {
   const provider = byId('run-provider');
   const commentary = byId('run-commentary');
   const events = byId('progress-events');
+  collapseRunHistory();
   if (consoleEl) {
     consoleEl.hidden = false;
     consoleEl.dataset.phase = 'running';
@@ -878,6 +894,7 @@ function applySnapshot(snapshot) {
     if (consoleEl) consoleEl.hidden = false;
     renderLivePhase(snapshot);
     renderRunCommentary(snapshot);
+    renderRunStepState(snapshot);
     renderEvents(currentRunEvents(snapshot));
     renderRunHistory(snapshot);
     renderCompletionActions(snapshot);
@@ -902,16 +919,7 @@ function applySnapshot(snapshot) {
     button.setAttribute('aria-busy', 'false');
   }
   renderLivePhase(snapshot);
-  if (latest?.eventType || latest?.kind) {
-    const eventName = normalizeEventName(latest.eventType || latest.kind);
-    const entry = eventLabels[eventName] || { stage: phaseStages[String(latest.phase || '').toUpperCase()] || 'started', failed: false };
-    const active = stageOrder.indexOf(entry.stage);
-    document.querySelectorAll('.run-steps li').forEach((item, index) => {
-      item.classList.toggle('done', !entry.failed && index < active);
-      item.classList.toggle('active', !entry.failed && index === active);
-      item.classList.toggle('failed', Boolean(entry.failed) && index === active);
-    });
-  }
+  renderRunStepState(snapshot);
   renderCompletionActions(snapshot);
   renderRunCommentary(snapshot);
   renderEvents(currentRunEvents(snapshot));
@@ -962,6 +970,7 @@ async function poll() {
 async function beginRun(runId) {
   currentRunId = runId;
   resetRunClock();
+  collapseRunHistory();
   const consoleEl = byId('progress-console');
   const form = byId('dispatch-form');
   const button = byId('submit');

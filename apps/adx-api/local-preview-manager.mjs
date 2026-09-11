@@ -82,7 +82,9 @@ export class LocalPreviewManager {
           "The generated candidate predates the registered preview build contract. Generate and independently verify a fresh candidate before starting a preview.",
         );
     }
-    const actualDigest = await this.digestCandidate(profile.context);
+    const actualDigest = await this.digestCandidate(
+      profile.digestRoot ?? profile.context,
+    );
     if (profile.candidateBound !== false && actualDigest !== candidateDigest)
       throw new ChangeCaseError(
         "LOCAL_PREVIEW_CANDIDATE_MISMATCH",
@@ -100,10 +102,14 @@ export class LocalPreviewManager {
     const id = randomUUID();
     const image = `adx-preview/${profile.id}:${candidateDigest.slice(7, 19)}`;
     const containerName = `adx-preview-${id}`;
-    const port = await availablePort();
+    const port = profile.hostPort ?? (await availablePort());
+    const hostName = profile.hostName ?? "127.0.0.1";
     const registryArgument = profile.npmRegistry
       ? ["--build-arg", `NPM_REGISTRY=${profile.npmRegistry}`]
       : [];
+    const profileBuildArguments = Object.entries(profile.buildArgs ?? {}).flatMap(
+      ([name, value]) => ["--build-arg", `${name}=${value}`],
+    );
     const npmrcSecretArgument =
       typeof profile.npmrcSecretPath === "string" && profile.npmrcSecretPath
         ? ["--secret", `id=npmrc,src=${profile.npmrcSecretPath}`]
@@ -120,6 +126,7 @@ export class LocalPreviewManager {
           "--label",
           `com.adx.preview.candidate=${candidateDigest}`,
           ...registryArgument,
+          ...profileBuildArguments,
           ...npmrcSecretArgument,
           "--tag",
           image,
@@ -153,7 +160,7 @@ export class LocalPreviewManager {
         ],
         { timeoutMs: 30_000 },
       );
-      const url = `http://127.0.0.1:${port}${profile.readinessPath}`;
+      const url = `http://${hostName}:${port}${profile.readinessPath}`;
       await this.waitForReady(url);
       const preview = Object.freeze({
         id,

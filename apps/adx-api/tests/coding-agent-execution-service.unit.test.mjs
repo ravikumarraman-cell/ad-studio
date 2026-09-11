@@ -40,6 +40,17 @@ test('successful bounded implementation completes the run then opens independent
   assert.deepEqual(calls[2][1].result.artifacts, [{ mediaType: 'application/vnd.adx.candidate-digest', digest: 'sha256:candidate', bytes: 0 }])
 })
 
+test('corrective implementation can replace a candidate awaiting verification', async () => {
+  const { service, calls } = harness({ accepted: true, promoted: true, provider: 'LOCAL_TEST', code: 0, outputDigest: 'sha256:output', outputBytes: 12, candidateDigest: 'sha256:corrected' })
+  const awaitingVerification = { ...changeCase, state: 'AWAITING_VERIFICATION' }
+
+  const outcome = await service.execute({ scope, principal, changeCase: awaitingVerification, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-correction' })
+
+  assert.equal(outcome.accepted, true)
+  assert.equal(outcome.candidateDigest, 'sha256:corrected')
+  assert.deepEqual(calls.map(([name]) => name), ['issueLease', 'dispatchContext', 'completeDispatch', 'transition'])
+})
+
 test('failed implementation retains execution readiness and never transitions to verification', async () => {
   const { service, calls } = harness({ accepted: false, promoted: false, provider: 'LOCAL_TEST', code: 1, outputDigest: 'sha256:output', outputBytes: 12, errorCode: 'MODEL_PATCH_CONTEXT_EMPTY', candidateDigest: null })
   const outcome = await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-2' })

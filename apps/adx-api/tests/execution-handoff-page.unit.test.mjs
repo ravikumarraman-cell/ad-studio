@@ -294,11 +294,15 @@ test("execution handoff presents durable live run status without exposing unvali
   assert.match(page, /run-summary/);
   assert.match(page, /run-history/);
   assert.match(page, /Current coding-agent status/);
-  assert.match(page, /Run attempts/);
+  assert.match(page, /Previous runs/);
   assert.match(page, /MEASURED TIMINGS/);
   assert.match(page, /Where the run spent time/);
   assert.match(page, /attempt-card/);
-  assert.match(page, /Attempt ' \+ attemptNumber \+ \(isActive \? ' · Current' : ' · Latest'\)/);
+  assert.match(page, /const attempts = groupRuns\(snapshot\)\.slice\(1\)/);
+  assert.match(page, /section\.open = false/);
+  assert.match(page, /collapseRunHistory\(\)/);
+  assert.match(page, /#dispatch-form\[data-running="true"\] > :not\(#status\)\{display:none\}/);
+  assert.match(page, /.history-toggle:focus-visible/);
   assert.match(page, /Coding agent is still running\. Waiting for the workspace to finish\./);
   assert.match(page, /Coding agent completed\. Review the candidate, then verify it here\./);
   assert.match(page, /failure-trace/);
@@ -379,7 +383,41 @@ test("execution live script excludes previous-attempt events from the current ru
   assert.equal(context.currentEvents, JSON.stringify([snapshot.events[1]]));
 });
 
-test("execution live script renders the latest and every previous attempt", () => {
+test("execution live script marks workspace preparation as the active animated step", () => {
+  const script = buildExecutionLiveScript({
+    statusEndpoint: "/execution",
+    projectRepository: "cloud-asset-inventory",
+  }).replace(/^\s*<script>|<\/script>\s*$/g, "");
+  const classes = Array.from({ length: 3 }, () => new Map());
+  const steps = classes.map((state) => ({
+    classList: {
+      toggle(name, enabled) { state.set(name, enabled); },
+    },
+  }));
+  const context = {
+    clearInterval() {},
+    document: {
+      getElementById() { return null; },
+      querySelectorAll(selector) { return selector === ".run-steps li" ? steps : []; },
+    },
+    fetch: async () => ({ ok: true, json: async () => ({ runs: [], events: [] }) }),
+    location: { hash: "" },
+    setInterval() { return 1; },
+    window: { addEventListener() {} },
+  };
+  const snapshot = {
+    runs: [{ id: "current-run", status: "RUNNING", createdAt: "2026-09-10T20:00:00.000Z" }],
+    events: [{ runId: "current-run", eventType: "AgentRunProgressed.v1", phase: "CONTEXT_COLLECTION" }],
+  };
+
+  vm.runInNewContext(`${script}\napplySnapshot(${JSON.stringify(snapshot)});`, context);
+
+  assert.equal(classes[0].get("active"), true);
+  assert.equal(classes[1].get("active"), false);
+  assert.equal(classes[2].get("active"), false);
+});
+
+test("execution live script keeps the current run primary and collapses previous attempts", () => {
   const script = buildExecutionLiveScript({
     statusEndpoint: "/execution",
     projectRepository: "cloud-asset-inventory",
@@ -433,14 +471,14 @@ test("execution live script renders the latest and every previous attempt", () =
     context,
   );
 
-  assert.match(context.historyHtml, /<h3>Run attempts<\/h3>/);
-  assert.match(context.historyHtml, />3 attempts<\/span>/);
-  assert.match(context.historyHtml, /Attempt 3 · Latest/);
+  assert.match(context.historyHtml, /<strong>Previous runs<\/strong>/);
+  assert.match(context.historyHtml, />2 previous runs<\/span>/);
   assert.match(context.historyHtml, /Attempt 2/);
   assert.match(context.historyHtml, /Attempt 1/);
-  assert.equal((context.historyHtml.match(/class="attempt-card failure"/g) || []).length, 3);
-  assert.equal((context.historyHtml.match(/ open>/g) || []).length, 1);
-  assert.match(context.historyHtml, /run-3/);
+  assert.equal((context.historyHtml.match(/class="attempt-card failure"/g) || []).length, 2);
+  assert.equal((context.historyHtml.match(/ open>/g) || []).length, 0);
+  assert.doesNotMatch(context.historyHtml, /run-3/);
   assert.match(context.historyHtml, /run-2/);
   assert.match(context.historyHtml, /run-1/);
+  assert.equal(historySection.open, false);
 });

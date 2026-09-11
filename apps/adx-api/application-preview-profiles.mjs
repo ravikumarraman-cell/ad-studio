@@ -5,6 +5,12 @@ export function createApplicationPreviewProfiles({
   candidateRoot,
   repositoryId,
   dockerfilePath = "Dockerfile",
+  dockerfileRoot = null,
+  contextPath = "",
+  containerPort = 3000,
+  buildArgs = {},
+  hostName = "127.0.0.1",
+  hostPort = null,
 }) {
   if (
     typeof sourceRoot !== "string" ||
@@ -14,25 +20,30 @@ export function createApplicationPreviewProfiles({
   )
     return new Map();
   const dockerfile = normalizeDockerfilePath(dockerfilePath);
+  const applicationPath = normalizeContextPath(contextPath);
   const resolvedRepositoryId =
     typeof repositoryId === "string" && repositoryId.trim()
       ? repositoryId.trim()
       : basename(String(sourceRoot).replace(/[\\/]+$/, ""));
-  const profile = ({ id, label, context, comparisonRole, candidateBound }) =>
+  const profile = ({ id, label, root, comparisonRole, candidateBound }) =>
     Object.freeze({
       id,
       label,
       repositoryId: resolvedRepositoryId,
       comparisonRole,
       candidateBound,
-      dockerfile: resolve(context, dockerfile),
-      context,
+      dockerfile: resolve(dockerfileRoot || root, applicationPath, dockerfile),
+      context: resolve(root, applicationPath),
+      digestRoot: root,
       npmRegistry:
         "https://edgeinternal1uhg.optum.com/artifactory/api/npm/tenant-compass-npm-vir/",
       npmrcSecretPath: process.env.ADX_PREVIEW_NPMRC_FILE,
       npmrcSecretRequired: true,
       requiredDockerfileMarkers: ["ARG NPM_REGISTRY", "id=npmrc"],
-      containerPort: 3000,
+      buildArgs: Object.freeze({ ...buildArgs }),
+      containerPort,
+      hostName,
+      hostPort,
       readinessPath: "/",
     });
   return new Map([
@@ -41,7 +52,7 @@ export function createApplicationPreviewProfiles({
       profile({
         id: "health-x-before",
         label: "Before implementation",
-        context: sourceRoot,
+        root: sourceRoot,
         comparisonRole: "BEFORE",
         candidateBound: false,
       }),
@@ -51,12 +62,24 @@ export function createApplicationPreviewProfiles({
       profile({
         id: "health-x-after",
         label: "After implementation (verified candidate)",
-        context: candidateRoot,
+        root: candidateRoot,
         comparisonRole: "AFTER",
         candidateBound: true,
       }),
     ],
   ]);
+}
+
+function normalizeContextPath(value) {
+  const path = typeof value === "string" ? value.trim() : "";
+  if (!path) return "";
+  if (
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.split("/").some((part) => !part || part === "." || part === "..")
+  )
+    throw new Error("LOCAL_PREVIEW_CONTEXT_PATH_INVALID");
+  return path;
 }
 
 function normalizeDockerfilePath(value) {

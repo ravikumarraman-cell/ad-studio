@@ -21,7 +21,7 @@ async function createSession(request, as = 'alice') {
 
 function headers(token, idempotencyKey) {
   return {
-    authorization: `Bearer ${token}`,
+    cookie: `adx_session=${token}`,
     'content-type': 'application/json',
     'idempotency-key': idempotencyKey,
   }
@@ -139,8 +139,8 @@ test('execution handoff enables a ready bounded implementation after authenticat
     await page.goto(new URL(`/v1/workspaces/${workspace}/change-cases/${changeCaseId}/execution-handoff`, appUrl).toString())
     await expect(pageErrors).toEqual([])
     await expect(page.getByRole('heading', { name: 'Start a controlled implementation run' })).toBeVisible()
-  await expect(page.locator('#progress-console')).toBeHidden()
-  await expect(page.getByText('Waiting for the lease')).toHaveCount(0)
+    await expect(page.locator('#progress-console')).toBeHidden()
+    await expect(page.getByText('Waiting for the lease')).toBeHidden()
     await expect(page.getByRole('radio', { name: /gpt-5\.6-terra/ })).toBeChecked()
     const submit = page.getByRole('button', { name: 'Run bounded implementation' })
     await expect(submit).toBeDisabled()
@@ -148,6 +148,9 @@ test('execution handoff enables a ready bounded implementation after authenticat
     await expect(submit).toBeEnabled()
     await page.getByRole('button', { name: 'Run bounded implementation' }).click()
     await expect(page.getByText('Requesting a signed lease… this can take a moment.')).toBeVisible()
+    await expect(page.locator('#dispatch-form')).toHaveAttribute('data-running', 'true')
+    await expect(page.locator('#dispatch-form fieldset')).toBeHidden()
+    await expect(page.locator('#progress-console')).toBeVisible()
   } finally {
     await cancelChangeCase(request, workspace, token, changeCaseId)
   }

@@ -162,6 +162,8 @@ export function renderExecutionHandoffPage(changeCase, options) {
     .confirm{grid-template-columns:auto 1fr;align-items:start;gap:12px}
     .confirm input{margin-top:4px}
     .request-panel button#submit{justify-self:start;min-height:48px;padding-inline:22px}
+    #dispatch-form[data-running="true"] > :not(#status){display:none}
+    #dispatch-form[data-running="true"] #status{min-height:0;padding:12px 14px;border-left:3px solid #17744f;background:rgba(23,116,79,.08);color:#0f5439;font-weight:700}
     #status{margin:0;min-height:1.5em}
     #run-url{max-width:100%;font-size:.82rem;line-height:1.45}
     .console-header{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:start}
@@ -190,13 +192,20 @@ export function renderExecutionHandoffPage(changeCase, options) {
     .run-links{display:flex;gap:12px;flex-wrap:wrap;margin-top:18px}
     .run-links .button.secondary{display:inline-flex;align-items:center;justify-content:center}
     .run-warning{margin:12px 0 0;padding:10px 12px;border-radius:12px;background:rgba(200,106,64,.12);color:#7b3d20;font:600 0.8rem/1.45 ui-monospace,SFMono-Regular,monospace}
-    .run-history{display:grid;gap:14px;margin-top:16px;padding:20px;border:1px solid rgba(191,208,220,.92);border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.98),rgba(247,250,249,.96));box-shadow:0 12px 30px rgba(16,42,67,.06)}
-    .history-head{display:flex;gap:16px;align-items:flex-start;justify-content:space-between}
-    .history-head h3{margin:0}
-    .history-head p{margin:8px 0 0;max-width:70ch;color:var(--adx-copy)}
-    .history-count{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border-radius:999px;background:rgba(10,107,143,.08);border:1px solid rgba(10,107,143,.16);color:var(--adx-brand-deep);font:800 .75rem/1.2 var(--adx-body);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
-    .history-stack{display:grid;gap:12px}
-    .attempt-card{overflow:hidden;border:1px solid rgba(191,208,220,.92);border-radius:18px;background:#fff;box-shadow:0 2px 8px rgba(16,42,67,.05)}
+    .run-history{margin-top:16px;border:1px solid rgba(191,208,220,.92);border-radius:14px;background:rgba(247,250,249,.82);overflow:hidden}
+    .history-toggle{display:flex;gap:16px;align-items:center;justify-content:space-between;padding:16px 18px;cursor:pointer;list-style:none}
+    .history-toggle::-webkit-details-marker{display:none}
+    .history-toggle:focus-visible{outline:3px solid rgba(10,107,143,.35);outline-offset:-3px}
+    .history-toggle > span:first-child{display:grid;gap:3px;min-width:0}
+    .history-toggle strong{color:var(--adx-ink);font-size:1rem}
+    .history-toggle small{color:var(--adx-copy);line-height:1.4}
+    .history-kicker{color:var(--adx-brand-strong);font:800 .68rem/1.2 var(--adx-body);letter-spacing:.08em}
+    .run-history[open] .history-toggle{border-bottom:1px solid rgba(191,208,220,.75);background:#fff}
+    .history-count{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:8px 12px;border-radius:999px;background:rgba(10,107,143,.08);border:1px solid rgba(10,107,143,.16);color:var(--adx-brand-deep);font:800 .75rem/1.2 var(--adx-body);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+    .history-count::after{content:"›";font-size:1.15rem;line-height:.7;transform:rotate(90deg);transition:transform .18s ease}
+    .run-history[open] .history-count::after{transform:rotate(-90deg)}
+    .history-stack{display:grid;gap:10px;padding:14px}
+    .attempt-card{overflow:hidden;border:1px solid rgba(191,208,220,.92);border-radius:8px;background:#fff;box-shadow:0 2px 8px rgba(16,42,67,.05)}
     .attempt-card summary{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;padding:18px 20px;cursor:pointer;list-style:none}
     .attempt-card summary::-webkit-details-marker{display:none}
     .attempt-card.active summary{border-left:4px solid #17744f}
@@ -220,7 +229,8 @@ export function renderExecutionHandoffPage(changeCase, options) {
     .attempt-events time{display:block;color:var(--adx-copy);font:700 .72rem/1.2 ui-monospace,SFMono-Regular,monospace;margin-bottom:5px}
     .attempt-events strong{display:block;color:var(--adx-ink);margin-bottom:4px}
     .attempt-events p{margin:0;color:var(--adx-copy);font-size:.92rem;line-height:1.45}
-    @media (max-width:900px){.history-head,.attempt-card summary{grid-template-columns:1fr}.history-head,.attempt-summary{justify-items:start;text-align:left}.attempt-summary{min-width:0;max-width:none}}
+    @media (max-width:900px){.attempt-card summary{grid-template-columns:1fr}.attempt-summary{justify-items:start;text-align:left;min-width:0;max-width:none}}
+    @media (max-width:600px){.history-toggle{align-items:flex-start}.history-count{white-space:normal;text-align:center}}
     @media (max-width:900px){.topbar{flex-wrap:wrap;align-items:flex-start;row-gap:12px;padding-bottom:12px}.state{margin-left:auto}.hero{grid-template-columns:1fr}.hero h1{max-width:none;font-size:clamp(2rem,9vw,3.2rem)}}
     @media (max-width:600px){main{padding-top:20px}.request-panel,.run-console{padding:18px}.runner-choice,.confirm,.console-header{grid-template-columns:1fr}.confirm input{margin-top:0}.run-clock{justify-self:start}.event-feed li{grid-template-columns:1fr}.event-feed time{grid-row:auto}}
   </style></head><body><main><header class="topbar"><div class="brand"><b>ADX</b><span>Delivery control</span></div><p class="state">${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</p></header><section class="hero"><div><p class="eyebrow">Between Gate C and Gate D</p><h1>${escapeHtml(changeCase.title)}</h1><p class="hero-copy">A live, bounded implementation run. ADX retains facts about the run and only opens verification after a candidate has passed its fixed validation.</p><div class="hero-pills"><span class="pill">Signed lease</span><span class="pill">Disposable workspace</span><span class="pill">Fixed validation</span></div></div><aside class="assurance"><strong>Controlled execution</strong><p>Bounded, audited, and recoverable</p><span>Signed lease · Disposable workspace · Fixed validation</span></aside></section>${readyView}${scripts}</main></body></html>`;

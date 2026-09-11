@@ -12,6 +12,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -27,6 +28,14 @@ const maxModelAttempts = 2;
 const ignoredDirectories = new Set([
   ".git",
   "node_modules",
+  "venv",
+  ".venv",
+  ".venv-smoke",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+  ".tox",
   "dist",
   "build",
   ".output",
@@ -143,7 +152,7 @@ export class ModelPatchBroker {
         return context;
       });
       const [context] = await Promise.all([contextPromise, workspaceReadyPromise]);
-      const sourceDigestPromise = executionState.sourceDigestPromise;
+      const sourceDigestPromise = digestTree(source);
       let validation = null;
       let completion = null;
       let patches = null;
@@ -173,6 +182,7 @@ export class ModelPatchBroker {
         completion = response.completion;
         patches = response.patches;
         featureSpotlight = response.featureSpotlight;
+        var storyCoverage = response.storyCoverage;
         await reportProgress(onProgress, "MODEL_RESPONSE");
 
         const patchStartedAt = Date.now();
@@ -269,6 +279,7 @@ export class ModelPatchBroker {
         model: completion.model,
         responseDigest: completion.responseDigest,
         featureSpotlight,
+        storyCoverage,
         timings: finalizedTimings(timings, startedAt),
       });
     } catch (error) {
@@ -300,7 +311,6 @@ function getExecutionState({
   let state = executionStateCache.get(key);
   if (!state) {
     state = {
-      sourceDigestPromise: digestTree(source),
       contextPromise: collectContext(source, writePaths, readOnlyContextPaths),
       lastTouchedPaths: new Set(),
       workspaceSeeded: false,
@@ -370,20 +380,30 @@ function validationIssueFor(validation, validationCommand) {
 
 async function copyCandidateWorkspace({ source, workspace, shouldLinkSourceDependencies, timings }) {
   const copyStartedAt = Date.now();
-  await rm(workspace, { recursive: true, force: true });
-  if (process.platform === "darwin") {
-    await copyCandidateWorkspaceWithClone(source, workspace);
-  } else {
-    await cp(source, workspace, {
-      recursive: true,
+  const staleWorkspace = `${workspace}.stale-${randomUUID()}`;
+  const rotated = await rename(workspace, staleWorkspace)
+    .then(() => true)
+    .catch((error) => {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    });
+  await mkdir(workspace, { recursive: true });
+  const entries = await readdir(source, { withFileTypes: true });
+  await Promise.all(entries.map(async (entry) => {
+    const sourcePath = join(source, entry.name);
+    if (!shouldCopyCandidatePath(source, sourcePath)) return;
+    await cp(sourcePath, join(workspace, entry.name), {
+      recursive: entry.isDirectory(),
       dereference: false,
       verbatimSymlinks: true,
+      mode: process.platform === "darwin" ? fsConstants.COPYFILE_FICLONE : 0,
       filter: (path) => shouldCopyCandidatePath(source, path),
     });
-  }
+  }));
   await pruneCandidateWorkspace(workspace, source);
   if (shouldLinkSourceDependencies) await linkSourceDependencies(source, workspace);
   timings.workspaceCopyMs = Number(timings.workspaceCopyMs ?? 0) + elapsed(copyStartedAt);
+  if (rotated) void rm(staleWorkspace, { recursive: true, force: true }).catch(() => {});
 }
 
 async function restoreCandidateWorkspacePaths({ source, workspace, paths }) {
@@ -450,7 +470,51 @@ function normalizeTask(task, approvedCommands) {
     objective: task.objective.trim(),
     changeDigest: task.changeDigest,
     allowedCommands: Object.freeze(allowedCommands),
+    stories: normalizeTaskStories(task.stories),
   });
+}
+
+function normalizeTaskStories(value) {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value))
+    throw new ChangeCaseError(
+      "MODEL_PATCH_TASK_INVALID",
+      "Model-patch task stories must be an array.",
+    );
+  const keys = new Set();
+  const stories = value.map((story) => {
+    const key = typeof story?.key === "string" ? story.key.trim() : "";
+    const title = typeof story?.title === "string" ? story.title.trim() : "";
+    const narrative =
+      typeof story?.narrative === "string" ? story.narrative.trim() : "";
+    const scenarios = Array.isArray(story?.scenarios)
+      ? story.scenarios.map((scenario) => ({
+          given: String(scenario?.given ?? "").trim(),
+          when: String(scenario?.when ?? "").trim(),
+          then: String(scenario?.then ?? "").trim(),
+        }))
+      : [];
+    if (
+      !key ||
+      !title ||
+      !narrative ||
+      !scenarios.length ||
+      scenarios.some((scenario) => !scenario.given || !scenario.when || !scenario.then) ||
+      keys.has(key)
+    )
+      throw new ChangeCaseError(
+        "MODEL_PATCH_TASK_INVALID",
+        "Every model-patch story requires a unique key, title, narrative, and complete Given/When/Then scenarios.",
+      );
+    keys.add(key);
+    return Object.freeze({
+      key,
+      title,
+      narrative,
+      scenarios: Object.freeze(scenarios.map(Object.freeze)),
+    });
+  });
+  return Object.freeze(stories);
 }
 
 function normalizeWritePaths(paths) {
@@ -581,6 +645,7 @@ function buildPatchPrompt(
     schema: "adx-model-patch-request-v1",
     objective: task.objective,
     changeDigest: task.changeDigest,
+    stories: task.stories,
     validation: task.allowedCommands,
     responseSchema: {
       schema: "adx-model-patch-response-v1",
@@ -596,6 +661,13 @@ function buildPatchPrompt(
         title: "short user-visible feature title",
         summary: "short description of what to look for",
       },
+      storyCoverage: [
+        {
+          storyKey: "approved story key",
+          implementationPaths: ["patched implementation path"],
+          testPaths: ["patched test path"],
+        },
+      ],
     },
     attempt,
     previousResponseIssue,
@@ -604,6 +676,8 @@ function buildPatchPrompt(
       "Return JSON only.",
       "Change only supplied writable paths. Files marked writable:false are read-only verification context and must never be included in patches.",
       "Use complete replacement content for each changed file.",
+      "Implement every supplied approved story and all of its Given/When/Then scenarios.",
+      "For every supplied story, include one storyCoverage entry whose implementationPaths and testPaths refer only to files in this patch response.",
       "When a user-visible feature is added, include featureSpotlight and mark its visible root element with data-adx-feature equal to featureSpotlight.featureId. Otherwise set featureSpotlight to null.",
       "Do not add dependencies, run commands, request secrets, create commits, or claim verification.",
     ],
@@ -633,7 +707,12 @@ async function requestValidatedPatches({ gateway, task, context, writePaths, pre
     try {
       return Object.freeze({
         completion,
-        ...parseModelResponse(completion.text, writePaths, completion),
+        ...parseModelResponse(
+          completion.text,
+          writePaths,
+          completion,
+          task.stories,
+        ),
       });
     } catch (error) {
       if (
@@ -653,7 +732,7 @@ const modelPatchResponseSchema = Object.freeze({
   schema: {
     type: "object",
     additionalProperties: false,
-    required: ["schema", "patches", "featureSpotlight"],
+    required: ["schema", "patches", "featureSpotlight", "storyCoverage"],
     properties: {
       schema: { type: "string", enum: ["adx-model-patch-response-v1"] },
       patches: {
@@ -682,11 +761,38 @@ const modelPatchResponseSchema = Object.freeze({
           },
         ],
       },
+      storyCoverage: {
+        type: "array",
+        maxItems: 50,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["storyKey", "implementationPaths", "testPaths"],
+          properties: {
+            storyKey: { type: "string", minLength: 1, maxLength: 120 },
+            implementationPaths: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+            },
+            testPaths: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+            },
+          },
+        },
+      },
     },
   },
 });
 
-function parseModelResponse(text, writePaths, completion = {}) {
+function parseModelResponse(
+  text,
+  writePaths,
+  completion = {},
+  requiredStories = [],
+) {
   const finishReason = completion.finishReason ?? null;
   let response;
   try {
@@ -733,13 +839,71 @@ function parseModelResponse(text, writePaths, completion = {}) {
     seen.add(path);
     return Object.freeze({ path, content });
   });
+  const storyCoverage = parseStoryCoverage(
+    response.storyCoverage,
+    requiredStories,
+    new Set(patches.map((patch) => patch.path)),
+    completion,
+  );
   return Object.freeze({
     patches: Object.freeze(patches),
+    storyCoverage,
     featureSpotlight: parseFeatureSpotlight(
       response.featureSpotlight,
       completion,
     ),
   });
+}
+
+function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
+  if (!requiredStories.length) return Object.freeze([]);
+  if (!Array.isArray(value))
+    throw patchResponseError(
+      "STORY_COVERAGE_MISSING",
+      "The model-patch response must include coverage for every approved story.",
+      completion,
+    );
+  const requiredKeys = new Set(requiredStories.map((story) => story.key));
+  const seen = new Set();
+  const coverage = value.map((entry) => {
+    const storyKey = typeof entry?.storyKey === "string" ? entry.storyKey.trim() : "";
+    const implementationPaths = normalizeCoveragePaths(entry?.implementationPaths);
+    const testPaths = normalizeCoveragePaths(entry?.testPaths);
+    const implementationPathSet = new Set(implementationPaths);
+    if (
+      !requiredKeys.has(storyKey) ||
+      seen.has(storyKey) ||
+      !implementationPaths.length ||
+      !testPaths.length ||
+      testPaths.some((path) => !isTestPath(path) || implementationPathSet.has(path)) ||
+      [...implementationPaths, ...testPaths].some((path) => !patchedPaths.has(path))
+    )
+      throw patchResponseError(
+        "STORY_COVERAGE_INVALID",
+        "Every approved story must map to patched implementation and test files.",
+        completion,
+      );
+    seen.add(storyKey);
+    return Object.freeze({ storyKey, implementationPaths, testPaths });
+  });
+  if (seen.size !== requiredKeys.size || [...requiredKeys].some((key) => !seen.has(key)))
+    throw patchResponseError(
+      "STORY_COVERAGE_INCOMPLETE",
+      "The model-patch response omitted one or more approved stories.",
+      completion,
+    );
+  return Object.freeze(coverage);
+}
+
+function normalizeCoveragePaths(value) {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  return Object.freeze([
+    ...new Set(value.map((path) => String(path).trim()).filter(Boolean)),
+  ]);
+}
+
+function isTestPath(path) {
+  return /(^|\/)(__tests__\/|tests?\/)|(^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i.test(path);
 }
 
 function parseFeatureSpotlight(value, completion) {
@@ -898,14 +1062,31 @@ function appendOutputExcerpt(current, chunk) {
 }
 
 async function linkSourceDependencies(source, workspace) {
-  const dependencies = join(source, "node_modules");
-  if (!(await stat(dependencies).catch(() => null))?.isDirectory())
+  let linked = 0;
+  async function linkFrom(relativePath) {
+    for (const entry of await readdir(join(source, relativePath || "."), {
+      withFileTypes: true,
+    })) {
+      if (!entry.isDirectory()) continue;
+      const nextRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+      if (entry.name === "node_modules") {
+        if (relativePath.split("/").filter(Boolean).length > 1) continue;
+        await mkdir(dirname(join(workspace, nextRelativePath)), { recursive: true });
+        await symlink(join(source, nextRelativePath), join(workspace, nextRelativePath), "dir");
+        linked += 1;
+        continue;
+      }
+      if (ignoredDirectories.has(entry.name)) continue;
+      await linkFrom(nextRelativePath);
+    }
+  }
+  await linkFrom("");
+  if (!linked)
     throw new ChangeCaseError(
       "MODEL_PATCH_DEPENDENCIES_MISSING",
-      "The Health-X execution profile requires the server source checkout dependencies. Run npm ci in the server source checkout first.",
+      "The execution profile requires dependencies in the server source checkout. Install them before starting a bounded run.",
       { retryable: false, severity: "warning" },
     );
-  await symlink(dependencies, join(workspace, "node_modules"), "dir");
 }
 
 async function removeTransientCandidateOutputs(workspace) {
@@ -940,37 +1121,12 @@ async function pruneSensitiveFiles(workspace, source, relativePath) {
   }
 }
 
-async function copyCandidateWorkspaceWithClone(source, workspace) {
-  await new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn("/bin/cp", ["-cR", source, workspace], {
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-    });
-    let stderr = "";
-    const capture = (chunk) => {
-      stderr = appendOutputExcerpt(stderr, chunk);
-    };
-    child.stdout.on("data", capture);
-    child.stderr.on("data", capture);
-    child.once("error", rejectPromise);
-    child.once("close", (code, signal) => {
-      if (code === 0 && signal === null) return resolvePromise();
-      const error = new ChangeCaseError(
-        "MODEL_PATCH_CANDIDATE_COPY_FAILED",
-        stderr || "Failed to clone the candidate workspace.",
-      );
-      error.code = code ?? 1;
-      error.signal = signal;
-      rejectPromise(error);
-    });
-  });
-}
-
 async function digestTree(root) {
   const files = [];
   async function collect(current) {
     for (const entry of await readdir(current, { withFileTypes: true })) {
       const fullPath = join(current, entry.name);
+      if (!shouldCopyCandidatePath(root, fullPath)) continue;
       if (entry.isDirectory()) await collect(fullPath);
       else if (entry.isFile()) {
         const bytes = await readFile(fullPath);
