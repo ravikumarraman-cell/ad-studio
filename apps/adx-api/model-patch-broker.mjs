@@ -275,17 +275,23 @@ export class ModelPatchBroker {
           verificationRound += 1
         ) {
           const verifierContextStartedAt = Date.now();
+          const verifierEvidencePaths = new Set([
+            ...touchedPaths,
+            ...storyCoverage.flatMap((entry) => [
+              ...entry.implementationPaths,
+              ...entry.testPaths,
+            ]),
+          ]);
+          const verifierPriorityPaths = repairIntegrationPriorityPaths(
+            contextCatalog,
+            normalizedTask,
+            verifierEvidencePaths,
+          );
           const verifierContext = await collectContext(
             candidate,
             contextCatalog,
             normalizedTask,
-            new Set([
-              ...touchedPaths,
-              ...storyCoverage.flatMap((entry) => [
-                ...entry.implementationPaths,
-                ...entry.testPaths,
-              ]),
-            ]),
+            verifierPriorityPaths,
           );
           timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(verifierContextStartedAt);
           const verifierStartedAt = Date.now();
@@ -331,7 +337,7 @@ export class ModelPatchBroker {
             const repairFindings = verification.findings.filter((finding) =>
               repairStoryKeys.has(finding.storyKey),
             );
-            const repairPriorityPaths = new Set([
+            const repairEvidencePaths = new Set([
               ...repairFindings.flatMap((finding) => finding.evidencePaths),
               ...storyCoverage
                 .filter((entry) => repairStoryKeys.has(entry.storyKey))
@@ -340,10 +346,16 @@ export class ModelPatchBroker {
                   ...entry.testPaths,
                 ]),
             ]);
+            const repairContextTaskValue = repairContextTask(repairTask, repairFindings);
+            const repairPriorityPaths = repairIntegrationPriorityPaths(
+              contextCatalog,
+              repairContextTaskValue,
+              repairEvidencePaths,
+            );
             const repairContext = await collectContext(
               candidate,
               contextCatalog,
-              repairContextTask(repairTask, repairFindings),
+              repairContextTaskValue,
               repairPriorityPaths,
             );
             timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(repairContextStartedAt);
@@ -626,6 +638,32 @@ function repairContextTask(task, findings) {
     ...task,
     objective: [task.objective, ...findings.map((finding) => finding.message)].join(" "),
   };
+}
+
+function repairIntegrationPriorityPaths(contextCatalog, task, evidencePaths) {
+  const evidenceDirectories = [...evidencePaths].map((path) => dirname(path).split("/"));
+  const integrationPathPattern = /(?:^|\/)(?:app|config|handlers?|index|pages?|routes?|services?|workflows?)(?:[/.]|$)/i;
+  const testPathPattern = /(?:^|\/)(?:__tests__|tests?|specs?)(?:\/|$)|\.(?:test|spec)\./i;
+  const candidates = [...contextCatalog.keys()]
+    .filter((path) => !evidencePaths.has(path))
+    .map((path) => {
+      const pathParts = dirname(path).split("/");
+      const sharedDepth = evidenceDirectories.reduce((best, evidenceParts) => {
+        let depth = 0;
+        while (depth < pathParts.length && pathParts[depth] === evidenceParts[depth]) depth += 1;
+        return Math.max(best, depth);
+      }, 0);
+      const score = contextPathScore(path, contextSearchTerms(task)) +
+        sharedDepth * 12 +
+        (integrationPathPattern.test(path) ? 20 : 0) -
+        (testPathPattern.test(path) ? 24 : 0);
+      return { path, score };
+    })
+    .filter(({ score }) => score > 0)
+    .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
+    .slice(0, 12)
+    .map(({ path }) => path);
+  return new Set([...evidencePaths, ...candidates]);
 }
 
 function verifierIssueForFindings(findings) {

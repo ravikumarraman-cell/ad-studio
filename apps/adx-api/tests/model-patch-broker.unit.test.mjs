@@ -275,7 +275,7 @@ test("semantic verification rejects an isolated component and requires a reachab
                       storyKey: "STORY-1",
                       code: "UI_NOT_REACHABLE",
                       message: "FundingStatus is tested but app.js never imports or renders it.",
-                      evidencePaths: ["src/FundingStatus.js", "src/app.js"],
+                      evidencePaths: ["src/FundingStatus.js"],
                     }],
                   }
                 : {
@@ -346,6 +346,7 @@ test("semantic verification rejects an isolated component and requires a reachab
   const repairPrompt = requests.filter((request) => request.name === "adx_model_patch_response")[1].prompt;
   assert.equal(repairPrompt.previousValidationIssue.validationCommand, "candidate verifier pipeline");
   assert.match(repairPrompt.previousValidationIssue.validationOutputExcerpt, /UI_NOT_REACHABLE/);
+  assert.ok(repairPrompt.files.some((file) => file.path === "src/app.js"));
   await rm(root, { recursive: true, force: true });
 });
 
