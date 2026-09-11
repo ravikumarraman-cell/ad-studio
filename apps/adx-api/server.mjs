@@ -243,6 +243,7 @@ const modelPatchBroker = new ModelPatchBroker({
   allowedValidationCommands: [modelPatchProfile.validationCommand],
   readOnlyContextPaths: modelPatchProfile.readOnlyContextPaths,
   linkSourceDependencies: modelPatchProfile.linkSourceDependencies,
+  semanticVerification: true,
   gateway: uhgAzureOpenAiExecutionGateway,
 });
 const candidateRoot = modelPatchBroker.candidateRoot;
@@ -1081,14 +1082,14 @@ function createUhgModelCodingExecution({
     repository: { repositoryId, ref, writePaths },
     capabilities,
     limits: {
-      maxDurationSeconds: 900,
+      maxDurationSeconds: 1800,
       maxToolCalls: 2,
       maxCostUsd: 0,
       maxNetworkBytes: 0,
       maxOutputBytes: 64 * 1024,
       maxWorkspaceBytes: 64 * 1024 * 1024,
     },
-    durationSeconds: 900,
+    durationSeconds: 1800,
     taskFor: (changeCase) => ({
       objective: changeCase.title,
       changeDigest: sha256({

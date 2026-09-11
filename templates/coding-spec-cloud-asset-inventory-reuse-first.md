@@ -1,6 +1,6 @@
 # Cloud Asset Inventory Coding-Agent Spec
 
-Version: 1.2.0
+Version: 1.3.0
 
 This spec is the default prompt/contract for implementing a feature in `cloud-asset-inventory` with the `ad-studio` coding agent.
 
@@ -34,6 +34,9 @@ The coding agent MUST implement every approved story and every Given/When/Then s
 - A test path is never also declared as an implementation path.
 - Tests exercise observable behavior, authorization, response or UI state, and relevant failure paths; imports, constants, snapshots, or fixtures alone are not proof.
 - Shared implementation or test files may cover multiple stories only when each story has identifiable behavior and assertions in those files.
+- New UI behavior is imported and rendered by an existing reachable page, route, or application entry point. An isolated component is incomplete even when its unit tests pass.
+- New backend behavior is invoked by an existing route, handler, scheduled job, stream consumer, or workflow owner. An unused helper is incomplete even when its unit tests pass.
+- The implementation establishes a traceable data flow from an existing authoritative source to the story's observable outcome. Do not invent fields or persistence contracts that are absent from repository evidence.
 
 The coding agent MUST NOT claim a story is covered merely because a file was touched, an existing regression suite passed, or coverage metadata names a path. If any story cannot be implemented and tested from the supplied context, the candidate is incomplete and MUST NOT be represented as complete.
 
@@ -49,6 +52,8 @@ The executor supplies exactly one approved story per model request. For each req
 - Not anticipate, implement, or claim coverage for stories absent from the current request.
 
 After all story requests complete, the executor validates the combined candidate. Passing a per-story response contract does not prove the overall feature works; the accumulated candidate must still preserve existing behavior and satisfy all approved stories together.
+
+The executor then runs independent candidate verifiers. Each verifier may report evidence-backed findings against one or more story keys. When that happens, the coding agent receives the exact findings and repairs only the failed stories against the accumulated candidate. It MUST address the cited integration path instead of adding more isolated helpers or tests.
 
 ### 2.3 Minimal-Diff Contract
 

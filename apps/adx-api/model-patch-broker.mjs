@@ -22,10 +22,16 @@ import { validateCodingAgentAdapter } from "./coding-agent-adapters.mjs";
 
 const maxContextBytes = 160 * 1024;
 const maxFileBytes = 24 * 1024;
+const maxPriorityFileBytes = 8 * 1024;
+const maxCompactContextBytes = 48 * 1024;
+const maxCompactFileBytes = 4 * 1024;
 const maxInspectableFileBytes = 512 * 1024;
 const maxPatchBytes = 64 * 1024;
 const maxPatches = 12;
-const maxModelAttempts = 2;
+const maxVerifierResponseAttempts = 3;
+const maxPatchResponseAttempts = 3;
+const maxSemanticFindings = 20;
+const maxCandidateRepairRounds = 3;
 const maxStoriesPerBatch = 1;
 const ignoredDirectories = new Set([
   ".git",
@@ -90,6 +96,8 @@ export class ModelPatchBroker {
     allowedValidationCommands = ["node --test"],
     readOnlyContextPaths = [],
     linkSourceDependencies = false,
+    semanticVerification = false,
+    candidateVerifiers = [],
     validate = runValidation,
   } = {}) {
     this.enabled = enabled;
@@ -103,6 +111,8 @@ export class ModelPatchBroker {
       readOnlyContextPaths,
     );
     this.linkSourceDependencies = Boolean(linkSourceDependencies);
+    this.semanticVerification = Boolean(semanticVerification);
+    this.candidateVerifiers = normalizeCandidateVerifiers(candidateVerifiers);
     this.validate = validate;
   }
 
@@ -160,6 +170,11 @@ export class ModelPatchBroker {
         timings,
       });
       await workspaceReadyPromise;
+      const contextCatalog = await createContextCatalog(
+        candidate,
+        writePaths,
+        this.readOnlyContextPaths,
+      );
       const sourceDigestPromise = digestTree(source);
       let validation = null;
       let completion = null;
@@ -167,25 +182,19 @@ export class ModelPatchBroker {
       let previousValidationIssue = null;
       let storyCoverage = Object.freeze([]);
       let touchedPaths = new Set();
+      const coverage = [];
+      const completions = [];
+      const storyEvidence = new Map();
+      let requestedStories = normalizedTask.stories;
       for (let validationAttempt = 1; validationAttempt <= 2; validationAttempt += 1) {
-        if (validationAttempt > 1) {
-          await restoreCandidateWorkspacePaths({
-            source,
-            workspace: candidate,
-            paths: touchedPaths,
-          });
-          touchedPaths = new Set();
-        }
-        const coverage = [];
-        const completions = [];
-        const storyEvidence = new Map();
-        featureSpotlight = null;
-        for (const batchTask of storyBatchTasks(normalizedTask)) {
+        for (const batchTask of storyBatchTasks({
+          ...normalizedTask,
+          stories: requestedStories,
+        })) {
           const batchContextStartedAt = Date.now();
           const context = await collectContext(
             candidate,
-            writePaths,
-            this.readOnlyContextPaths,
+            contextCatalog,
             batchTask,
           );
           timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(batchContextStartedAt);
@@ -195,13 +204,14 @@ export class ModelPatchBroker {
             gateway: this.gateway,
             task: batchTask,
             context,
+            candidate,
             writePaths,
             previousValidationIssue,
             timeoutMs,
           });
           timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(modelStartedAt);
           completions.push(response.completion);
-          coverage.push(...response.storyCoverage);
+          mergeStoryCoverage(coverage, response.storyCoverage);
           featureSpotlight ??= response.featureSpotlight;
           await reportProgress(onProgress, "MODEL_RESPONSE");
 
@@ -213,12 +223,13 @@ export class ModelPatchBroker {
           for (const patch of response.patches) {
             await writePatch(candidate, patch);
             touchedPaths.add(patch.path);
+            contextCatalog.set(patch.path, true);
+            executionState.lastTouchedPaths = new Set(touchedPaths);
           }
           await captureStoryEvidence(candidate, response.storyCoverage, previousTestContent, storyEvidence);
           timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
         }
-        completion = combinedCompletion(completions);
-        storyCoverage = Object.freeze(coverage);
+        storyCoverage = Object.freeze([...coverage]);
         executionState.lastTouchedPaths = new Set(touchedPaths);
 
         const finalEvidenceIssue = await finalCandidateEvidenceIssue({
@@ -232,9 +243,166 @@ export class ModelPatchBroker {
         if (finalEvidenceIssue) {
           validation = failedValidation(finalEvidenceIssue);
           previousValidationIssue = finalEvidenceIssue;
-          if (validationAttempt < 2) continue;
+          if (validationAttempt < 2) {
+            requestedStories = storiesForValidationIssue(
+              finalEvidenceIssue,
+              normalizedTask.stories,
+              storyCoverage,
+            );
+            continue;
+          }
           break;
         }
+
+        const candidateVerifiers = [
+          ...(this.semanticVerification
+            ? [{
+                id: "model-semantic",
+                verify: (input) => verifyCandidateSemantics({
+                  gateway: this.gateway,
+                  ...input,
+                }),
+              }]
+            : []),
+          ...this.candidateVerifiers,
+        ];
+        let candidateBlocked = false;
+        for (
+          let verificationRound = 0;
+          candidateVerifiers.length &&
+            normalizedTask.stories.length &&
+            verificationRound <= maxCandidateRepairRounds;
+          verificationRound += 1
+        ) {
+          const verifierContextStartedAt = Date.now();
+          const verifierContext = await collectContext(
+            candidate,
+            contextCatalog,
+            normalizedTask,
+            new Set([
+              ...touchedPaths,
+              ...storyCoverage.flatMap((entry) => [
+                ...entry.implementationPaths,
+                ...entry.testPaths,
+              ]),
+            ]),
+          );
+          timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(verifierContextStartedAt);
+          const verifierStartedAt = Date.now();
+          await reportProgress(onProgress, "MODEL_REQUEST");
+          const verification = await runCandidateVerifiers({
+            verifiers: candidateVerifiers,
+            task: normalizedTask,
+            context: verifierContext,
+            storyCoverage,
+            touchedPaths,
+            timeoutMs,
+          });
+          timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(verifierStartedAt);
+          await reportProgress(onProgress, "MODEL_RESPONSE");
+          if (verification.passed) break;
+
+          const verificationIssue = semanticVerificationIssue(verification);
+          validation = failedValidation(verificationIssue);
+          previousValidationIssue = Object.freeze({
+            validationCommand: "candidate verifier pipeline",
+            validationCategory: "STORY_ACCEPTANCE_FAILED",
+            validationOutputExcerpt: verificationIssue,
+            validationFailureReason: null,
+            verifierFindings: verification.findings,
+          });
+          if (verificationRound === maxCandidateRepairRounds) {
+            candidateBlocked = true;
+            break;
+          }
+
+          const failedStoryKeys = new Set(
+            verification.findings.map((finding) => finding.storyKey),
+          );
+          const repairStories = normalizedTask.stories.filter((story) =>
+            failedStoryKeys.has(story.key),
+          );
+          for (const repairTask of storyBatchTasks({
+            ...normalizedTask,
+            stories: repairStories,
+          })) {
+            const repairContextStartedAt = Date.now();
+            const repairStoryKeys = new Set(repairTask.stories.map((story) => story.key));
+            const repairFindings = verification.findings.filter((finding) =>
+              repairStoryKeys.has(finding.storyKey),
+            );
+            const repairPriorityPaths = new Set([
+              ...repairFindings.flatMap((finding) => finding.evidencePaths),
+              ...storyCoverage
+                .filter((entry) => repairStoryKeys.has(entry.storyKey))
+                .flatMap((entry) => [
+                  ...entry.implementationPaths,
+                  ...entry.testPaths,
+                ]),
+            ]);
+            const repairContext = await collectContext(
+              candidate,
+              contextCatalog,
+              repairContextTask(repairTask, repairFindings),
+              repairPriorityPaths,
+            );
+            timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(repairContextStartedAt);
+            const repairModelStartedAt = Date.now();
+            await reportProgress(onProgress, "MODEL_REQUEST");
+            const response = await requestValidatedPatches({
+              gateway: this.gateway,
+              task: repairTask,
+              context: repairContext,
+              candidate,
+              writePaths,
+              previousValidationIssue: verifierIssueForFindings(repairFindings),
+              timeoutMs,
+            });
+            timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(repairModelStartedAt);
+            completions.push(response.completion);
+            featureSpotlight ??= response.featureSpotlight;
+            await reportProgress(onProgress, "MODEL_RESPONSE");
+
+            const repairPatchStartedAt = Date.now();
+            const previousTestContent = await readCandidateFiles(
+              candidate,
+              response.storyCoverage.flatMap((entry) => entry.testPaths),
+            );
+            for (const patch of response.patches) {
+              await writePatch(candidate, patch);
+              touchedPaths.add(patch.path);
+              contextCatalog.set(patch.path, true);
+              executionState.lastTouchedPaths = new Set(touchedPaths);
+            }
+            for (const repairedCoverage of response.storyCoverage) {
+              mergeStoryCoverage(coverage, [repairedCoverage]);
+            }
+            await captureStoryEvidence(
+              candidate,
+              response.storyCoverage,
+              previousTestContent,
+              storyEvidence,
+            );
+            timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(repairPatchStartedAt);
+          }
+          storyCoverage = Object.freeze([...coverage]);
+          executionState.lastTouchedPaths = new Set(touchedPaths);
+          const repairEvidenceIssue = await finalCandidateEvidenceIssue({
+            source,
+            candidate,
+            stories: normalizedTask.stories,
+            storyCoverage,
+            storyEvidence,
+            touchedPaths,
+          });
+          if (repairEvidenceIssue) {
+            validation = failedValidation(repairEvidenceIssue);
+            candidateBlocked = true;
+            break;
+          }
+        }
+        if (candidateBlocked) break;
+        completion = combinedCompletion(completions);
 
         const validationStartedAt = Date.now();
         await reportProgress(onProgress, "VALIDATION");
@@ -246,6 +414,13 @@ export class ModelPatchBroker {
         timings.validationMs = Number(timings.validationMs ?? 0) + elapsed(validationStartedAt);
         if (validation.code === 0 && !validation.timedOut) break;
         previousValidationIssue = validationIssueFor(validation, normalizedTask.allowedCommands[0]);
+        requestedStories = storiesForValidationIssue(
+          [validation.outputExcerpt, validationFailureReason(validation)]
+            .filter(Boolean)
+            .join("\n"),
+          normalizedTask.stories,
+          storyCoverage,
+        );
       }
       if (validation.code !== 0 || validation.timedOut)
         return Object.freeze({
@@ -418,6 +593,62 @@ function validationIssueFor(validation, validationCommand) {
     validationOutputExcerpt: validation.outputExcerpt ?? null,
     validationFailureReason: validationFailureReason(validation),
   });
+}
+
+function mergeStoryCoverage(target, entries) {
+  for (const entry of entries) {
+    const index = target.findIndex((candidate) => candidate.storyKey === entry.storyKey);
+    if (index >= 0) target.splice(index, 1, entry);
+    else target.push(entry);
+  }
+}
+
+function storiesForValidationIssue(issue, stories, storyCoverage) {
+  const normalizedIssue = String(issue ?? "").toLowerCase();
+  const matchedKeys = new Set();
+  for (const story of stories) {
+    if (normalizedIssue.includes(story.key.toLowerCase())) matchedKeys.add(story.key);
+  }
+  for (const coverage of storyCoverage) {
+    const paths = [...coverage.implementationPaths, ...coverage.testPaths];
+    if (paths.some((path) =>
+      normalizedIssue.includes(path.toLowerCase()) ||
+      normalizedIssue.includes(basename(path).toLowerCase())
+    ))
+      matchedKeys.add(coverage.storyKey);
+  }
+  const matchedStories = stories.filter((story) => matchedKeys.has(story.key));
+  return Object.freeze(matchedStories.length ? matchedStories : [...stories]);
+}
+
+function repairContextTask(task, findings) {
+  return {
+    ...task,
+    objective: [task.objective, ...findings.map((finding) => finding.message)].join(" "),
+  };
+}
+
+function verifierIssueForFindings(findings) {
+  return Object.freeze({
+    validationCommand: "candidate verifier pipeline",
+    validationCategory: "STORY_ACCEPTANCE_FAILED",
+    validationOutputExcerpt: semanticVerificationIssue({ findings }),
+    validationFailureReason: null,
+    verifierFindings: Object.freeze([...findings]),
+  });
+}
+
+function normalizeCandidateVerifiers(verifiers) {
+  if (!Array.isArray(verifiers))
+    throw new TypeError("candidateVerifiers must be an array.");
+  const ids = new Set();
+  return Object.freeze(verifiers.map((verifier) => {
+    const id = typeof verifier?.id === "string" ? verifier.id.trim() : "";
+    if (!id || ids.has(id) || typeof verifier?.verify !== "function")
+      throw new TypeError("Each candidate verifier requires a unique id and verify function.");
+    ids.add(id);
+    return Object.freeze({ id, verify: verifier.verify });
+  }));
 }
 
 async function copyCandidateWorkspace({ source, workspace, shouldLinkSourceDependencies, timings }) {
@@ -641,22 +872,37 @@ async function checkedOutRoot(value) {
   return root;
 }
 
-async function collectContext(root, writePaths, readOnlyContextPaths, task) {
-  const allowedPaths = new Map();
-  for (const path of await expandContextPaths(root, writePaths)) allowedPaths.set(path, true);
-  for (const path of readOnlyContextPaths) if (!allowedPaths.has(path)) allowedPaths.set(path, false);
+async function createContextCatalog(root, writePaths, readOnlyContextPaths) {
+  const catalog = new Map();
+  for (const path of await expandContextPaths(root, writePaths)) catalog.set(path, true);
+  for (const path of readOnlyContextPaths) if (!catalog.has(path)) catalog.set(path, false);
+  return catalog;
+}
 
+async function collectContext(root, contextCatalog, task, priorityPaths = new Set()) {
   let bytes = 0;
   const files = [];
-  for (const [path, writable] of rankContextPaths(allowedPaths, task)) {
+  const rankedPaths = rankContextPaths(contextCatalog, task).sort((left, right) =>
+    Number(priorityPaths.has(right[0])) - Number(priorityPaths.has(left[0])),
+  );
+  for (const [path, writable] of rankedPaths) {
     const content = await readFile(join(root, path), "utf8").catch(() => null);
     if (content === null || content.includes("\u0000")) continue;
     const contentBytes = Buffer.byteLength(content);
     if (contentBytes > maxInspectableFileBytes) continue;
-    const truncated = contentBytes > maxFileBytes;
-    const suppliedContent = truncated ? contextExcerpt(content, task) : content;
+    const priority = priorityPaths.has(path);
+    const fileLimit = priority ? maxPriorityFileBytes : maxFileBytes;
+    const truncated = contentBytes > fileLimit;
+    const suppliedContent = truncated ? contextExcerpt(content, task, fileLimit) : content;
     const size = Buffer.byteLength(suppliedContent);
-    if (bytes + size > maxContextBytes) break;
+    if (bytes + size > maxContextBytes) {
+      if (priority)
+        throw new ChangeCaseError(
+          "MODEL_PATCH_VERIFIER_CONTEXT_EXCEEDED",
+          "Changed implementation and test evidence exceeded the bounded verifier context.",
+        );
+      break;
+    }
     bytes += size;
     files.push({ path, content: suppliedContent, writable, ...(truncated ? { truncated: true } : {}) });
   }
@@ -668,7 +914,7 @@ async function collectContext(root, writePaths, readOnlyContextPaths, task) {
   return Object.freeze(files);
 }
 
-function contextExcerpt(content, task) {
+function contextExcerpt(content, task, byteLimit = maxFileBytes) {
   const lines = content.split("\n");
   const terms = contextSearchTerms(task);
   const ranges = [[0, 35], [Math.max(0, lines.length - 140), lines.length]];
@@ -687,7 +933,7 @@ function contextExcerpt(content, task) {
     if (!blockLines.length) continue;
     const current = blockLines.join("\n");
     const addition = `${excerpt ? "\n\n[... omitted unchanged lines ...]\n\n" : ""}${current}`;
-    if (Buffer.byteLength(excerpt + addition) > maxFileBytes) continue;
+    if (Buffer.byteLength(excerpt + addition) > byteLimit) continue;
     excerpt += addition;
     for (let index = Math.max(0, rawStart); index < Math.min(lines.length, rawEnd); index += 1)
       included.add(index);
@@ -808,6 +1054,8 @@ function buildPatchPrompt(
       "Each testPaths entry must be distinct from implementationPaths and use a recognizable test path: a test/tests/__tests__ directory, test_*.py, *_test.py, *.test.*, or *.spec.*.",
       "Create or extend a test beside the owning implementation or in its established domain test directory. Never repurpose an unrelated test suite merely to satisfy storyCoverage.",
       "Include the exact supplied story key in a test name or assertion message so final accumulated evidence can be verified after later story requests.",
+      "When previousValidationIssue reports a reachability, invocation, or data-flow defect, patch the existing application owner that closes that defect and test the owning integration. Cited evidence paths identify the failed evidence; they do not limit which supplied writable files may be patched.",
+      "A repair response must close the exact reported defect. Do not return another isolated helper or direct helper test when the finding requires a reachable UI owner, route, handler, job, workflow owner, notification sender, or authoritative data source.",
       "When a user-visible feature is added, include featureSpotlight and mark its visible root element with data-adx-feature equal to featureSpotlight.featureId. Otherwise set featureSpotlight to null.",
       "Do not add dependencies, run commands, request secrets, create commits, or claim verification.",
     ],
@@ -815,10 +1063,10 @@ function buildPatchPrompt(
   });
 }
 
-async function requestValidatedPatches({ gateway, task, context, writePaths, previousValidationIssue = null, timeoutMs = 900_000 }) {
+async function requestValidatedPatches({ gateway, task, context, candidate, writePaths, previousValidationIssue = null, timeoutMs = 900_000 }) {
   let lastError;
-  for (let attempt = 1; attempt <= maxModelAttempts; attempt += 1) {
-    const completion = await gateway.complete({
+  for (let attempt = 1; attempt <= maxPatchResponseAttempts; attempt += 1) {
+    const request = {
       system:
         "You are a bounded code-editing worker. Return only valid JSON matching the requested schema. Never include markdown, explanations, credentials, commands, or files outside the supplied writable context.",
       prompt: buildPatchPrompt(
@@ -834,27 +1082,322 @@ async function requestValidatedPatches({ gateway, task, context, writePaths, pre
       temperature: 0,
       responseSchema: modelPatchResponseSchema,
       timeoutMs,
+    };
+    const completion = await completeWithCompactContextFallback({
+      gateway,
+      request,
+      task,
     });
     try {
+      const parsed = parseModelResponse(
+        completion.text,
+        writePaths,
+        completion,
+        task.stories,
+      );
+      await validatePatchAnchors(candidate, parsed.patches, completion);
       return Object.freeze({
         completion,
-        ...parseModelResponse(
-          completion.text,
-          writePaths,
-          completion,
-          task.stories,
-        ),
+        ...parsed,
       });
     } catch (error) {
       if (
         error?.code !== "MODEL_PATCH_RESPONSE_INVALID" ||
-        attempt === maxModelAttempts
+        attempt === maxPatchResponseAttempts
       )
         throw withAttempts(error, attempt);
       lastError = error;
     }
   }
   throw lastError;
+}
+
+async function validatePatchAnchors(root, patches, completion) {
+  for (const patch of patches) {
+    if (patch.content !== null) continue;
+    let content = await readFile(join(root, patch.path), "utf8").catch(() => null);
+    if (content === null)
+      throw patchResponseError(
+        "PATCH_ANCHOR_TARGET_MISSING",
+        `Anchored replacement target ${patch.path} does not exist.`,
+        completion,
+        `Emit complete replacement content for new file ${patch.path}; anchored replacements are only valid for existing files.`,
+      );
+    for (const replacement of patch.replacements) {
+      const first = content.indexOf(replacement.oldText);
+      const last = content.lastIndexOf(replacement.oldText);
+      if (first < 0 || first !== last)
+        throw patchResponseError(
+          "PATCH_ANCHOR_NOT_UNIQUE",
+          `Anchored replacement for ${patch.path} must match exactly once.`,
+          completion,
+          `For ${patch.path}, copy a larger exact oldText block from one supplied excerpt so it occurs exactly once in the current file. Do not shorten, paraphrase, or combine separate excerpts.`,
+        );
+      content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacement.oldText.length)}`;
+    }
+  }
+}
+
+async function verifyCandidateSemantics({
+  gateway,
+  task,
+  context,
+  storyCoverage,
+  touchedPaths,
+  timeoutMs = 900_000,
+}) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxVerifierResponseAttempts; attempt += 1) {
+    const request = {
+      system:
+        "You are an independent code-change verifier. Evaluate repository evidence only. Return strict JSON and never propose patches, commands, credentials, or markdown.",
+      prompt: JSON.stringify({
+        schema: "adx-candidate-semantic-verification-request-v1",
+        objective: task.objective,
+        stories: task.stories,
+        storyCoverage,
+        touchedPaths: [...touchedPaths].sort(),
+        attempt,
+        previousResponseIssue:
+          lastError?.details?.responseIssue ?? lastError?.code ?? null,
+        previousResponseCorrection:
+          lastError?.details?.responseCorrection ??
+          (lastError
+            ? "Return exactly one schema-valid verifier object. passed=true requires findings=[]; passed=false requires at least one finding with an approved storyKey and evidencePaths drawn only from supplied files."
+            : null),
+        rules: [
+          "Pass only when every supplied Given/When/Then scenario is implemented in the combined candidate.",
+          "A new UI component must be imported and rendered by an existing reachable application owner; isolated components and isolated tests fail.",
+          "Backend behavior must be invoked by an existing route, handler, job, or workflow owner; unused helpers fail.",
+          "Tests must exercise the owning integration or a contract that proves the new behavior is reachable, not only a new helper in isolation.",
+          "Verify data flow from an existing source through the implementation to the observable outcome.",
+          "Reject storyCoverage claims that are unsupported by the supplied repository files.",
+          "Every finding must cite concrete evidencePaths from the supplied files and provide a concise actionable correction.",
+          "Do not require unrelated infrastructure or persistence when the existing repository contract can satisfy the story.",
+        ],
+        files: context,
+      }),
+      correlationId: randomUUID(),
+      maxTokens: 4096,
+      temperature: 0,
+      responseSchema: semanticVerificationResponseSchema,
+      timeoutMs,
+    };
+    const completion = await completeWithCompactContextFallback({ gateway, request, task });
+    try {
+      return parseSemanticVerification(
+        completion.text,
+        task.stories,
+        new Set(context.map((file) => file.path)),
+        completion,
+      );
+    } catch (error) {
+      if (
+        error?.code !== "MODEL_PATCH_RESPONSE_INVALID" ||
+        attempt === maxVerifierResponseAttempts
+      )
+        throw withAttempts(error, attempt);
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+function isUnclassifiedGatewayBadRequest(error) {
+  return error?.code === "AZURE_OPENAI_GATEWAY_REQUEST_FAILED" &&
+    error?.details?.providerStatus === 400 &&
+    !error?.details?.gatewayError;
+}
+
+async function completeWithCompactContextFallback({ gateway, request, task }) {
+  try {
+    return await gateway.complete(request);
+  } catch (error) {
+    if (!isUnclassifiedGatewayBadRequest(error)) throw error;
+    return gateway.complete({
+      ...request,
+      prompt: buildCompactContextPrompt(request.prompt, task),
+      correlationId: randomUUID(),
+    });
+  }
+}
+
+function buildCompactContextPrompt(prompt, task) {
+  const request = JSON.parse(prompt);
+  const fileLimit = Math.min(
+    maxCompactFileBytes,
+    Math.max(256, Math.floor(maxCompactContextBytes / request.files.length)),
+  );
+  const files = request.files.map((file) => {
+    if (Buffer.byteLength(file.content) <= fileLimit) return file;
+    const excerpt = contextExcerpt(file.content, task, fileLimit);
+    return {
+      ...file,
+      content: excerpt || file.content.slice(0, fileLimit),
+      truncated: true,
+    };
+  });
+  return JSON.stringify({ ...request, compactContext: true, files });
+}
+
+async function runCandidateVerifiers({ verifiers, timeoutMs, ...input }) {
+  const findings = [];
+  const storyKeys = new Set(input.task.stories.map((story) => story.key));
+  const contextPaths = new Set(input.context.map((file) => file.path));
+  const results = await Promise.all(verifiers.map((verifier) =>
+    runCandidateVerifier(verifier, { ...input, timeoutMs }, timeoutMs),
+  ));
+  for (const { verifier, result } of results) {
+    if (!result || typeof result.passed !== "boolean" || !Array.isArray(result.findings))
+      throw new ChangeCaseError(
+        "CANDIDATE_VERIFIER_INVALID",
+        `Candidate verifier ${verifier.id} returned an invalid result.`,
+      );
+    const normalizedFindings = result.findings.map((finding) => ({
+      storyKey: typeof finding?.storyKey === "string" ? finding.storyKey.trim() : "",
+      code: typeof finding?.code === "string" ? finding.code.trim() : "",
+      message: typeof finding?.message === "string" ? finding.message.trim() : "",
+      evidencePaths: normalizeCoveragePaths(finding?.evidencePaths),
+    }));
+    const unsupportedEvidencePath = normalizedFindings
+      .flatMap((finding) => finding.evidencePaths)
+      .find((path) => !contextPaths.has(path));
+    if (unsupportedEvidencePath)
+      throw new ChangeCaseError(
+        "CANDIDATE_VERIFIER_INVALID",
+        `Candidate verifier ${verifier.id} cited evidence path ${unsupportedEvidencePath}, which was not supplied in its context.`,
+      );
+    if (
+      normalizedFindings.length > maxSemanticFindings ||
+      normalizedFindings.some((finding) =>
+        !storyKeys.has(finding.storyKey) ||
+        !finding.code ||
+        !finding.message ||
+        !finding.evidencePaths.length
+      ) ||
+      (result.passed && normalizedFindings.length) ||
+      (!result.passed && !normalizedFindings.length)
+    )
+      throw new ChangeCaseError(
+        "CANDIDATE_VERIFIER_INVALID",
+        `Candidate verifier ${verifier.id} returned an inconsistent or unsupported finding.`,
+      );
+    for (const finding of normalizedFindings) {
+      findings.push(Object.freeze({ ...finding, verifierId: verifier.id }));
+    }
+  }
+  return Object.freeze({
+    passed: findings.length === 0,
+    findings: Object.freeze(findings),
+  });
+}
+
+function runCandidateVerifier(verifier, input, timeoutMs) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+      rejectPromise(new ChangeCaseError(
+        "CANDIDATE_VERIFIER_TIMED_OUT",
+        `Candidate verifier ${verifier.id} exceeded its execution deadline.`,
+      ));
+    }, timeoutMs);
+    Promise.resolve(verifier.verify({ ...input, signal: controller.signal }))
+      .then((result) => resolvePromise({ verifier, result }), rejectPromise)
+      .finally(() => clearTimeout(timeout));
+  });
+}
+
+const semanticVerificationResponseSchema = Object.freeze({
+  name: "adx_candidate_semantic_verification",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["schema", "passed", "findings"],
+    properties: {
+      schema: {
+        type: "string",
+        enum: ["adx-candidate-semantic-verification-v1"],
+      },
+      passed: { type: "boolean" },
+      findings: {
+        type: "array",
+        maxItems: maxSemanticFindings,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["storyKey", "code", "message", "evidencePaths"],
+          properties: {
+            storyKey: { type: "string", minLength: 1, maxLength: 120 },
+            code: { type: "string", minLength: 2, maxLength: 80 },
+            message: { type: "string", minLength: 2, maxLength: 500 },
+            evidencePaths: {
+              type: "array",
+              minItems: 1,
+              maxItems: 8,
+              items: { type: "string", minLength: 1, maxLength: 500 },
+            },
+          },
+        },
+      },
+    },
+  },
+});
+
+function parseSemanticVerification(text, stories, contextPaths, completion = {}) {
+  let response;
+  try {
+    response = JSON.parse(unwrapJsonFence(text));
+  } catch {
+    throw patchResponseError(
+      "SEMANTIC_VERIFICATION_NON_JSON",
+      "The semantic verifier returned a non-JSON response.",
+      completion,
+    );
+  }
+  const storyKeys = new Set(stories.map((story) => story.key));
+  const findings = Array.isArray(response?.findings)
+    ? response.findings.map((finding) => ({
+        storyKey: typeof finding?.storyKey === "string" ? finding.storyKey.trim() : "",
+        code: typeof finding?.code === "string" ? finding.code.trim() : "",
+        message: typeof finding?.message === "string" ? finding.message.trim() : "",
+        evidencePaths: normalizeCoveragePaths(finding?.evidencePaths),
+      }))
+    : null;
+  if (
+    response?.schema !== "adx-candidate-semantic-verification-v1" ||
+    typeof response?.passed !== "boolean" ||
+    !findings ||
+    findings.length > maxSemanticFindings ||
+    findings.some((finding) =>
+      !storyKeys.has(finding.storyKey) ||
+      !finding.code ||
+      !finding.message ||
+      !finding.evidencePaths.length ||
+      finding.evidencePaths.some((path) => !contextPaths.has(path))
+    ) ||
+    (response.passed && findings.length) ||
+    (!response.passed && !findings.length)
+  )
+    throw patchResponseError(
+      "SEMANTIC_VERIFICATION_SCHEMA_INVALID",
+      "The semantic verifier response must provide a consistent verdict with evidence-backed findings.",
+      completion,
+    );
+  return Object.freeze({
+    passed: response.passed,
+    findings: Object.freeze(findings.map((finding) => Object.freeze(finding))),
+  });
+}
+
+function semanticVerificationIssue(verification) {
+  return verification.findings
+    .map((finding) =>
+      `${finding.storyKey} ${finding.code}${finding.verifierId ? ` [${finding.verifierId}]` : ""}: ${finding.message} Evidence: ${finding.evidencePaths.join(", ")}`,
+    )
+    .join("\n")
+    .slice(0, 8 * 1024);
 }
 
 const modelPatchResponseSchema = Object.freeze({
@@ -1062,14 +1605,15 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
     const implementationPaths = declaredImplementationPaths.filter((path) => patchedPaths.has(path));
     const testPaths = declaredTestPaths.filter((path) => patchedPaths.has(path));
     if (!implementationPaths.length || !testPaths.length) {
-      const unpatchedPaths = [...declaredImplementationPaths, ...declaredTestPaths].filter(
+      const missingImplementationPaths = declaredImplementationPaths.filter(
         (path) => !patchedPaths.has(path),
       );
+      const missingTestPaths = declaredTestPaths.filter((path) => !patchedPaths.has(path));
       throw patchResponseError(
         "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
         "Every approved story must retain patched implementation and test evidence.",
         completion,
-        `Add patches for the missing story evidence or use emitted patch paths: ${unpatchedPaths.join(", ")}. Exact emitted patch paths: ${[...patchedPaths].join(", ")}.`,
+        `Your next response MUST emit at least one implementation patch and one test patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}.`,
       );
     }
     seen.add(storyKey);
