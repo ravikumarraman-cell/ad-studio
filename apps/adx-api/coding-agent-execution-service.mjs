@@ -372,6 +372,9 @@ function safeErrorDetails(details) {
     "STORY_COVERAGE_TEST_PATH_INVALID",
     "STORY_COVERAGE_PATH_NOT_PATCHED",
     "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
+    "PATCH_ANCHOR_TARGET_MISSING",
+    "PATCH_ANCHOR_NOT_UNIQUE",
+    "PATCH_DESTRUCTIVE_REWRITE",
   ].includes(details?.responseIssue)
     ? details.responseIssue
     : null;
@@ -388,7 +391,7 @@ function safeErrorDetails(details) {
   const modelAttempts =
     Number.isInteger(details?.modelAttempts) &&
     details.modelAttempts >= 1 &&
-    details.modelAttempts <= 2
+    details.modelAttempts <= 4
       ? details.modelAttempts
       : null;
   const failureStage = [

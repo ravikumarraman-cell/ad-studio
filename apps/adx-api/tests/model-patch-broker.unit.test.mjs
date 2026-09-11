@@ -901,6 +901,70 @@ test("model-patch broker retries a non-unique anchor before writing the batch", 
   await rm(root, { recursive: true, force: true });
 });
 
+test("model-patch broker corrects a destructive replacement before writing the batch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  const existing = `${"// preserve existing behavior\n".repeat(180)}export const tenantStatus = "before"\n`;
+  await writeFile(join(source, "src", "tenant.js"), existing);
+  await writeFile(join(source, "src", "tenant.test.js"), 'test("existing", () => {})\n');
+  const requests = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        requests.push(JSON.parse(request.prompt));
+        const implementation = requests.length === 1
+          ? 'export const tenantStatus = "after"\n'
+          : existing.replace('tenantStatus = "before"', 'tenantStatus = "after"');
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: `sha256:rewrite-${requests.length}`,
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/tenant.js", content: implementation, replacements: [] },
+              { path: "src/tenant.test.js", content: 'test("STORY-1 tenant status", () => {})\n', replacements: [] },
+            ],
+            featureSpotlight: null,
+            storyCoverage: [{
+              storyKey: "STORY-1",
+              implementationPaths: ["src/tenant.js"],
+              testPaths: ["src/tenant.test.js"],
+            }],
+          }),
+        };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Show tenant status",
+        narrative: "As a user, I want tenant status, so that readiness is visible.",
+        scenarios: [{ given: "a tenant", when: "it is viewed", then: "status is shown" }],
+      }],
+    },
+    repository,
+  });
+
+  assert.equal(result.promoted, true, JSON.stringify(result));
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].previousResponseIssue, "PATCH_DESTRUCTIVE_REWRITE");
+  assert.match(requests[1].previousResponseCorrection, /Preserve unrelated behavior/);
+  assert.match(await readFile(join(candidate, "src", "tenant.js"), "utf8"), /tenantStatus = "after"/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("model-patch broker rejects later batches that remove earlier story test evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -1214,6 +1278,7 @@ test("model-patch broker retries one malformed model response with deterministic
   assert.equal(calls[0].temperature, 0);
   assert.equal(calls[0].responseSchema.strict, true);
   assert.match(calls[1].prompt, /"previousResponseIssue":"NON_JSON"/);
+  assert.match(calls[1].prompt, /Return exactly one JSON object matching responseSchema/);
 });
 
 test("model-patch broker tells a retry when a story has no patched test evidence", async () => {

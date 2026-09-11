@@ -29,7 +29,7 @@ const maxInspectableFileBytes = 512 * 1024;
 const maxPatchBytes = 64 * 1024;
 const maxPatches = 12;
 const maxVerifierResponseAttempts = 3;
-const maxPatchResponseAttempts = 3;
+const maxPatchResponseAttempts = 4;
 const maxSemanticFindings = 20;
 const maxCandidateRepairRounds = 3;
 const maxStoriesPerBatch = 1;
@@ -1046,8 +1046,8 @@ function buildPatchPrompt(
     rules: [
       "Return JSON only.",
       "Modify existing files only when they are supplied with writable:true. You may create a new file under an approved writable root when necessary, especially a domain-local test file. Files marked writable:false are read-only verification context and must never be included in patches.",
-      "For files marked truncated:false, use complete replacement content and an empty replacements array.",
-      "For files marked truncated:true, set content to null and use minimal exact anchored replacements copied from one contiguous supplied excerpt. Each oldText must occur exactly once in the current file.",
+      "For an existing supplied file, prefer minimal exact anchored replacements: set content to null and copy each oldText from one contiguous supplied excerpt so it occurs exactly once. Use complete replacement content only when it is compact and preserves the whole existing file.",
+      "For files marked truncated:true, anchored replacements are mandatory. For a new file, provide complete content and an empty replacements array.",
       "Implement every supplied approved story and all of its Given/When/Then scenarios.",
       "Implement only the story supplied in this request. Do not anticipate, claim, or implement stories that are not present in this request; later stories are handled by separate requests against the accumulated candidate.",
       "For every supplied story, include exactly one storyCoverage entry whose implementationPaths and testPaths refer only to files in this patch response.",
@@ -1114,8 +1114,21 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
 
 async function validatePatchAnchors(root, patches, completion) {
   for (const patch of patches) {
-    if (patch.content !== null) continue;
     let content = await readFile(join(root, patch.path), "utf8").catch(() => null);
+    if (patch.content !== null) {
+      if (
+        content !== null &&
+        Buffer.byteLength(content) >= 4 * 1024 &&
+        Buffer.byteLength(patch.content) < Buffer.byteLength(content) * 0.85
+      )
+        throw patchResponseError(
+          "PATCH_DESTRUCTIVE_REWRITE",
+          `Replacement for ${patch.path} would remove more than 15 percent of an existing file.`,
+          completion,
+          `Preserve unrelated behavior in ${patch.path}. Emit the complete existing file with only the required minimal change, or use exact anchored replacements copied from the supplied content.`,
+        );
+      continue;
+    }
     if (content === null)
       throw patchResponseError(
         "PATCH_ANCHOR_TARGET_MISSING",
@@ -1613,7 +1626,7 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
         "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
         "Every approved story must retain patched implementation and test evidence.",
         completion,
-        `Your next response MUST emit at least one implementation patch and one test patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}.`,
+        `Your next response MUST emit at least one implementation patch and one test patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}. Use minimal anchored replacements for existing implementation files to reserve response space for the required test patch.`,
       );
     }
     seen.add(storyKey);
@@ -1683,13 +1696,22 @@ function patchResponseError(responseIssue, message, completion, responseCorrecti
     details: {
       responseIssue,
       responseCorrection:
-        typeof responseCorrection === "string" && responseCorrection.length <= 2048
-          ? responseCorrection
+        typeof (responseCorrection ?? defaultResponseCorrection(responseIssue)) === "string" &&
+        (responseCorrection ?? defaultResponseCorrection(responseIssue)).length <= 2048
+          ? responseCorrection ?? defaultResponseCorrection(responseIssue)
           : null,
       modelFinishReason: safeFinishReason,
       providerRequestId,
     },
   });
+}
+
+function defaultResponseCorrection(responseIssue) {
+  if (responseIssue === "NON_JSON" || responseIssue === "SCHEMA_INVALID")
+    return "Return exactly one JSON object matching responseSchema, with a non-empty patches array, featureSpotlight, and storyCoverage. Do not include markdown or explanatory text.";
+  if (responseIssue === "PATCH_INVALID")
+    return "Return only authorized relative writable paths. For each patch, provide either complete string content with no replacements or null content with at least one exact anchored replacement.";
+  return null;
 }
 
 function withAttempts(error, attempts) {
