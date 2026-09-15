@@ -178,11 +178,22 @@ export function renderExecutionHandoffPage(changeCase, options) {
     .run-steps li.failed{border-left-color:var(--adx-danger);background:var(--adx-danger-soft)}
     .run-steps strong,.run-steps small{display:block}
     .run-steps small{margin-top:4px;color:var(--adx-copy);line-height:1.45}
-    .event-feed{display:grid;gap:10px;margin:14px 0 0;padding:0;list-style:none}
-    .event-feed li{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 12px;padding:12px 14px;border-left:3px solid var(--adx-line);background:rgba(247,250,249,.7)}
+    .event-header{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:12px}
+    .event-header h3,.event-header p{margin:0}
+    .event-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .follow-live{display:inline-flex;align-items:center;gap:7px;color:var(--adx-copy);font:700 .78rem/1.2 var(--adx-body)}
+    .event-jump{min-height:34px;padding:7px 11px;border:1px solid rgba(10,107,143,.22);border-radius:6px;background:#fff;color:var(--adx-brand-deep);font:800 .75rem/1 var(--adx-body);cursor:pointer}
+    .event-feed{display:grid;align-content:start;gap:8px;height:360px;min-height:0;margin:0;padding:8px;overflow-x:hidden;overflow-y:scroll;overscroll-behavior:contain;overflow-anchor:none;scrollbar-gutter:stable;scrollbar-color:#6b8798 #e5edf0;scrollbar-width:auto;list-style:none;border:1px solid rgba(191,208,220,.82);border-radius:8px;background:#f7faf9;contain:layout paint}
+    .event-feed::-webkit-scrollbar{width:12px}
+    .event-feed::-webkit-scrollbar-track{background:#e5edf0;border-left:1px solid #c4d3da}
+    .event-feed::-webkit-scrollbar-thumb{min-height:40px;border:3px solid #e5edf0;border-radius:6px;background:#6b8798}
+    .event-feed::-webkit-scrollbar-thumb:hover{background:#476879}
+    .event-feed li{display:grid;grid-template-columns:74px minmax(0,1fr) auto;gap:4px 12px;padding:11px 12px;border-left:3px solid var(--adx-line);background:#fff}
+    .event-feed li.current{border-left-color:#0c7c62;background:#f2faf7}
     .event-feed time{grid-row:1 / span 2;color:var(--adx-muted);font:700 .72rem/1.4 ui-monospace,SFMono-Regular,monospace}
     .event-feed strong,.event-feed p{margin:0}
-    .event-feed p{color:var(--adx-copy);line-height:1.45}
+    .event-feed p{grid-column:2 / 4;color:var(--adx-copy);line-height:1.45}
+    .event-duration{color:var(--adx-brand-strong);font:800 .72rem/1.4 ui-monospace,SFMono-Regular,monospace;font-variant-numeric:tabular-nums}
     .run-console[data-phase="running"] #run-phase::before{content:"";width:8px;height:8px;margin:auto 8px auto 0;border-radius:50%;background:#0c7c62;box-shadow:0 0 0 0 rgba(12,124,98,.34);animation:live-pulse 1.8s ease-out infinite}
     .run-console[data-phase="running"] .run-steps li.active{animation:active-step 2.4s ease-in-out infinite}
     .run-console[data-phase="settled"] #run-clock{border-color:rgba(16,43,67,.16);box-shadow:none;color:var(--adx-copy)}
@@ -232,6 +243,6 @@ export function renderExecutionHandoffPage(changeCase, options) {
     @media (max-width:900px){.attempt-card summary{grid-template-columns:1fr}.attempt-summary{justify-items:start;text-align:left;min-width:0;max-width:none}}
     @media (max-width:600px){.history-toggle{align-items:flex-start}.history-count{white-space:normal;text-align:center}}
     @media (max-width:900px){.topbar{flex-wrap:wrap;align-items:flex-start;row-gap:12px;padding-bottom:12px}.state{margin-left:auto}.hero{grid-template-columns:1fr}.hero h1{max-width:none;font-size:clamp(2rem,9vw,3.2rem)}}
-    @media (max-width:600px){main{padding-top:20px}.request-panel,.run-console{padding:18px}.runner-choice,.confirm,.console-header{grid-template-columns:1fr}.confirm input{margin-top:0}.run-clock{justify-self:start}.event-feed li{grid-template-columns:1fr}.event-feed time{grid-row:auto}}
+    @media (max-width:600px){main{padding-top:20px}.request-panel,.run-console{padding:18px}.runner-choice,.confirm,.console-header{grid-template-columns:1fr}.confirm input{margin-top:0}.run-clock{justify-self:start}.event-header{align-items:flex-start;flex-direction:column}.event-feed{height:320px}.event-feed li{grid-template-columns:minmax(0,1fr) auto}.event-feed time{grid-row:auto}.event-feed p{grid-column:1 / 3}}
   </style></head><body><main><header class="topbar"><div class="brand"><b>ADX</b><span>Delivery control</span></div><p class="state">${escapeHtml(changeCase.state)} · Version ${escapeHtml(changeCase.projectionVersion)}</p></header><section class="hero"><div><p class="eyebrow">Between Gate C and Gate D</p><h1>${escapeHtml(changeCase.title)}</h1><p class="hero-copy">A live, bounded implementation run. ADX retains facts about the run and only opens verification after a candidate has passed its fixed validation.</p><div class="hero-pills"><span class="pill">Signed lease</span><span class="pill">Disposable workspace</span><span class="pill">Fixed validation</span></div></div><aside class="assurance"><strong>Controlled execution</strong><p>Bounded, audited, and recoverable</p><span>Signed lease · Disposable workspace · Fixed validation</span></aside></section>${readyView}${scripts}</main></body></html>`;
 }

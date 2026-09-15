@@ -8,6 +8,27 @@ import {
 } from "./execution-governance.mjs";
 import { authorizeResolvedEgress } from "./network-governance.mjs";
 
+function progressDetails(value) {
+  if (!value || typeof value !== "object") return {};
+  const details = {};
+  const activity = String(value.activity ?? "").trim();
+  if (["WORKSPACE_PREPARATION", "IMPLEMENTATION", "EVIDENCE_REPAIR", "SEMANTIC_VERIFICATION", "SEMANTIC_REPAIR", "EXECUTABLE_VALIDATION"].includes(activity))
+    details.activity = activity;
+  if (["AFFINITY_CAPACITY", "AFFINITY_CAPACITY_CONCURRENT"].includes(value.batchStrategy))
+    details.batchStrategy = value.batchStrategy;
+  for (const key of ["operationIndex", "operationCount", "repairRound", "durationMs", "fileCount", "patchCount", "commandCount", "exitCode"]) {
+    const number = Number(value[key]);
+    if (Number.isFinite(number) && number >= 0) details[key] = Math.round(number);
+  }
+  if (Array.isArray(value.storyKeys))
+    details.storyKeys = value.storyKeys
+      .slice(0, 20)
+      .map((key) => String(key).trim())
+      .filter(Boolean);
+  if (typeof value.timedOut === "boolean") details.timedOut = value.timedOut;
+  return details;
+}
+
 export class PostgresExecutionRepository {
   constructor({ connectionString, signer, heartbeatTimeoutSeconds = 30 }) {
     if (
@@ -421,13 +442,16 @@ export class PostgresExecutionRepository {
       ),
     );
   }
-  async recordProgress({ scope, runId, phase }) {
+  async recordProgress({ scope, runId, phase, details = {} }) {
     const allowedPhases = new Set([
       "CONTEXT_COLLECTION",
       "MODEL_REQUEST",
       "MODEL_RESPONSE",
       "VALIDATION",
       "CANDIDATE_PROMOTION",
+      "CONTEXT_READY",
+      "PATCH_APPLIED",
+      "VALIDATION_RESULT",
     ]);
     if (!allowedPhases.has(phase))
       throw new ChangeCaseError(
@@ -453,7 +477,7 @@ export class PostgresExecutionRepository {
         runId,
         sequence: await this.#nextSequence(client, runId),
         eventType: "AgentRunProgressed.v1",
-        payload: { phase },
+        payload: { phase, details: progressDetails(details) },
       });
       await this.#insertEvent(client, scope, event);
       return true;
@@ -615,7 +639,7 @@ export class PostgresExecutionRepository {
       ).rows.filter((row) => row?.id && row?.leaseId && row?.status),
       events: (
         await client.query(
-          "SELECT event.run_id AS \"runId\",event.sequence,event.event_type AS \"eventType\",event.occurred_at AS \"occurredAt\",event.payload->>'phase' AS phase,event.payload->>'errorCode' AS \"errorCode\",event.payload->'errorDetails' AS \"errorDetails\",event.payload->'timings' AS timings,event.payload->'quota' AS quota,event.payload->'artifacts' AS artifacts,COALESCE((event.payload->>'timedOut')::boolean,false) AS \"timedOut\",event.payload->>'signal' AS signal FROM adx_agent_run_event event JOIN adx_agent_run run ON run.id=event.run_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 ORDER BY event.occurred_at ASC,event.sequence ASC",
+          "SELECT event.run_id AS \"runId\",event.sequence,event.event_type AS \"eventType\",event.occurred_at AS \"occurredAt\",event.payload->>'phase' AS phase,event.payload->'details' AS details,event.payload->>'errorCode' AS \"errorCode\",event.payload->'errorDetails' AS \"errorDetails\",event.payload->'timings' AS timings,event.payload->'quota' AS quota,event.payload->'artifacts' AS artifacts,COALESCE((event.payload->>'timedOut')::boolean,false) AS \"timedOut\",event.payload->>'signal' AS signal FROM adx_agent_run_event event JOIN adx_agent_run run ON run.id=event.run_id WHERE run.change_case_id=$1 AND run.organization_id=$2 AND run.workspace_id=$3 ORDER BY event.occurred_at ASC,event.sequence ASC",
           [changeCaseId, scope.organizationId, scope.workspaceId],
         )
       ).rows.filter(

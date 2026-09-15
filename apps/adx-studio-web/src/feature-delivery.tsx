@@ -26,8 +26,9 @@ export function FeatureDelivery() {
   useEffect(() => { if (session.data) { sessionStorage.removeItem(automaticOptumRecoveryKey); clearSelectedIdentityProvider() } }, [session.data])
   const memberships: Membership[] = session.data?.memberships ?? []; const activeWorkspace = workspaceId || memberships[0]?.workspaceId || ''
   const changeCases = useQuery({ queryKey: ['adx-change-cases', activeWorkspace], queryFn: () => api<{ changeCases: ChangeCase[] }>(`/v1/workspaces/${activeWorkspace}/change-cases`), enabled: mode === 'real' && Boolean(activeWorkspace), retry: false })
-  const executionQueries = useQueries({ queries: (changeCases.data?.changeCases ?? []).map((changeCase) => ({ queryKey: ['adx-execution', activeWorkspace, changeCase.id], queryFn: (): Promise<ExecutionStatus> => getExecutionStatus(activeWorkspace, changeCase.id), enabled: mode === 'real' && Boolean(activeWorkspace), retry: false, refetchInterval: (query: unknown) => isActiveRun(((query as { state: { data?: ExecutionStatus } }).state.data)?.runs[0]?.status) ? 1500 : false })) }) as { data?: ExecutionStatus }[]
-  const executionsByCase: Record<string, ExecutionStatus | undefined> = Object.fromEntries((changeCases.data?.changeCases ?? []).map((changeCase, index) => [changeCase.id, executionQueries[index]?.data]))
+  const openChangeCases = (changeCases.data?.changeCases ?? []).filter((changeCase) => !['CANCELLED', 'OUTCOME_RECORDED'].includes(changeCase.state))
+  const executionQueries = useQueries({ queries: openChangeCases.map((changeCase) => ({ queryKey: ['adx-execution', activeWorkspace, changeCase.id], queryFn: (): Promise<ExecutionStatus> => getExecutionStatus(activeWorkspace, changeCase.id), enabled: mode === 'real' && Boolean(activeWorkspace), retry: false, refetchInterval: (query: unknown) => isActiveRun(((query as { state: { data?: ExecutionStatus } }).state.data)?.runs[0]?.status) ? 1500 : false })) }) as { data?: ExecutionStatus }[]
+  const executionsByCase: Record<string, ExecutionStatus | undefined> = Object.fromEntries(openChangeCases.map((changeCase, index) => [changeCase.id, executionQueries[index]?.data]))
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['adx-change-cases'] })
     void queryClient.invalidateQueries({ queryKey: ['adx-execution'] })

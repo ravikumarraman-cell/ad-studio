@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAzureOpenAiGatewayAdapter } from '../azure-openai-gateway-adapter.mjs'
+import { createAzureOpenAiGatewayAdapter, createCachedTokenProvider } from '../azure-openai-gateway-adapter.mjs'
 
 function response(body, { status = 200, headers = {} } = {}) { return { ok: status >= 200 && status < 300, status, headers: new Headers(headers), json: async () => body } }
 
@@ -12,6 +12,50 @@ const configuration = {
   projectId: 'cebcbf08-69a0-4c1c-b8d8-ad45f2e8c5ef',
   tokenProvider: async ({ scope }) => { assert.equal(scope, 'https://cognitiveservices.azure.com/.default'); return 'azure-ad-short-lived-access-token-value' }
 }
+
+test('cached token provider shares one acquisition across concurrent model requests', async () => {
+  let acquisitions = 0
+  let release
+  const gate = new Promise((resolve) => { release = resolve })
+  const provider = createCachedTokenProvider(async () => {
+    acquisitions += 1
+    await gate
+    return 'shared-token-with-sufficient-safe-length'
+  })
+  const first = provider({ scope: 'scope' })
+  const second = provider({ scope: 'scope' })
+  release()
+  assert.deepEqual(await Promise.all([first, second]), ['shared-token-with-sufficient-safe-length', 'shared-token-with-sufficient-safe-length'])
+  assert.equal(acquisitions, 1)
+  assert.equal(await provider({ scope: 'scope' }), 'shared-token-with-sufficient-safe-length')
+  assert.equal(acquisitions, 1)
+})
+
+test('cached token provider reuses the Azure session token until its safe refresh window', async () => {
+  let currentTime = 1_000
+  let acquisitions = 0
+  const provider = createCachedTokenProvider(async () => {
+    acquisitions += 1
+    return { token: `session-token-with-sufficient-safe-length-${acquisitions}`, expiresOnTimestamp: 11_000 }
+  }, { now: () => currentTime, refreshSkewMs: 2_000, maxAgeMs: 60_000 })
+  assert.equal(await provider({ scope: 'scope' }), 'session-token-with-sufficient-safe-length-1')
+  currentTime = 8_999
+  assert.equal(await provider({ scope: 'scope' }), 'session-token-with-sufficient-safe-length-1')
+  currentTime = 9_000
+  assert.equal(await provider({ scope: 'scope' }), 'session-token-with-sufficient-safe-length-2')
+  assert.equal(acquisitions, 2)
+})
+
+test('cached token provider fails fast when interactive acquisition does not settle', async () => {
+  const provider = createCachedTokenProvider(
+    async () => new Promise(() => {}),
+    { acquisitionTimeoutMs: 1 },
+  )
+  await assert.rejects(
+    () => provider({ scope: 'scope' }),
+    (error) => error.code === 'AZURE_OPENAI_GATEWAY_CREDENTIAL_TIMEOUT',
+  )
+})
 
 test('Azure OpenAI gateway adapter uses the approved UHG endpoint, Azure AD headers, and Chat Completions payload', async () => {
   let captured

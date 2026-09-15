@@ -60,7 +60,7 @@ import { createApplicationPreviewProfiles } from "./application-preview-profiles
 import { LocalPreviewManager } from "./local-preview-manager.mjs";
 import { renderDeliveryReviewPage } from "./delivery-review-page.mjs";
 import { changeCaseBasePath, changeCaseResource } from "./change-case-route-utils.mjs";
-import { handleExecutionHandoffRoute } from "./execution-handoff-route.mjs";
+import { executionUiRevision, handleExecutionHandoffRoute } from "./execution-handoff-route.mjs";
 import { handleEvidenceReviewRoute } from "./evidence-review-route.mjs";
 import { handleIntakeWorkshopRoute, handleStoryWorkshopRoute } from "./intake-story-workshop-route.mjs";
 import { handleStoryReviewRoute, handleStoryReleasePlanningRoute } from "./story-review-planning-route.mjs";
@@ -2085,7 +2085,10 @@ const server = createServer(async (request, response) => {
       return write(
         response,
         200,
-        await executions.view(scope, changeCaseId),
+        {
+          ...(await executions.view(scope, changeCaseId)),
+          uiRevision: executionUiRevision,
+        },
         traceId,
       );
     const body = await readJson(request);

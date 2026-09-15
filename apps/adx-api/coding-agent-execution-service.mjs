@@ -167,11 +167,12 @@ export class CodingAgentExecutionService {
         task,
         repository: this.policy.repository,
         timeoutMs: lease.limits.maxDurationSeconds * 1000,
-        onProgress: (phase) =>
+        onProgress: (phase, details) =>
           this.executionRepository.recordProgress({
             scope,
             runId: issued.runId,
             phase,
+            details,
           }),
       });
     } catch (error) {
@@ -311,6 +312,15 @@ function toCompletionResult(result) {
       bytes: Buffer.byteLength(JSON.stringify(result.featureSpotlight)),
       metadata: result.featureSpotlight,
     });
+  for (const contract of Array.isArray(result.provisionalExternalContracts)
+    ? result.provisionalExternalContracts
+    : [])
+    artifacts.push({
+      mediaType: "application/vnd.adx.provisional-external-contract+json",
+      digest: sha256(contract),
+      bytes: Buffer.byteLength(JSON.stringify(contract)),
+      metadata: contract,
+    });
   return {
     code: Number(result.code ?? 1),
     signal: result.signal ?? null,
@@ -372,9 +382,21 @@ function safeErrorDetails(details) {
     "STORY_COVERAGE_TEST_PATH_INVALID",
     "STORY_COVERAGE_PATH_NOT_PATCHED",
     "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
+    "STORY_COVERAGE_COLLAPSED",
+    "STORY_COVERAGE_OWNER_MISSING",
     "PATCH_ANCHOR_TARGET_MISSING",
     "PATCH_ANCHOR_NOT_UNIQUE",
     "PATCH_DESTRUCTIVE_REWRITE",
+    "PATCH_COUNT_EXCEEDED",
+    "PATCH_PATH_INVALID",
+    "PATCH_PATH_NOT_WRITABLE",
+    "PATCH_PATH_SENSITIVE",
+    "PATCH_MODE_INVALID",
+    "PATCH_CONTENT_INVALID",
+    "PATCH_CONTENT_TOO_LARGE",
+    "PATCH_REPLACEMENT_INVALID",
+    "PATCH_REPLACEMENT_TOO_LARGE",
+    "PATCH_PATH_DUPLICATE",
   ].includes(details?.responseIssue)
     ? details.responseIssue
     : null;
@@ -426,6 +448,20 @@ function safeErrorDetails(details) {
     details.validationFailureReason.length <= 256
       ? details.validationFailureReason
       : null;
+  const unresolvedCapabilities = Array.isArray(details?.unresolvedCapabilities)
+    ? details.unresolvedCapabilities.slice(0, 8).flatMap((entry) => {
+        const capability =
+          typeof entry?.capability === "string" && entry.capability.length <= 128
+            ? entry.capability
+            : null;
+        const missingContract = Array.isArray(entry?.missingContract)
+          ? entry.missingContract.filter((field) =>
+              ["endpoint", "authentication", "responseContract"].includes(field),
+            )
+          : [];
+        return capability ? [{ capability, missingContract }] : [];
+      })
+    : [];
   const safe = {
     provider:
       details?.provider === "AZURE_OPENAI_GATEWAY" ? details.provider : null,
@@ -447,11 +483,15 @@ function safeErrorDetails(details) {
     validationCategory,
     validationOutputExcerpt,
     validationFailureReason,
+    unresolvedCapabilities: unresolvedCapabilities.length
+      ? unresolvedCapabilities
+      : null,
   };
   return Object.values(safe).some(Boolean) ? safe : null;
 }
 
 function failureStageFor(code) {
+  if (code === "MODEL_PATCH_CAPABILITY_UNRESOLVED") return "SETUP";
   if (code.startsWith("MODEL_PATCH_VALIDATION")) return "VALIDATION";
   if (code.startsWith("MODEL_PATCH_RESPONSE")) return "MODEL_RESPONSE";
   if (

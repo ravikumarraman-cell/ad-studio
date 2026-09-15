@@ -25,8 +25,8 @@ export function RealWorkspace({ principal, memberships, activeWorkspace, setWork
   const [selectedId, setSelectedId] = useState('')
   const [cancellationMode, setCancellationMode] = useState<'selected' | 'all' | null>(null)
   const [workspaceToolsOpen, setWorkspaceToolsOpen] = useState(false)
-  const activeCases = changeCases.filter((item) => item.state !== 'CANCELLED')
-  const cancellableCases = activeCases.filter((item) => item.state !== 'OUTCOME_RECORDED')
+  const activeCases = changeCases.filter((item) => !['CANCELLED', 'OUTCOME_RECORDED'].includes(item.state))
+  const cancellableCases = activeCases
   const selected = activeCases.find((item) => item.id === selectedId) ?? activeCases[0]
   const current = selected ? workflowPosition(selected.state) : 0
   const gate = gates[Math.min(current, gates.length - 1)]

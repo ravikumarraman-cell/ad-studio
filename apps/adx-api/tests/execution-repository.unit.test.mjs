@@ -11,6 +11,11 @@ function createRepository({ leases, runs, events, changeCaseState = 'READY_FOR_E
       queries.push({ text, params })
       if (text.includes('FROM adx_change_case WHERE id=$1')) return { rowCount: 1, rows: [{ state: changeCaseState }] }
       if (text.includes("FROM adx_agent_run WHERE change_case_id=$1 AND organization_id=$2 AND workspace_id=$3 AND status IN ('LEASED','RUNNING')")) return { rowCount: runs.length, rows: runs.filter((run) => run.status === 'LEASED' || run.status === 'RUNNING') }
+      if (text.startsWith('SELECT status FROM adx_agent_run WHERE id=$1')) {
+        const run = runs.find((item) => item.id === params[0])
+        return { rowCount: run ? 1 : 0, rows: run ? [{ status: run.status }] : [] }
+      }
+      if (text.startsWith('UPDATE adx_agent_run SET updated_at=now()')) return { rowCount: 1, rows: [] }
       if (text.startsWith("UPDATE adx_execution_lease SET status='EXPIRED'")) {
         const expired = leases.filter((lease) => lease.status === 'ACTIVE' && Date.parse(lease.expiresAt) <= Date.now())
         expired.forEach((lease) => {
@@ -75,6 +80,44 @@ function createRepository({ leases, runs, events, changeCaseState = 'READY_FOR_E
   repository.scoped = async (_scope, work) => work(client)
   return { repository, queries }
 }
+
+test('recordProgress retains only safe live timing metadata', async () => {
+  const events = []
+  const { repository } = createRepository({
+    leases: [],
+    runs: [{ id: 'run-1', status: 'RUNNING' }],
+    events,
+  })
+
+  await repository.recordProgress({
+    scope,
+    runId: 'run-1',
+    phase: 'MODEL_RESPONSE',
+    details: {
+      activity: 'IMPLEMENTATION',
+      batchStrategy: 'AFFINITY_CAPACITY',
+      operationIndex: 1,
+      operationCount: 2,
+      durationMs: 41234.4,
+      storyKeys: ['STORY-1'],
+      prompt: 'must not persist',
+      authorization: 'must not persist',
+    },
+  })
+
+  assert.deepEqual(events[0].payload, {
+    phase: 'MODEL_RESPONSE',
+    details: {
+      activity: 'IMPLEMENTATION',
+      batchStrategy: 'AFFINITY_CAPACITY',
+      operationIndex: 1,
+      operationCount: 2,
+      durationMs: 41234,
+      storyKeys: ['STORY-1'],
+    },
+  })
+  assert.doesNotMatch(JSON.stringify(events[0]), /must not persist/)
+})
 
 test('view expires stale active leases and marks their runs failed before returning the snapshot', async () => {
   const staleExpiresAt = new Date(Date.now() - 60_000).toISOString()

@@ -31,10 +31,20 @@ const maxPatches = 12;
 const maxVerifierResponseAttempts = 3;
 const maxPatchResponseAttempts = 4;
 const maxSemanticFindings = 20;
+// Semantic findings can span separate production owners. Keep repairs bounded,
+// but allow each focused repair/verification cycle to close one dependency
+// chain rather than abandoning the candidate after a single broad attempt.
 const maxCandidateRepairRounds = 5;
 const maxCandidateValidationAttempts = 2;
 const maxCandidateEvidenceRepairAttempts = 1;
-const maxStoriesPerBatch = 1;
+const maxStoriesPerBatch = 3;
+const maxAffinityPartitionStories = 12;
+const maxOwnerRequirementsPerBatch = 3;
+const maxConcurrentImplementationBatches = 2;
+// A model request that has not settled promptly is not useful progress. Keep
+// the execution lease longer for recovery, but cap each upstream call so a
+// closed or half-open gateway connection cannot pin a run for fifteen minutes.
+const maxModelRequestTimeoutMs = 90_000;
 const ignoredDirectories = new Set([
   ".git",
   "node_modules",
@@ -136,6 +146,7 @@ export class ModelPatchBroker {
         "The model-patch executor requires an enabled server-owned model gateway, source checkout, and candidate path.",
       );
     const provider = validateCodingAgentAdapter(adapter);
+    const modelTimeoutMs = boundedModelRequestTimeout(timeoutMs);
     if (provider.executionKind !== "MODEL_PATCH")
       throw new ChangeCaseError(
         "MODEL_PATCH_ADAPTER_REQUIRED",
@@ -152,7 +163,7 @@ export class ModelPatchBroker {
         "MODEL_PATCH_CANDIDATE_INVALID",
         "The execution candidate must be a separate server-configured checkout path.",
       );
-    const normalizedTask = normalizeTask(task, this.allowedValidationCommands);
+    let normalizedTask = normalizeTask(task, this.allowedValidationCommands);
     const writePaths = normalizeWritePaths(repository?.writePaths);
     await reportProgress(onProgress, "CONTEXT_COLLECTION");
     const contextStartedAt = Date.now();
@@ -177,6 +188,18 @@ export class ModelPatchBroker {
         writePaths,
         this.readOnlyContextPaths,
       );
+      // Capability evidence must come from the immutable source checkout, never
+      // from a warmed candidate that may contain patches from an earlier run.
+      // Otherwise the same request can be accepted or rejected based on
+      // disposable workspace residue.
+      const provisionalExternalContracts = await assertRepositoryCapabilities(source, contextCatalog, normalizedTask);
+      if (provisionalExternalContracts.length)
+        normalizedTask = Object.freeze({ ...normalizedTask, provisionalExternalContracts });
+      await reportProgress(onProgress, "CONTEXT_READY", {
+        activity: "WORKSPACE_PREPARATION",
+        durationMs: elapsed(contextStartedAt),
+        fileCount: contextCatalog.size,
+      });
       const sourceDigestPromise = digestTree(source);
       let validation = null;
       let completion = null;
@@ -194,49 +217,101 @@ export class ModelPatchBroker {
         validationAttempt <= maxCandidateValidationAttempts;
         validationAttempt += 1
       ) {
-        for (const batchTask of storyBatchTasks({
+        const implementationBatches = storyBatchTasks({
           ...normalizedTask,
           stories: requestedStories,
-        })) {
-          const batchContextStartedAt = Date.now();
-          const context = await collectContext(
-            candidate,
+        });
+        const batchDescriptors = implementationBatches.map((batchTask, batchIndex) => {
+          const priorityPaths = repairIntegrationPriorityPaths(
             contextCatalog,
             batchTask,
+            new Set(),
           );
-          timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(batchContextStartedAt);
-          const modelStartedAt = Date.now();
-          await reportProgress(onProgress, "MODEL_REQUEST");
-          const response = await requestValidatedPatches({
-            gateway: this.gateway,
-            task: batchTask,
-            context,
-            candidate,
-            writePaths,
-            previousValidationIssue,
-            timeoutMs,
-          });
-          timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(modelStartedAt);
-          completions.push(response.completion);
-          mergeStoryCoverage(coverage, response.storyCoverage);
-          featureSpotlight ??= response.featureSpotlight;
-          await reportProgress(onProgress, "MODEL_RESPONSE");
+          return {
+            batchTask,
+            batchIndex,
+            priorityPaths,
+            ownerPaths: implementationOwnerPaths(contextCatalog, batchTask),
+          };
+        });
+        for (const wave of implementationBatchWaves(batchDescriptors)) {
+          const preparedWave = await Promise.all(wave.map(async (descriptor) => {
+            const { batchTask, batchIndex, priorityPaths } = descriptor;
+            const batchContextStartedAt = Date.now();
+            const context = await collectContext(candidate, contextCatalog, batchTask, priorityPaths);
+            const contextMs = elapsed(batchContextStartedAt);
+            return { ...descriptor, context, contextMs };
+          }));
+          const waveResults = await Promise.all(preparedWave
+            .sort((left, right) => left.batchIndex - right.batchIndex)
+            .map(async (descriptor) => {
+            const { batchTask, batchIndex, context, contextMs } = descriptor;
+            const modelStartedAt = Date.now();
+            const operation = validationAttempt === 1 && evidenceRepairAttempts === 0
+              ? "IMPLEMENTATION"
+              : "EVIDENCE_REPAIR";
+            const operationDetails = {
+              activity: operation,
+              batchStrategy: wave.length > 1 ? "AFFINITY_CAPACITY_CONCURRENT" : "AFFINITY_CAPACITY",
+              operationIndex: batchIndex + 1,
+              operationCount: implementationBatches.length,
+              storyKeys: batchTask.stories.map((story) => story.key),
+            };
+            await reportProgress(onProgress, "MODEL_REQUEST", operationDetails);
+            let response;
+            try {
+              response = await requestValidatedPatches({
+                gateway: this.gateway,
+                task: batchTask,
+                context,
+                candidate,
+                writePaths,
+                previousValidationIssue,
+                timeoutMs: modelTimeoutMs,
+              });
+            } finally {
+              descriptor.modelMs = elapsed(modelStartedAt);
+            }
+            await reportProgress(onProgress, "MODEL_RESPONSE", {
+              ...operationDetails,
+              durationMs: descriptor.modelMs,
+            });
+            return { ...descriptor, response, contextMs, operationDetails };
+          }));
+          assertDisjointBatchResponses(waveResults);
+          timings.modelMs = Number(timings.modelMs ?? 0) + Math.max(
+            0,
+            ...waveResults.map(({ modelMs }) => modelMs),
+          );
+          for (const { response, contextMs, operationDetails } of waveResults.sort(
+            (left, right) => left.batchIndex - right.batchIndex,
+          )) {
+            timings.contextMs = Number(timings.contextMs ?? 0) + contextMs;
+            completions.push(response.completion);
+            mergeStoryCoverage(coverage, response.storyCoverage);
+            featureSpotlight ??= response.featureSpotlight;
 
-          const patchStartedAt = Date.now();
-          const previousTestContent = await readCandidateFiles(
-            candidate,
-            response.storyCoverage.flatMap((entry) => entry.testPaths),
-          );
-          for (const patch of response.patches) {
-            await writePatch(candidate, patch);
-            touchedPaths.add(patch.path);
-            contextCatalog.set(patch.path, true);
-            executionState.lastTouchedPaths = new Set(touchedPaths);
+            const patchStartedAt = Date.now();
+            const previousTestContent = await readCandidateFiles(
+              candidate,
+              response.storyCoverage.flatMap((entry) => entry.testPaths),
+            );
+            for (const patch of response.patches) {
+              await writeMaterializedPatch(candidate, patch);
+              touchedPaths.add(patch.path);
+              contextCatalog.set(patch.path, true);
+              executionState.lastTouchedPaths = new Set(touchedPaths);
+            }
+            await captureStoryEvidence(candidate, response.storyCoverage, previousTestContent, storyEvidence);
+            timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
+            await reportProgress(onProgress, "PATCH_APPLIED", {
+              ...operationDetails,
+              durationMs: elapsed(patchStartedAt),
+              patchCount: response.patches.length,
+            });
           }
-          await captureStoryEvidence(candidate, response.storyCoverage, previousTestContent, storyEvidence);
-          timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
         }
-        storyCoverage = Object.freeze([...coverage]);
+        storyCoverage = orderedStoryCoverage(coverage, normalizedTask.stories);
         executionState.lastTouchedPaths = new Set(touchedPaths);
 
         const finalEvidenceIssue = await finalCandidateEvidenceIssue({
@@ -248,7 +323,10 @@ export class ModelPatchBroker {
           touchedPaths,
         });
         if (finalEvidenceIssue) {
-          validation = failedValidation(finalEvidenceIssue);
+          validation = failedValidation(finalEvidenceIssue, {
+            validationCommand: "candidate evidence gate",
+            validationCategory: "STORY_EVIDENCE_FAILED",
+          });
           previousValidationIssue = finalEvidenceIssue;
           if (evidenceRepairAttempts < maxCandidateEvidenceRepairAttempts) {
             evidenceRepairAttempts += 1;
@@ -276,6 +354,7 @@ export class ModelPatchBroker {
           ...this.candidateVerifiers,
         ];
         let candidateBlocked = false;
+        let previousSemanticFindingSignature = null;
         for (
           let verificationRound = 0;
           candidateVerifiers.length &&
@@ -283,6 +362,12 @@ export class ModelPatchBroker {
             verificationRound <= maxCandidateRepairRounds;
           verificationRound += 1
         ) {
+          const deterministicVerification = await verifyDeterministicCandidateSemantics({
+            source,
+            candidate,
+            task: normalizedTask,
+            storyCoverage,
+          });
           const verifierContextStartedAt = Date.now();
           const verifierEvidencePaths = new Set([
             ...touchedPaths,
@@ -304,21 +389,43 @@ export class ModelPatchBroker {
           );
           timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(verifierContextStartedAt);
           const verifierStartedAt = Date.now();
-          await reportProgress(onProgress, "MODEL_REQUEST");
-          const verification = await runCandidateVerifiers({
-            verifiers: candidateVerifiers,
-            task: normalizedTask,
-            context: verifierContext,
-            storyCoverage,
-            touchedPaths,
-            timeoutMs,
-          });
-          timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(verifierStartedAt);
-          await reportProgress(onProgress, "MODEL_RESPONSE");
+          const verificationDetails = {
+            activity: "SEMANTIC_VERIFICATION",
+            operationIndex: verificationRound + 1,
+            operationCount: maxCandidateRepairRounds + 1,
+            storyKeys: normalizedTask.stories.map((story) => story.key),
+          };
+          let verification = deterministicVerification;
+          if (deterministicVerification.passed) {
+            await reportProgress(onProgress, "MODEL_REQUEST", verificationDetails);
+            verification = await runCandidateVerifiers({
+              verifiers: candidateVerifiers,
+              task: normalizedTask,
+              context: verifierContext,
+              storyCoverage,
+              touchedPaths,
+              timeoutMs: modelTimeoutMs,
+            });
+            timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(verifierStartedAt);
+            await reportProgress(onProgress, "MODEL_RESPONSE", {
+              ...verificationDetails,
+              durationMs: elapsed(verifierStartedAt),
+            });
+          }
           if (verification.passed) break;
 
+          const findingSignature = semanticFindingSignature(verification.findings);
+          if (findingSignature === previousSemanticFindingSignature) {
+            candidateBlocked = true;
+            break;
+          }
+          previousSemanticFindingSignature = findingSignature;
+
           const verificationIssue = semanticVerificationIssue(verification);
-          validation = failedValidation(verificationIssue);
+          validation = failedValidation(verificationIssue, {
+            validationCommand: "candidate semantic verifier",
+            validationCategory: "SEMANTIC_VERIFICATION_FAILED",
+          });
           previousValidationIssue = Object.freeze({
             validationCommand: "candidate verifier pipeline",
             validationCategory: "STORY_ACCEPTANCE_FAILED",
@@ -337,76 +444,79 @@ export class ModelPatchBroker {
           const repairStories = normalizedTask.stories.filter((story) =>
             failedStoryKeys.has(story.key),
           );
-          for (const repairTask of storyBatchTasks({
+          const repairBatches = storyBatchTasks({
             ...normalizedTask,
             stories: repairStories,
-          })) {
-            const repairContextStartedAt = Date.now();
+          });
+          const repairDescriptors = repairBatches.map((repairTask, batchIndex) => {
             const repairStoryKeys = new Set(repairTask.stories.map((story) => story.key));
-            const repairFindings = verification.findings.filter((finding) =>
-              repairStoryKeys.has(finding.storyKey),
-            );
+            const repairFindings = verification.findings.filter((finding) => repairStoryKeys.has(finding.storyKey));
             const repairEvidencePaths = new Set([
               ...repairFindings.flatMap((finding) => finding.evidencePaths),
-              ...storyCoverage
-                .filter((entry) => repairStoryKeys.has(entry.storyKey))
-                .flatMap((entry) => [
-                  ...entry.implementationPaths,
-                  ...entry.testPaths,
-                ]),
+              ...storyCoverage.filter((entry) => repairStoryKeys.has(entry.storyKey)).flatMap((entry) => [
+                ...entry.implementationPaths, ...entry.testPaths,
+              ]),
             ]);
             const repairContextTaskValue = repairContextTask(repairTask, repairFindings);
-            const repairPriorityPaths = repairIntegrationPriorityPaths(
-              contextCatalog,
+            return {
+              batchIndex,
+              repairTask,
+              repairStoryKeys,
+              repairFindings,
               repairContextTaskValue,
-              repairEvidencePaths,
-            );
-            const repairContext = await collectContext(
-              candidate,
-              contextCatalog,
-              repairContextTaskValue,
-              repairPriorityPaths,
-            );
-            timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(repairContextStartedAt);
-            const repairModelStartedAt = Date.now();
-            await reportProgress(onProgress, "MODEL_REQUEST");
-            const response = await requestValidatedPatches({
-              gateway: this.gateway,
-              task: repairContextTaskValue,
-              context: repairContext,
-              candidate,
-              writePaths,
-              previousValidationIssue: verifierIssueForFindings(repairFindings),
-              timeoutMs,
-            });
-            timings.modelMs = Number(timings.modelMs ?? 0) + elapsed(repairModelStartedAt);
-            completions.push(response.completion);
-            featureSpotlight ??= response.featureSpotlight;
-            await reportProgress(onProgress, "MODEL_RESPONSE");
-
-            const repairPatchStartedAt = Date.now();
-            const previousTestContent = await readCandidateFiles(
-              candidate,
-              response.storyCoverage.flatMap((entry) => entry.testPaths),
-            );
-            for (const patch of response.patches) {
-              await writePatch(candidate, patch);
-              touchedPaths.add(patch.path);
-              contextCatalog.set(patch.path, true);
-              executionState.lastTouchedPaths = new Set(touchedPaths);
+              repairPriorityPaths: repairIntegrationPriorityPaths(contextCatalog, repairContextTaskValue, repairEvidencePaths),
+              ownerPaths: implementationOwnerPaths(contextCatalog, repairContextTaskValue),
+            };
+          });
+          for (const wave of implementationBatchWaves(repairDescriptors)) {
+            const preparedWave = await Promise.all(wave.map(async (descriptor) => {
+              const contextStartedAt = Date.now();
+              const context = await collectContext(candidate, contextCatalog, descriptor.repairContextTaskValue, descriptor.repairPriorityPaths);
+              return { ...descriptor, context, contextMs: elapsed(contextStartedAt) };
+            }));
+            timings.contextMs = Number(timings.contextMs ?? 0) + preparedWave.reduce((total, descriptor) => total + descriptor.contextMs, 0);
+            const results = await Promise.all(preparedWave.sort((left, right) => left.batchIndex - right.batchIndex).map(async (descriptor) => {
+              const startedAt = Date.now();
+              const repairDetails = {
+                activity: "SEMANTIC_REPAIR",
+                batchStrategy: wave.length > 1 ? "AFFINITY_CAPACITY_CONCURRENT" : "AFFINITY_CAPACITY",
+                operationIndex: descriptor.batchIndex + 1,
+                operationCount: repairBatches.length,
+                repairRound: verificationRound + 1,
+                storyKeys: descriptor.repairTask.stories.map((story) => story.key),
+              };
+              await reportProgress(onProgress, "MODEL_REQUEST", repairDetails);
+              const response = await requestValidatedPatches({
+                gateway: this.gateway, task: descriptor.repairContextTaskValue, context: descriptor.context,
+                candidate, writePaths,
+                acceptedStoryCoverage: storyCoverage.filter((entry) => descriptor.repairStoryKeys.has(entry.storyKey)),
+                previousValidationIssue: verifierIssueForFindings(descriptor.repairFindings), timeoutMs: modelTimeoutMs,
+              });
+              const durationMs = elapsed(startedAt);
+              await reportProgress(onProgress, "MODEL_RESPONSE", { ...repairDetails, durationMs });
+              return { ...descriptor, response, repairDetails, durationMs };
+            }));
+            assertDisjointBatchResponses(results);
+            timings.modelMs = Number(timings.modelMs ?? 0) + results.reduce((total, result) => total + result.durationMs, 0);
+            for (const result of results.sort((left, right) => left.batchIndex - right.batchIndex)) {
+              completions.push(result.response.completion);
+              featureSpotlight ??= result.response.featureSpotlight;
+              const patchStartedAt = Date.now();
+              const previousTestContent = await readCandidateFiles(candidate, result.response.storyCoverage.flatMap((entry) => entry.testPaths));
+              for (const patch of result.response.patches) {
+                await writeMaterializedPatch(candidate, patch);
+                touchedPaths.add(patch.path);
+                contextCatalog.set(patch.path, true);
+                executionState.lastTouchedPaths = new Set(touchedPaths);
+              }
+              for (const repairedCoverage of result.response.storyCoverage) mergeStoryCoverage(coverage, [repairedCoverage]);
+              await captureStoryEvidence(candidate, result.response.storyCoverage, previousTestContent, storyEvidence);
+              const durationMs = elapsed(patchStartedAt);
+              timings.patchMs = Number(timings.patchMs ?? 0) + durationMs;
+              await reportProgress(onProgress, "PATCH_APPLIED", { ...result.repairDetails, durationMs, patchCount: result.response.patches.length });
             }
-            for (const repairedCoverage of response.storyCoverage) {
-              mergeStoryCoverage(coverage, [repairedCoverage]);
-            }
-            await captureStoryEvidence(
-              candidate,
-              response.storyCoverage,
-              previousTestContent,
-              storyEvidence,
-            );
-            timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(repairPatchStartedAt);
           }
-          storyCoverage = Object.freeze([...coverage]);
+          storyCoverage = orderedStoryCoverage(coverage, normalizedTask.stories);
           executionState.lastTouchedPaths = new Set(touchedPaths);
           const repairEvidenceIssue = await finalCandidateEvidenceIssue({
             source,
@@ -417,7 +527,10 @@ export class ModelPatchBroker {
             touchedPaths,
           });
           if (repairEvidenceIssue) {
-            validation = failedValidation(repairEvidenceIssue);
+            validation = failedValidation(repairEvidenceIssue, {
+              validationCommand: "candidate evidence gate",
+              validationCategory: "STORY_EVIDENCE_FAILED",
+            });
             candidateBlocked = true;
             break;
           }
@@ -426,13 +539,26 @@ export class ModelPatchBroker {
         completion = combinedCompletion(completions);
 
         const validationStartedAt = Date.now();
-        await reportProgress(onProgress, "VALIDATION");
+        await reportProgress(onProgress, "VALIDATION", {
+          activity: "EXECUTABLE_VALIDATION",
+          operationIndex: validationAttempt,
+          operationCount: maxCandidateValidationAttempts,
+          commandCount: normalizedTask.allowedCommands.length,
+        });
         validation = await this.validate({
           cwd: candidate,
           allowedCommands: normalizedTask.allowedCommands,
           timeoutMs,
         });
         timings.validationMs = Number(timings.validationMs ?? 0) + elapsed(validationStartedAt);
+        await reportProgress(onProgress, "VALIDATION_RESULT", {
+          activity: "EXECUTABLE_VALIDATION",
+          operationIndex: validationAttempt,
+          operationCount: maxCandidateValidationAttempts,
+          durationMs: elapsed(validationStartedAt),
+          exitCode: validation.code,
+          timedOut: Boolean(validation.timedOut),
+        });
         if (validation.code === 0 && !validation.timedOut) break;
         previousValidationIssue = validationIssueFor(validation, normalizedTask.allowedCommands[0]);
         requestedStories = storiesForValidationIssue(
@@ -461,12 +587,13 @@ export class ModelPatchBroker {
               : "MODEL_PATCH_VALIDATION_FAILED",
           errorDetails: {
             failureStage: "VALIDATION",
-            validationCommand: normalizedTask.allowedCommands[0],
-            validationCategory: validation.timedOut
+            validationCommand:
+              validation.validationCommand ?? normalizedTask.allowedCommands[0],
+            validationCategory: validation.validationCategory ?? (validation.timedOut
               ? "TIMED_OUT"
               : validation.signal
                 ? "SIGNALED"
-                : "CHECK_FAILED",
+                : "CHECK_FAILED"),
             validationOutputExcerpt: validation.outputExcerpt ?? null,
             validationFailureReason: validationFailureReason(validation),
           },
@@ -519,6 +646,7 @@ export class ModelPatchBroker {
         responseDigest: completion.responseDigest,
         featureSpotlight,
         storyCoverage,
+        provisionalExternalContracts: normalizedTask.provisionalExternalContracts ?? Object.freeze([]),
         timings: finalizedTimings(timings, startedAt),
       });
     } catch (error) {
@@ -529,8 +657,8 @@ export class ModelPatchBroker {
   }
 }
 
-async function reportProgress(onProgress, phase) {
-  if (typeof onProgress === "function") await onProgress(phase);
+async function reportProgress(onProgress, phase, details = {}) {
+  if (typeof onProgress === "function") await onProgress(phase, details);
 }
 
 function getExecutionState({
@@ -593,6 +721,11 @@ function elapsed(startedAt) {
   return Math.max(0, Math.round(Date.now() - startedAt));
 }
 
+function boundedModelRequestTimeout(timeoutMs) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) return maxModelRequestTimeoutMs;
+  return Math.min(timeoutMs, maxModelRequestTimeoutMs);
+}
+
 function validationFailureReason(validation) {
   if (!validation || typeof validation !== "object") return null;
   if (typeof validation.outputExcerpt === "string" && validation.outputExcerpt.trim())
@@ -619,9 +752,31 @@ function validationIssueFor(validation, validationCommand) {
 function mergeStoryCoverage(target, entries) {
   for (const entry of entries) {
     const index = target.findIndex((candidate) => candidate.storyKey === entry.storyKey);
-    if (index >= 0) target.splice(index, 1, entry);
+    if (index >= 0) target.splice(index, 1, Object.freeze({
+      storyKey: entry.storyKey,
+      implementationPaths: Object.freeze([
+        ...new Set([
+          ...target[index].implementationPaths,
+          ...entry.implementationPaths,
+        ]),
+      ]),
+      testPaths: Object.freeze([
+        ...new Set([
+          ...target[index].testPaths,
+          ...entry.testPaths,
+        ]),
+      ]),
+    }));
     else target.push(entry);
   }
+}
+
+function orderedStoryCoverage(coverage, stories) {
+  const storyOrder = new Map(stories.map((story, index) => [story.key, index]));
+  return Object.freeze([...coverage].sort((left, right) =>
+    (storyOrder.get(left.storyKey) ?? Number.MAX_SAFE_INTEGER) -
+    (storyOrder.get(right.storyKey) ?? Number.MAX_SAFE_INTEGER)
+  ));
 }
 
 function storiesForValidationIssue(issue, stories, storyCoverage) {
@@ -667,7 +822,18 @@ function repairDirectiveForFinding(finding) {
 function repairIntegrationPriorityPaths(contextCatalog, task, evidencePaths) {
   const evidenceDirectories = [...evidencePaths].map((path) => dirname(path).split("/"));
   const integrationPathPattern = /(?:^|\/)(?:app|config|handlers?|index|pages?|routes?|services?|workflows?)(?:[/.]|$)/i;
-  const testPathPattern = /(?:^|\/)(?:__tests__|tests?|specs?)(?:\/|$)|\.(?:test|spec)\./i;
+  const ownerPaths = task.stories.flatMap((story) =>
+    requiredStoryOwnerRequirements(story).flatMap((requirement) =>
+      [...contextCatalog.keys()]
+        .filter((path) => requirement.pathPattern.test(path) && !isTestPath(path))
+        .sort((left, right) =>
+          contextPathScore(right, contextSearchTerms({ ...task, stories: [story] })) -
+            contextPathScore(left, contextSearchTerms({ ...task, stories: [story] })) ||
+          left.localeCompare(right)
+        )
+        .slice(0, 2)
+    )
+  );
   const candidates = [...contextCatalog.keys()]
     .filter((path) => !evidencePaths.has(path))
     .map((path) => {
@@ -680,14 +846,107 @@ function repairIntegrationPriorityPaths(contextCatalog, task, evidencePaths) {
       const score = contextPathScore(path, contextSearchTerms(task)) +
         sharedDepth * 12 +
         (integrationPathPattern.test(path) ? 20 : 0) -
-        (testPathPattern.test(path) ? 24 : 0);
+        (isTestPath(path) ? 24 : 0);
       return { path, score };
     })
     .filter(({ score }) => score > 0)
     .sort((left, right) => right.score - left.score || left.path.localeCompare(right.path))
     .slice(0, 12)
     .map(({ path }) => path);
-  return new Set([...evidencePaths, ...candidates]);
+  return new Set([...evidencePaths, ...ownerPaths, ...candidates]);
+}
+
+function implementationOwnerPaths(contextCatalog, task) {
+  return new Set(task.stories.flatMap((story) =>
+    requiredStoryOwnerRequirements(story).flatMap((requirement) =>
+      [...contextCatalog.keys()]
+        .filter((path) => requirement.pathPattern.test(path) && !isTestPath(path))
+        .sort((left, right) => left.localeCompare(right))
+        .slice(0, 2)
+    )
+  ));
+}
+
+function implementationBatchWaves(descriptors, allowConcurrency = true) {
+  if (!allowConcurrency) return descriptors.map((descriptor) => [descriptor]);
+  const remaining = [...descriptors];
+  const waves = [];
+  while (remaining.length) {
+    const wave = [remaining.shift()];
+    while (remaining.length && wave.length < maxConcurrentImplementationBatches) {
+      const candidate = remaining[0];
+      const independent = candidate.ownerPaths.size > 0 && wave.every((descriptor) =>
+        descriptor.ownerPaths.size > 0 && setsAreDisjoint(descriptor.ownerPaths, candidate.ownerPaths)
+      );
+      if (!independent) break;
+      wave.push(remaining.shift());
+    }
+    waves.push(wave);
+  }
+  return waves;
+}
+
+function setsAreDisjoint(left, right) {
+  for (const value of left) if (right.has(value)) return false;
+  return true;
+}
+
+function assertDisjointBatchResponses(results) {
+  if (results.length < 2) return;
+  const owners = new Map();
+  for (const result of results) {
+    for (const patch of result.response.patches) {
+      if (owners.has(patch.path))
+        throw new ChangeCaseError(
+          "MODEL_PATCH_BATCH_PATH_COLLISION",
+          "Concurrent implementation batches selected the same patch path; no candidate files were written.",
+          { severity: "warning", details: { collisionPath: patch.path } },
+        );
+      owners.set(patch.path, result.batchIndex);
+    }
+  }
+}
+
+async function verifyDeterministicCandidateSemantics({ source, candidate, task, storyCoverage }) {
+  const findings = [];
+  for (const story of task.stories) {
+    const coverage = storyCoverage.find((entry) => entry.storyKey === story.key);
+    if (!coverage) continue;
+    const existingImplementationPaths = [];
+    for (const path of coverage.implementationPaths) {
+      if (await lstat(join(source, path)).catch(() => null)) existingImplementationPaths.push(path);
+    }
+    if (!existingImplementationPaths.length) {
+      findings.push(Object.freeze({
+        storyKey: story.key,
+        code: "IMPLEMENTATION_NOT_REACHABLE",
+        message: "The story changes only newly created implementation files and does not patch a pre-existing production owner.",
+        evidencePaths: Object.freeze([...coverage.implementationPaths]),
+      }));
+      continue;
+    }
+
+    const sourceInspectionTests = [];
+    for (const path of coverage.testPaths) {
+      const content = await readFile(join(candidate, path), "utf8").catch(() => "");
+      if (
+        /\b(?:readFile|readFileSync|parse|ast|sourceText)\b/.test(content) &&
+        /\b(?:includes|match|regex|source|syntax|text)\b/i.test(content)
+      ) sourceInspectionTests.push(path);
+    }
+    if (sourceInspectionTests.length === coverage.testPaths.length) {
+      findings.push(Object.freeze({
+        storyKey: story.key,
+        code: "TEST_NOT_BEHAVIORAL",
+        message: "The supplied tests inspect source text or syntax without exercising the owning runtime behavior.",
+        evidencePaths: Object.freeze(sourceInspectionTests),
+      }));
+    }
+  }
+  return Object.freeze({
+    passed: findings.length === 0,
+    findings: Object.freeze(findings.slice(0, maxSemanticFindings)),
+  });
 }
 
 function verifierIssueForFindings(findings) {
@@ -855,13 +1114,157 @@ function normalizeTaskStories(value) {
 function storyBatchTasks(task) {
   if (!task.stories.length) return Object.freeze([task]);
   const batches = [];
-  for (let index = 0; index < task.stories.length; index += maxStoriesPerBatch) {
-    batches.push(Object.freeze({
+  for (let index = 0; index < task.stories.length; index += maxAffinityPartitionStories) {
+    const storyWindow = task.stories.slice(index, index + maxAffinityPartitionStories);
+    for (const stories of partitionStoriesByAffinity(storyWindow)) batches.push(Object.freeze({
       ...task,
-      stories: Object.freeze(task.stories.slice(index, index + maxStoriesPerBatch)),
+      stories: Object.freeze(stories),
     }));
   }
   return Object.freeze(batches);
+}
+
+function partitionStoriesByAffinity(stories) {
+  const batchCapacity = storyBatchCapacity(stories);
+  if (stories.length <= batchCapacity) return Object.freeze([Object.freeze([...stories])]);
+  const termSets = stories.map((story) => new Set(contextSearchTerms({ objective: "", stories: [story] })));
+  const documentFrequency = new Map();
+  for (const terms of termSets)
+    for (const term of terms) documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
+  const affinity = termSets.map((_, leftIndex) => termSets.map((__, rightIndex) =>
+    leftIndex === rightIndex
+      ? 0
+      : storyTermAffinity(
+          termSets[leftIndex],
+          termSets[rightIndex],
+          documentFrequency,
+          stories.length,
+          Math.abs(leftIndex - rightIndex),
+        )
+  ));
+  const minimumBatchCount = Math.ceil(stories.length / batchCapacity);
+  const fullMask = (1 << stories.length) - 1;
+  const memo = new Map();
+
+  function solve(mask, batchesRemaining) {
+    if (!mask) return batchesRemaining === 0 ? { score: 0, groups: [] } : null;
+    if (!batchesRemaining) return null;
+    const storyCount = countBits(mask);
+    if (storyCount < batchesRemaining || storyCount > batchesRemaining * batchCapacity) return null;
+    const key = `${mask}:${batchesRemaining}`;
+    if (memo.has(key)) return memo.get(key);
+    const firstIndex = firstSetBit(mask);
+    const available = [];
+    for (let candidateIndex = firstIndex + 1; candidateIndex < stories.length; candidateIndex += 1)
+      if (mask & (1 << candidateIndex)) available.push(candidateIndex);
+    let best = null;
+    for (let groupSize = 1; groupSize <= batchCapacity; groupSize += 1) {
+      for (const tail of combinations(available, groupSize - 1)) {
+        const group = [firstIndex, ...tail];
+        if (
+          group.length > 1 &&
+          group.reduce(
+            (count, storyIndex) =>
+              count + requiredStoryOwnerRequirements(stories[storyIndex]).length,
+            0,
+          ) > maxOwnerRequirementsPerBatch
+        )
+          continue;
+        const groupMask = group.reduce((value, storyIndex) => value | (1 << storyIndex), 0);
+        const remainder = solve(mask ^ groupMask, batchesRemaining - 1);
+        if (!remainder) continue;
+        const candidate = {
+          score: storyGroupAffinity(group, affinity) + remainder.score,
+          groups: [group, ...remainder.groups],
+        };
+        if (!best || candidate.score > best.score + Number.EPSILON ||
+          (Math.abs(candidate.score - best.score) <= Number.EPSILON &&
+            storyGroupSignature(candidate.groups) < storyGroupSignature(best.groups)))
+          best = candidate;
+      }
+    }
+    memo.set(key, best);
+    return best;
+  }
+
+  let partition = null;
+  for (
+    let batchCount = minimumBatchCount;
+    batchCount <= stories.length && !partition;
+    batchCount += 1
+  )
+    partition = solve(fullMask, batchCount);
+  return Object.freeze((partition?.groups ?? []).map((group) =>
+    Object.freeze(group.map((storyIndex) => stories[storyIndex]))
+  ));
+}
+
+function storyBatchCapacity(stories) {
+  const ownerDomains = new Set(stories.flatMap(storyOwnerDomains));
+  return stories.length >= 4 && ownerDomains.size >= 4 ? 2 : maxStoriesPerBatch;
+}
+
+function storyOwnerDomains(story) {
+  const text = [
+    story.title,
+    story.narrative,
+    ...story.scenarios.flatMap((scenario) => [scenario.given, scenario.when, scenario.then]),
+  ].join(" ").toLowerCase();
+  const domains = [];
+  const patterns = [
+    ["USER_INTERFACE", /\b(?:page|screen|view|visible|visibility|render|display|frontend|onboarding)\b/],
+    ["DATA_API", /\b(?:api|extract|extracted|validate|validation|financial|source data)\b/],
+    ["ACTION_PERSISTENCE", /\b(?:action|follow[ -]?up|record|persist|capture)\b/],
+    ["NOTIFICATION", /\b(?:notify|notification|email|recipient|operations)\b/],
+    ["REPORTING", /\b(?:report|reporting|historical|history|dashboard)\b/],
+    ["ENFORCEMENT", /\b(?:block|blocked|reject|deny|enforce|sbl|tooling)\b/],
+  ];
+  for (const [domain, pattern] of patterns) if (pattern.test(text)) domains.push(domain);
+  return domains;
+}
+
+function storyTermAffinity(leftTerms, rightTerms, documentFrequency, storyCount, distance) {
+  const union = new Set([...leftTerms, ...rightTerms]);
+  let sharedWeight = 0;
+  let unionWeight = 0;
+  for (const term of union) {
+    const weight = 1 + Math.log2((storyCount + 1) / ((documentFrequency.get(term) ?? 0) + 1));
+    unionWeight += weight;
+    if (leftTerms.has(term) && rightTerms.has(term)) sharedWeight += weight;
+  }
+  const semanticAffinity = unionWeight ? sharedWeight / unionWeight : 0;
+  return semanticAffinity + 0.001 / (distance + 1);
+}
+
+function storyGroupAffinity(group, affinity) {
+  let score = 0;
+  for (let left = 0; left < group.length; left += 1)
+    for (let right = left + 1; right < group.length; right += 1)
+      score += affinity[group[left]][group[right]];
+  return score;
+}
+
+function combinations(values, size, start = 0, selected = []) {
+  if (selected.length === size) return [selected];
+  const combinationsFound = [];
+  for (let index = start; index <= values.length - (size - selected.length); index += 1)
+    combinationsFound.push(...combinations(values, size, index + 1, [...selected, values[index]]));
+  return combinationsFound;
+}
+
+function countBits(value) {
+  let count = 0;
+  for (let remaining = value; remaining; remaining &= remaining - 1) count += 1;
+  return count;
+}
+
+function firstSetBit(mask) {
+  for (let index = 0; index < 31; index += 1) if (mask & (1 << index)) return index;
+  return -1;
+}
+
+function storyGroupSignature(groups) {
+  return groups.map((group) => group.join(",")).join("|");
 }
 
 function combinedCompletion(completions) {
@@ -941,6 +1344,104 @@ async function createContextCatalog(root, writePaths, readOnlyContextPaths) {
   return catalog;
 }
 
+async function assertRepositoryCapabilities(root, contextCatalog, task) {
+  const taskText = taskSearchText(task);
+  const requiredApis = [
+    ...new Set(
+      taskText.match(/\b(?:[A-Z][A-Za-z0-9'-]*\s+){1,6}API\b/g) ?? [],
+    ),
+  ];
+  if (!requiredApis.length) return Object.freeze([]);
+
+  const unresolved = [];
+  for (const capability of requiredApis) {
+    if (await repositoryContainsCapability(root, contextCatalog, capability)) continue;
+    const missingContract = missingExternalContractFields(taskText);
+    if (!missingContract.length) continue;
+    unresolved.push({ capability, missingContract });
+  }
+  // Missing contracts are provisional inputs, not a reason to abandon an
+  // otherwise useful implementation candidate. They remain explicit retained
+  // warnings and must never be mistaken for a verified live integration.
+  return Object.freeze(unresolved.map(({ capability, missingContract }) =>
+    Object.freeze({
+      capability,
+      missingContract: Object.freeze([...missingContract]),
+      status: "PROVISIONAL_DEVELOPER_ACTION_REQUIRED",
+      warning: `Provisional contract created for ${capability}. A developer must replace it with the authoritative endpoint, authentication, response mapping, and failure semantics before release.`,
+    })
+  ));
+}
+
+function taskSearchText(task) {
+  return [
+    task.objective,
+    ...task.stories.flatMap((story) => [
+      story.title,
+      story.narrative,
+      ...story.scenarios.flatMap((scenario) => [
+        scenario.given,
+        scenario.when,
+        scenario.then,
+      ]),
+    ]),
+  ].join("\n");
+}
+
+async function repositoryContainsCapability(root, contextCatalog, capability) {
+  const needle = normalizedCapabilityText(capability);
+  const source = [];
+  for (const path of contextCatalog.keys()) {
+    if (normalizedCapabilityText(path).includes(needle)) return true;
+    const content = await readFile(join(root, path), "utf8").catch(() => null);
+    if (content === null || content.includes("\u0000")) continue;
+    if (normalizedCapabilityText(content).includes(needle)) return true;
+    source.push({ path, content: normalizedCapabilityText(content) });
+  }
+  return repositoryContainsCompatibleNamedApi(source, capability);
+}
+
+function normalizedCapabilityText(value) {
+  return String(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function repositoryContainsCompatibleNamedApi(source, capability) {
+  // Feature language often adds a business qualifier (for example,
+  // "Account Manager Financial API") to an already-configured integration
+  // named "Account Manager" in source. Permit that only when the stable
+  // two-word identity is present and the repository itself proves endpoint,
+  // authentication, and response handling. A single keyword is never enough.
+  const ignored = new Set(["api", "service", "system", "data", "status"]);
+  const terms = normalizedCapabilityText(capability)
+    .split(" ")
+    .filter((term) => term && !ignored.has(term));
+  const identity = terms.slice(0, 2).join(" ");
+  if (identity.split(" ").length < 2) return false;
+
+  const integrationSources = source.filter(({ path, content }) =>
+    normalizedCapabilityText(path).includes(identity) || content.includes(identity),
+  );
+  if (!integrationSources.length) return false;
+
+  const repositoryText = source.map(({ path, content }) => `${path}\n${content}`).join("\n");
+  return Boolean(
+    /https? |endpoint|base api url/.test(repositoryText) &&
+      /auth|oauth|token|credential|client secret/.test(repositoryText) &&
+      /response|payload|schema|mapping/.test(repositoryText),
+  );
+}
+
+function missingExternalContractFields(taskText) {
+  const missing = [];
+  if (!/https?:\/\/|\bendpoint\b|\bbase[ _-]?url\b/i.test(taskText))
+    missing.push("endpoint");
+  if (!/\bauth(?:entication|orization)?\b|\boauth\b|\btoken\b|\bcredential/i.test(taskText))
+    missing.push("authentication");
+  if (!/\bresponse\b|\bschema\b|\bpayload\b|\bmapping\b/i.test(taskText))
+    missing.push("responseContract");
+  return missing;
+}
+
 async function collectContext(root, contextCatalog, task, priorityPaths = new Set()) {
   let bytes = 0;
   const files = [];
@@ -951,9 +1452,17 @@ async function collectContext(root, contextCatalog, task, priorityPaths = new Se
       Math.floor((maxContextBytes * 0.9) / Math.max(1, priorityPaths.size)),
     ),
   );
-  const rankedPaths = rankContextPaths(contextCatalog, task).sort((left, right) =>
-    Number(priorityPaths.has(right[0])) - Number(priorityPaths.has(left[0])),
+  const priorityOrder = new Map(
+    [...priorityPaths].map((path, index) => [path, index]),
   );
+  const rankedPaths = rankContextPaths(contextCatalog, task).sort((left, right) => {
+    const priorityDifference =
+      Number(priorityPaths.has(right[0])) - Number(priorityPaths.has(left[0]));
+    if (priorityDifference) return priorityDifference;
+    if (priorityPaths.has(left[0]))
+      return priorityOrder.get(left[0]) - priorityOrder.get(right[0]);
+    return 0;
+  });
   for (const [path, writable] of rankedPaths) {
     const content = await readFile(join(root, path), "utf8").catch(() => null);
     if (content === null || content.includes("\u0000")) continue;
@@ -1073,12 +1582,19 @@ function buildPatchPrompt(
   previousResponseIssue = null,
   previousResponseCorrection = null,
   previousValidationIssue = null,
+  acceptedStoryCoverage = [],
 ) {
+  const ownerContext = requiredOwnerContext(task, files, acceptedStoryCoverage);
+  const ownerCorrection = focusedOwnerCorrection(ownerContext, previousResponseIssue, previousResponseCorrection);
   return JSON.stringify({
     schema: "adx-model-patch-request-v1",
     objective: task.objective,
     changeDigest: task.changeDigest,
     stories: task.stories,
+    provisionalExternalContracts: task.provisionalExternalContracts ?? [],
+    acceptedStoryCoverage,
+    requiredOwnerContext: ownerContext,
+    ownerCorrection,
     validation: task.allowedCommands,
     responseSchema: {
       schema: "adx-model-patch-response-v1",
@@ -1109,12 +1625,23 @@ function buildPatchPrompt(
     previousValidationIssue,
     rules: [
       "Return JSON only.",
+      ...(ownerCorrection.length ? [
+        "This is an owner-only correction. Retain prior staged patches; patch and cite every exact ownerCorrection.suppliedCandidatePaths target. Do not substitute a new component, generic helper, or a different similarly named file.",
+        "For each ownerCorrection entry, its storyCoverage implementationPaths must contain one of its suppliedCandidatePaths exactly. Return the owner patch and an owner-level behavioral test before any optional work.",
+      ] : []),
       "Modify existing files only when they are supplied with writable:true. You may create a new file under an approved writable root when necessary, especially a domain-local test file. Files marked writable:false are read-only verification context and must never be included in patches.",
       "For an existing supplied file, prefer minimal exact anchored replacements: set content to null and copy each oldText from one contiguous supplied excerpt so it occurs exactly once. Use complete replacement content only when it is compact and preserves the whole existing file.",
       "For files marked truncated:true, anchored replacements are mandatory. For a new file, provide complete content and an empty replacements array.",
+      "Emit each patch path exactly once. When multiple stories change the same file, combine all changes into one patch and reference that shared path from each applicable storyCoverage entry.",
       "Implement every supplied approved story and all of its Given/When/Then scenarios.",
-      "Implement only the story supplied in this request. Do not anticipate, claim, or implement stories that are not present in this request; later stories are handled by separate requests against the accumulated candidate.",
-      "For every supplied story, include exactly one storyCoverage entry whose implementationPaths and testPaths refer only to files in this patch response.",
+      "For every provisionalExternalContracts entry, create a source-owned adapter boundary that makes the provisional state visible to developers and returns an explicit UNKNOWN result when authoritative data is unavailable. Do not invent an endpoint, credential, response field, or funded/unfunded value. Preserve the retained warning for developer follow-up.",
+      "Implement only the stories supplied in this request. Treat them as one coherent feature, reuse shared integration points, and do not anticipate or claim stories that are not present.",
+      "Do not collapse stories for distinct workflows into one isolated helper and one direct helper test. When stories require different reachable UI owners, routes, handlers, jobs, notification senders, reports, or enforcement points, patch and integration-test each required owner; a shared helper is supplemental evidence only.",
+      "For a batch of three stories, storyCoverage must collectively reference at least two distinct patched implementation paths. Include the shared domain logic and at least one reachable owning page, route, handler, job, report, notification sender, or enforcement point.",
+      "For each story in an owner-diverse pair, storyCoverage implementationPaths must include patched files for every explicit boundary in that story: frontend/page visibility, authoritative API or extracted-account data, action persistence, notification delivery, reporting, SBL, and tooling. A generic workflow helper does not satisfy a named boundary.",
+      "Treat requiredOwnerContext as a binding implementation contract. For every entry with requiredInThisResponse:true, patch one exact suppliedCandidatePaths production owner and cite it in that story's implementationPaths. Entries with ownerDiscovery:NO_SUPPLIED_PRODUCTION_OWNER are not implementation targets: do not invent a similarly named helper, route, or sender; preserve the existing owner and let a later evidence-backed verifier finding identify it. Entries with requiredInThisResponse:false and acceptedPaths are already accepted and must not be regenerated unless the verifier finding directly requires changing them. One combined owner may satisfy multiple entries when the same supplied path is listed for them.",
+      "Satisfy every requiredOwnerContext.acceptanceProof through production code and an owner-level behavioral test. Tests that only read source text, parse an AST, inspect symbols, or invoke an isolated helper are not acceptance evidence.",
+      "For every supplied story, include exactly one storyCoverage entry. On initial implementation, implementationPaths and testPaths must refer to files in this patch response. On repair, they may also cite paths in acceptedStoryCoverage, but every repaired story must still cite at least one path newly emitted in this response.",
       "Each testPaths entry must be distinct from implementationPaths and use a recognizable test path: a test/tests/__tests__ directory, test_*.py, *_test.py, *.test.*, or *.spec.*.",
       "Create or extend a test beside the owning implementation or in its established domain test directory. Never repurpose an unrelated test suite merely to satisfy storyCoverage.",
       "Include the exact supplied story key in a test name or assertion message so final accumulated evidence can be verified after later story requests.",
@@ -1129,9 +1656,82 @@ function buildPatchPrompt(
   });
 }
 
-async function requestValidatedPatches({ gateway, task, context, candidate, writePaths, previousValidationIssue = null, timeoutMs = 900_000 }) {
+function requiredOwnerContext(task, files, acceptedStoryCoverage = []) {
+  return task.stories.flatMap((story) =>
+    requiredStoryOwnerRequirements(story).map((requirement) => {
+      const suppliedCandidatePaths = files
+        .filter((file) => !isTestPath(file.path) && isConcreteOwnerCandidate(requirement, file))
+        .map((file) => file.path)
+        .slice(0, 4);
+      const acceptedPaths = acceptedStoryCoverage
+        .find((entry) => entry.storyKey === story.key)
+        ?.implementationPaths.filter((path) => suppliedCandidatePaths.includes(path)) ?? [];
+      return {
+        storyKey: story.key,
+        owner: requirement.label,
+        acceptanceProof: ownerAcceptanceProof(requirement.label),
+        // Never ask the model to satisfy an owner that the repository scan did
+        // not actually supply. That creates invented files and a repeat-token
+        // repair loop. A later semantic finding can nominate real evidence.
+        requiredInThisResponse: acceptedPaths.length === 0 && suppliedCandidatePaths.length > 0,
+        acceptedPaths,
+        suppliedCandidatePaths,
+        ownerDiscovery: suppliedCandidatePaths.length ? "SUPPLIED_PRODUCTION_OWNER" : "NO_SUPPLIED_PRODUCTION_OWNER",
+      };
+    })
+  );
+}
+
+function focusedOwnerCorrection(ownerContext, issue, correction) {
+  if (issue !== "STORY_COVERAGE_OWNER_MISSING") return Object.freeze([]);
+  const text = String(correction ?? "");
+  return Object.freeze(ownerContext.filter((owner) =>
+    owner.requiredInThisResponse &&
+    owner.suppliedCandidatePaths.length &&
+    text.includes(`${owner.storyKey}:${owner.owner}`)
+  ).map((owner) => Object.freeze({
+    storyKey: owner.storyKey,
+    owner: owner.owner,
+    suppliedCandidatePaths: owner.suppliedCandidatePaths,
+    acceptanceProof: owner.acceptanceProof,
+  })));
+}
+
+function isConcreteOwnerCandidate(requirement, file) {
+  if (requirement.pathPattern.test(file.path)) return true;
+  const content = String(file.content ?? "");
+  if (requirement.label === "notification delivery owner")
+    return /\b(?:send|deliver|dispatch|notify)\w*\b[\s\S]{0,100}\b(?:email|mail|notification|message)\b|\b(?:ms[ _-]?graph|graph.*mail)\b/i.test(content);
+  if (requirement.label === "action persistence owner")
+    return /\b(?:create|update|write|persist)\w*\b[\s\S]{0,100}\b(?:action|follow[ _-]?up)\b/i.test(content);
+  if (requirement.label === "report owner")
+    return /\b(?:report|historical)\b[\s\S]{0,100}\b(?:route|endpoint|response|render)\b/i.test(content);
+  if (requirement.label === "SBL owner" || requirement.label === "tooling owner")
+    return /\b(?:sbl|service[ _-]?based[ _-]?launchpad|tooling)\b[\s\S]{0,100}\b(?:handler|guard|block|deny|reject)\b/i.test(content);
+  return false;
+}
+
+function ownerAcceptanceProof(label) {
+  const proofs = {
+    "frontend/page owner": "Patch the reachable page or route that renders the behavior and its production data-loading path; render that owner in the test.",
+    "authoritative API or extracted-account data owner": "Patch the real adapter or retrieval call and its workflow persistence path; invoke the public workflow with caller-shaped data in the test.",
+    "action persistence owner": "Patch the production validation-completion caller through the action writer; test the public workflow creating the persisted action.",
+    "notification delivery owner": "Patch the production action path through the notification sender with a resolved recipient; test notification as an outcome of that public action path.",
+    "report owner": "Patch a registered endpoint, scheduled job, or reachable UI consumer for the report; test the public observable report surface.",
+    "SBL owner": "Patch the invoked SBL operation guard and its blocked response or state; test an attempted public SBL operation.",
+    "tooling owner": "Patch the invoked tooling operation guard and its blocked response or state; test an attempted public tooling operation.",
+  };
+  return proofs[label];
+}
+
+async function requestValidatedPatches({ gateway, task, context, candidate, writePaths, acceptedStoryCoverage = [], previousValidationIssue = null, timeoutMs = 900_000 }) {
   let lastError;
+  let ownerCorrectionAttempts = 0;
   const stagedPatches = new Map();
+  // Resolve owners before asking the model.  Coverage must be checked against
+  // real, supplied production paths—not guessed filename conventions after a
+  // response has already been generated.
+  const ownerContext = requiredOwnerContext(task, context, acceptedStoryCoverage);
   for (let attempt = 1; attempt <= maxPatchResponseAttempts; attempt += 1) {
     const request = {
       system:
@@ -1143,6 +1743,7 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         lastError?.details?.responseIssue,
         lastError?.details?.responseCorrection,
         previousValidationIssue,
+        acceptedStoryCoverage,
       ),
       correlationId: randomUUID(),
       maxTokens: 8192,
@@ -1162,22 +1763,40 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         writePaths,
         completion,
         task.stories,
+        acceptedStoryCoverage,
+        ownerContext,
       );
-      await validatePatchAnchors(candidate, parsed.patches, completion);
+      const materializedPatches = await materializeValidatedPatches(
+        candidate,
+        parsed.patches,
+        completion,
+      );
       return Object.freeze({
         completion,
         ...parsed,
+        patches: materializedPatches,
       });
     } catch (error) {
+      const ownerCoverageMissing =
+        error?.details?.responseIssue === "STORY_COVERAGE_OWNER_MISSING";
+      if (ownerCoverageMissing) ownerCorrectionAttempts += 1;
+      const repeatedUnchangedIssue =
+        lastError?.details?.responseIssue === error?.details?.responseIssue &&
+        lastError?.details?.responseCorrection === error?.details?.responseCorrection;
       if (
         error?.code !== "MODEL_PATCH_RESPONSE_INVALID" ||
-        attempt === maxPatchResponseAttempts
+        attempt === maxPatchResponseAttempts ||
+        repeatedUnchangedIssue ||
+        ownerCorrectionAttempts > 1
       )
         throw withAttempts(error, attempt);
-      if (error?.details?.responseIssue === "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING") {
-        const partial = parseModelResponse(completion.text, writePaths, completion, []);
+      if (
+        error?.details?.responseIssue === "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING" ||
+        ownerCoverageMissing
+      ) {
+        const partial = parseModelResponse(completion.text, writePaths, completion, [], [], ownerContext);
         for (const patch of partial.patches) stagedPatches.set(patch.path, patch);
-        error.details.responseCorrection = `${error.details.responseCorrection} Previously accepted patches are retained transactionally for the next attempt. Emit the missing evidence patch; you do not need to repeat an already emitted path.`;
+        error.details.responseCorrection = `${error.details.responseCorrection} Previously accepted patches are retained transactionally for the next attempt. Emit only missing owner or evidence patches, but return complete storyCoverage citing both retained and new patch paths.`;
       }
       lastError = error;
     }
@@ -1197,7 +1816,8 @@ function mergeStagedPatchResponse(text, stagedPatches) {
   return JSON.stringify({ ...response, patches: [...merged.values()] });
 }
 
-async function validatePatchAnchors(root, patches, completion) {
+async function materializeValidatedPatches(root, patches, completion) {
+  const materialized = [];
   for (const patch of patches) {
     let content = await readFile(join(root, patch.path), "utf8").catch(() => null);
     if (patch.content !== null) {
@@ -1212,6 +1832,7 @@ async function validatePatchAnchors(root, patches, completion) {
           completion,
           `Preserve unrelated behavior in ${patch.path}. Emit the complete existing file with only the required minimal change, or use exact anchored replacements copied from the supplied content.`,
         );
+      materialized.push(patch);
       continue;
     }
     if (content === null)
@@ -1242,7 +1863,13 @@ async function validatePatchAnchors(root, patches, completion) {
         );
       content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacedLength)}`;
     }
+    materialized.push(Object.freeze({
+      path: patch.path,
+      content,
+      replacements: Object.freeze([]),
+    }));
   }
+  return Object.freeze(materialized);
 }
 
 function whitespaceEquivalentAnchorRange(content, oldText) {
@@ -1338,6 +1965,7 @@ async function verifyCandidateSemantics({
         schema: "adx-candidate-semantic-verification-request-v1",
         objective: task.objective,
         stories: task.stories,
+        provisionalExternalContracts: task.provisionalExternalContracts ?? [],
         storyCoverage,
         touchedPaths: [...touchedPaths].sort(),
         attempt,
@@ -1354,6 +1982,7 @@ async function verifyCandidateSemantics({
           "Backend behavior must be invoked by an existing route, handler, job, or workflow owner; unused helpers fail.",
           "Tests must exercise the owning integration or a contract that proves the new behavior is reachable, not only a new helper in isolation.",
           "Verify data flow from an existing source through the implementation to the observable outcome.",
+          "For a listed provisional external contract, do not fail solely because its authoritative endpoint, authentication, or response schema is intentionally absent. Verify instead that the reachable implementation exposes an explicit UNKNOWN state and does not fabricate a funded or unfunded result; retain any other reachability, invocation, or data-flow finding.",
           "Reject storyCoverage claims that are unsupported by the supplied repository files.",
           "Every finding must cite concrete evidencePaths from the supplied files and provide a concise actionable correction.",
           "Do not require unrelated infrastructure or persistence when the existing repository contract can satisfy the story.",
@@ -1394,14 +2023,33 @@ function isUnclassifiedGatewayBadRequest(error) {
 
 async function completeWithCompactContextFallback({ gateway, request, task }) {
   try {
-    return await gateway.complete(request);
+    return await completeGatewayWithinDeadline(gateway, request);
   } catch (error) {
     if (!isUnclassifiedGatewayBadRequest(error)) throw error;
-    return gateway.complete({
+    return completeGatewayWithinDeadline(gateway, {
       ...request,
       prompt: buildCompactContextPrompt(request.prompt, task),
       correlationId: randomUUID(),
     });
+  }
+}
+
+async function completeGatewayWithinDeadline(gateway, request) {
+  const timeoutMs = boundedModelRequestTimeout(request.timeoutMs);
+  let timeout;
+  try {
+    return await Promise.race([
+      Promise.resolve(gateway.complete(request)),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new ChangeCaseError(
+          "MODEL_PATCH_GATEWAY_TIMEOUT",
+          "The coding-model gateway did not settle within the bounded request deadline.",
+          { retryable: true, severity: "warning", details: { timeoutMs } },
+        )), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -1583,6 +2231,17 @@ function semanticVerificationIssue(verification) {
     .slice(0, 8 * 1024);
 }
 
+function semanticFindingSignature(findings) {
+  return sha256((findings ?? []).map((finding) => ({
+    storyKey: finding.storyKey,
+    code: finding.code,
+    message: finding.message,
+    evidencePaths: [...finding.evidencePaths].sort(),
+  })).sort((left, right) =>
+    `${left.storyKey}:${left.code}:${left.message}`.localeCompare(`${right.storyKey}:${right.code}:${right.message}`)
+  ));
+}
+
 const modelPatchResponseSchema = Object.freeze({
   name: "adx_model_patch_response",
   strict: true,
@@ -1665,6 +2324,8 @@ function parseModelResponse(
   writePaths,
   completion = {},
   requiredStories = [],
+  acceptedStoryCoverage = [],
+  ownerContext = [],
 ) {
   const finishReason = completion.finishReason ?? null;
   let response;
@@ -1680,17 +2341,23 @@ function parseModelResponse(
   if (
     response?.schema !== "adx-model-patch-response-v1" ||
     !Array.isArray(response.patches) ||
-    !response.patches.length ||
-    response.patches.length > maxPatches
+    !response.patches.length
   )
     throw patchResponseError(
       "SCHEMA_INVALID",
       "The model-patch response must contain a bounded non-empty patch list.",
       completion,
     );
-  const seen = new Set();
-  const patches = response.patches.map((patch) => {
-    const path = typeof patch?.path === "string" ? patch.path.trim() : "";
+  if (response.patches.length > maxPatches)
+    throw patchResponseError(
+      "PATCH_COUNT_EXCEEDED",
+      `The model-patch response contained ${response.patches.length} patches; the limit is ${maxPatches}.`,
+      completion,
+      `Return at most ${maxPatches} patches. Combine changes to shared files into one patch and reference the same path from multiple storyCoverage entries.`,
+    );
+  const patchesByPath = new Map();
+  for (const patch of response.patches) {
+    const path = normalizeModelPatchPath(patch?.path);
     const content = typeof patch?.content === "string" ? patch.content : null;
     const replacements = Array.isArray(patch?.replacements)
       ? patch.replacements.map((replacement) => ({
@@ -1700,35 +2367,96 @@ function parseModelResponse(
       : [];
     const usesReplacement = content !== null;
     const usesAnchors = replacements.length > 0;
-    if (
-      !path ||
-      path.startsWith("/") ||
-      path.includes("\\") ||
-      path.split("/").includes("..") ||
-      !isWritable(path, writePaths) ||
-      isSensitivePath(path) ||
-      usesReplacement === usesAnchors ||
-      (usesReplacement && (content.includes("\u0000") || Buffer.byteLength(content) > maxPatchBytes)) ||
-      (usesAnchors && replacements.some((replacement) =>
-        !replacement.oldText || replacement.newText === null || replacement.oldText.includes("\u0000") ||
-        replacement.newText.includes("\u0000") ||
-        Buffer.byteLength(replacement.oldText) + Buffer.byteLength(replacement.newText) > maxPatchBytes
-      )) ||
-      seen.has(path)
-    )
+    if (!path || path.startsWith("/") || /^[a-z]:\//i.test(path) || path.split("/").includes(".."))
       throw patchResponseError(
-        "PATCH_INVALID",
-        "The model-patch response contains an invalid or unauthorized file replacement.",
+        "PATCH_PATH_INVALID",
+        "A model-patch path was not a safe relative path.",
         completion,
+        `Use an exact relative path from the supplied files. Rejected path: ${safePatchPath(patch?.path)}.`,
       );
-    seen.add(path);
-    return Object.freeze({ path, content, replacements: Object.freeze(replacements.map(Object.freeze)) });
-  });
+    if (!isWritable(path, writePaths))
+      throw patchResponseError(
+        "PATCH_PATH_NOT_WRITABLE",
+        "A model-patch path was outside the authorized writable roots.",
+        completion,
+        `Do not emit ${safePatchPath(path)}. Use only supplied files marked writable:true or create a file under these writable roots: ${writePaths.join(", ")}.`,
+      );
+    if (isSensitivePath(path))
+      throw patchResponseError(
+        "PATCH_PATH_SENSITIVE",
+        "A model-patch path targeted a sensitive file.",
+        completion,
+        `Do not emit ${safePatchPath(path)} or any credential, environment, token, key, or package-manager authentication file.`,
+      );
+    if (usesReplacement === usesAnchors)
+      throw patchResponseError(
+        "PATCH_MODE_INVALID",
+        "A patch must use exactly one replacement mode.",
+        completion,
+        `For ${safePatchPath(path)}, provide either string content with replacements:[] or content:null with one or more anchored replacements, never both and never neither.`,
+      );
+    if (usesReplacement && content.includes("\u0000"))
+      throw patchResponseError(
+        "PATCH_CONTENT_INVALID",
+        "Complete replacement content contained an unsupported null byte.",
+        completion,
+        `Remove null bytes from the complete content for ${safePatchPath(path)}, or use anchored replacements.`,
+      );
+    if (usesReplacement && Buffer.byteLength(content) > maxPatchBytes)
+      throw patchResponseError(
+        "PATCH_CONTENT_TOO_LARGE",
+        `Complete replacement content for ${path} exceeded ${maxPatchBytes} bytes.`,
+        completion,
+        `Use minimal anchored replacements for ${safePatchPath(path)} instead of returning the complete file.`,
+      );
+    if (usesAnchors && replacements.some((replacement) =>
+      !replacement.oldText || replacement.newText === null || replacement.oldText.includes("\u0000") || replacement.newText.includes("\u0000")
+    ))
+      throw patchResponseError(
+        "PATCH_REPLACEMENT_INVALID",
+        "An anchored replacement was incomplete or contained an unsupported null byte.",
+        completion,
+        `For ${safePatchPath(path)}, every replacement must contain non-empty oldText copied from one contiguous supplied excerpt and string newText.`,
+      );
+    if (usesAnchors && replacements.some((replacement) =>
+      Buffer.byteLength(replacement.oldText) + Buffer.byteLength(replacement.newText) > maxPatchBytes
+    ))
+      throw patchResponseError(
+        "PATCH_REPLACEMENT_TOO_LARGE",
+        `An anchored replacement for ${path} exceeded ${maxPatchBytes} bytes.`,
+        completion,
+        `Use smaller exact anchors for ${safePatchPath(path)} and change only the required regions.`,
+      );
+    const normalizedPatch = { path, content, replacements };
+    const existing = patchesByPath.get(path);
+    if (existing) {
+      if (JSON.stringify(existing) === JSON.stringify(normalizedPatch)) continue;
+      throw patchResponseError(
+        "PATCH_PATH_DUPLICATE",
+        `The model-patch response contained conflicting patches for ${path}.`,
+        completion,
+        `Emit ${safePatchPath(path)} exactly once. Combine all changes for that file into one patch, then reference the same path from every applicable storyCoverage entry.`,
+      );
+    }
+    patchesByPath.set(path, normalizedPatch);
+  }
+  const patches = [...patchesByPath.values()].map((patch) => Object.freeze({
+    ...patch,
+    replacements: Object.freeze(patch.replacements.map(Object.freeze)),
+  }));
   const storyCoverage = parseStoryCoverage(
     response.storyCoverage,
     requiredStories,
     new Set(patches.map((patch) => patch.path)),
     completion,
+    acceptedStoryCoverage,
+  );
+  validateCoverageDiversity(storyCoverage, requiredStories, completion);
+  validateStoryOwnerCoverage(
+    mergeCoverageForValidation(acceptedStoryCoverage, storyCoverage),
+    requiredStories,
+    completion,
+    ownerContext,
   );
   return Object.freeze({
     patches: Object.freeze(patches),
@@ -1740,7 +2468,120 @@ function parseModelResponse(
   });
 }
 
-function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
+function mergeCoverageForValidation(acceptedCoverage, responseCoverage) {
+  const merged = acceptedCoverage.map((entry) => ({
+    storyKey: entry.storyKey,
+    implementationPaths: [...entry.implementationPaths],
+    testPaths: [...entry.testPaths],
+  }));
+  mergeStoryCoverage(merged, responseCoverage);
+  return merged;
+}
+
+function validateCoverageDiversity(storyCoverage, requiredStories, completion) {
+  if (requiredStories.length < 3) return;
+  const implementationPaths = new Set(
+    storyCoverage.flatMap((entry) => entry.implementationPaths),
+  );
+  if (implementationPaths.size >= 2) return;
+  throw patchResponseError(
+    "STORY_COVERAGE_COLLAPSED",
+    "A multi-story response collapsed distinct acceptance paths into one implementation file.",
+    completion,
+    `The ${requiredStories.length} supplied stories cannot all rely on ${[...implementationPaths].join(", ") || "one shared helper"}. Emit at least two patched implementation paths: retain shared domain logic where appropriate and patch the reachable owning page, route, handler, job, report, notification sender, or enforcement point required by the stories. Update storyCoverage to cite those exact patched owner paths.`,
+  );
+}
+
+function validateStoryOwnerCoverage(storyCoverage, requiredStories, completion, ownerContext = []) {
+  if (!requiredStories.length) return;
+  const missing = [];
+  for (const story of requiredStories) {
+    const coverage = storyCoverage.find((entry) => entry.storyKey === story.key);
+    if (!coverage) continue;
+    const requirements = requiredStoryOwnerRequirements(story);
+    if (requiredStories.length === 1 && requirements.length < 2) continue;
+    for (const requirement of requirements) {
+      const owner = ownerContext.find((entry) => entry.storyKey === story.key && entry.owner === requirement.label);
+      // A named owner is enforceable only when this request supplied a concrete
+      // production candidate. Otherwise a filename heuristic creates an
+      // impossible repair loop; semantic verification remains responsible for
+      // proving the reachable data flow once it has full candidate evidence.
+      const candidates = owner?.suppliedCandidatePaths ?? [];
+      if (candidates.length && !coverage.implementationPaths.some((path) => candidates.includes(path)))
+        missing.push(`${story.key}:${requirement.label}`);
+    }
+  }
+  if (!missing.length) return;
+  throw patchResponseError(
+    "STORY_COVERAGE_OWNER_MISSING",
+    "Story coverage did not include a patched implementation owner for every explicit workflow boundary.",
+    completion,
+    `Patch and cite the missing reachable owners: ${missing.join(", ")}. Cite the exact supplied production-owner path for each one—use existing repository pages, API/services, action writers, notification senders, report surfaces, SBL handlers, and tooling handlers. Do not substitute a generic workflow helper or a direct helper test for these owner paths.`,
+  );
+}
+
+function requiredStoryOwnerRequirements(story) {
+  const text = [
+    story.title,
+    story.narrative,
+    ...story.scenarios.flatMap((scenario) => [scenario.given, scenario.when, scenario.then]),
+  ].join(" ").toLowerCase();
+  const requirements = [
+    {
+      label: "frontend/page owner",
+      textPattern: /\b(?:view|page|screen|frontend|render|visible|visibility|display)\b/,
+      pathPattern: /(?:^|\/)frontend\/|(?:^|\/)(?:pages?|components?|routes?)(?:\/|\.)/i,
+    },
+    {
+      label: "authoritative API or extracted-account data owner",
+      textPattern: /\b(?:api|extract|extracted|financial|source data|account data)\b/,
+      pathPattern: /(?:^|\/)(?:api|routes?|services?|account[^/]*|extract[^/]*|financial[^/]*|aide_lookup[^/]*)(?:\/|\.|_|-)/i,
+    },
+    {
+      label: "action persistence owner",
+      textPattern: /\b(?:action|follow[ -]?up|persist|recorded action)\b/,
+      pathPattern: /(?:^|\/)[^/]*(?:action|follow)[^/]*(?:\/|\.|_|-)/i,
+    },
+    {
+      label: "notification delivery owner",
+      textPattern: /\b(?:notify|notification|email|recipient)\b/,
+      pathPattern: /(?:^|\/)[^/]*(?:notif|notify|email|mail|message|event|queue|graph|communication|account_field_log|tenant_action)[^/]*(?:\/|\.|_|-)/i,
+    },
+    {
+      label: "report owner",
+      textPattern: /\b(?:report|reporting|historical|history|dashboard)\b/,
+      pathPattern: /(?:^|\/)[^/]*(?:report|history|historical|dashboard)[^/]*(?:\/|\.|_|-)/i,
+    },
+    {
+      label: "SBL owner",
+      textPattern: /\bsbl\b/,
+      pathPattern: /(?:^|\/)[^/]*sbl[^/]*(?:\/|\.|_|-)/i,
+    },
+    {
+      label: "tooling owner",
+      textPattern: /\btooling\b/,
+      pathPattern: /(?:^|\/)(?:sbl(?:\/|\.|_|-)|[^/]*(?:tool|security|servicebasedlaunchpad)[^/]*(?:\/|\.|_|-))/i,
+    },
+  ];
+  return requirements.filter((requirement) => requirement.textPattern.test(text));
+}
+
+function normalizeModelPatchPath(value) {
+  if (typeof value !== "string") return "";
+  return value.trim().replaceAll("\\", "/").replace(/^(?:\.\/)+/, "");
+}
+
+function safePatchPath(value) {
+  return JSON.stringify(String(value ?? "").slice(0, 240));
+}
+
+function parseStoryCoverage(
+  value,
+  requiredStories,
+  patchedPaths,
+  completion,
+  acceptedStoryCoverage = [],
+) {
   if (!requiredStories.length) return Object.freeze([]);
   if (!Array.isArray(value))
     throw patchResponseError(
@@ -1749,6 +2590,9 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
       completion,
     );
   const requiredKeys = new Set(requiredStories.map((story) => story.key));
+  const acceptedByStory = new Map(
+    acceptedStoryCoverage.map((entry) => [entry.storyKey, entry]),
+  );
   const seen = new Set();
   const coverage = value.map((entry) => {
     const storyKey = typeof entry?.storyKey === "string" ? entry.storyKey.trim() : "";
@@ -1785,13 +2629,22 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
         "Story test paths must follow a recognized test-file convention.",
         completion,
       );
-    const implementationPaths = declaredImplementationPaths.filter((path) => patchedPaths.has(path));
-    const testPaths = declaredTestPaths.filter((path) => patchedPaths.has(path));
+    const accepted = acceptedByStory.get(storyKey);
+    const acceptedImplementationPaths = new Set(accepted?.implementationPaths ?? []);
+    const acceptedTestPaths = new Set(accepted?.testPaths ?? []);
+    const implementationPaths = declaredImplementationPaths.filter((path) =>
+      patchedPaths.has(path) || acceptedImplementationPaths.has(path),
+    );
+    const testPaths = declaredTestPaths.filter((path) =>
+      patchedPaths.has(path) || acceptedTestPaths.has(path),
+    );
     if (!implementationPaths.length || !testPaths.length) {
       const missingImplementationPaths = declaredImplementationPaths.filter(
-        (path) => !patchedPaths.has(path),
+        (path) => !patchedPaths.has(path) && !acceptedImplementationPaths.has(path),
       );
-      const missingTestPaths = declaredTestPaths.filter((path) => !patchedPaths.has(path));
+      const missingTestPaths = declaredTestPaths.filter(
+        (path) => !patchedPaths.has(path) && !acceptedTestPaths.has(path),
+      );
       throw patchResponseError(
         "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
         "Every approved story must retain patched implementation and test evidence.",
@@ -1799,6 +2652,16 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
         `Your next response MUST emit at least one implementation patch and one test patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}. Use minimal anchored replacements for existing implementation files to reserve response space for the required test patch.`,
       );
     }
+    if (
+      accepted &&
+      ![...implementationPaths, ...testPaths].some((path) => patchedPaths.has(path))
+    )
+      throw patchResponseError(
+        "STORY_COVERAGE_REPAIR_DELTA_MISSING",
+        "A repair response did not patch any evidence path for an approved story.",
+        completion,
+        `Emit at least one implementation or test patch for ${storyKey} that addresses the verifier finding. Previously accepted paths may complete the remaining storyCoverage evidence but cannot replace the repair delta.`,
+      );
     seen.add(storyKey);
     return Object.freeze({ storyKey, implementationPaths, testPaths });
   });
@@ -1814,7 +2677,7 @@ function parseStoryCoverage(value, requiredStories, patchedPaths, completion) {
 function normalizeCoveragePaths(value) {
   if (!Array.isArray(value)) return Object.freeze([]);
   return Object.freeze([
-    ...new Set(value.map((path) => String(path).trim()).filter(Boolean)),
+    ...new Set(value.map(normalizeModelPatchPath).filter(Boolean)),
   ]);
 }
 
@@ -1891,29 +2754,20 @@ function withAttempts(error, attempts) {
   });
 }
 
-async function writePatch(root, patch) {
+async function writeMaterializedPatch(root, patch) {
   const target = resolve(root, patch.path);
   if (!target.startsWith(`${root}/`))
     throw new ChangeCaseError(
       "MODEL_PATCH_PATH_ESCAPE",
       "A model-patch path escaped the disposable candidate.",
     );
+  if (typeof patch.content !== "string" || patch.replacements.length)
+    throw new ChangeCaseError(
+      "MODEL_PATCH_PLAN_INVALID",
+      "Only a validated materialized patch can be written to the candidate.",
+    );
   await mkdir(dirname(target), { recursive: true });
-  if (patch.content !== null) {
-    await writeFile(target, patch.content, "utf8");
-    return;
-  }
-  let content = await readFile(target, "utf8").catch(() => null);
-  if (content === null)
-    throw new ChangeCaseError("MODEL_PATCH_ANCHOR_INVALID", "Anchored replacements require an existing candidate file.");
-  for (const replacement of patch.replacements) {
-    const first = content.indexOf(replacement.oldText);
-    const last = content.lastIndexOf(replacement.oldText);
-    if (first < 0 || first !== last)
-      throw new ChangeCaseError("MODEL_PATCH_ANCHOR_INVALID", "Every anchored replacement must match exactly once in the current candidate file.");
-    content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacement.oldText.length)}`;
-  }
-  await writeFile(target, content, "utf8");
+  await writeFile(target, patch.content, "utf8");
 }
 
 async function readCandidateFiles(root, paths) {
@@ -1925,16 +2779,26 @@ async function readCandidateFiles(root, paths) {
 
 async function captureStoryEvidence(candidate, coverageEntries, previousContent, storyEvidence) {
   for (const coverage of coverageEntries) {
-    const evidence = [];
+    const evidenceByPath = new Map(
+      (storyEvidence.get(coverage.storyKey) ?? []).map((entry) => [
+        entry.path,
+        new Set(entry.addedLines),
+      ]),
+    );
     for (const path of coverage.testPaths) {
       const beforeLines = new Set((previousContent.get(path) ?? "").split("\n"));
       const after = await readFile(join(candidate, path), "utf8").catch(() => "");
       const addedLines = after.split("\n")
         .map((line) => line.trim())
         .filter((line) => line.length >= 8 && !beforeLines.has(line));
-      evidence.push({ path, addedLines });
+      const retainedLines = evidenceByPath.get(path) ?? new Set();
+      for (const line of addedLines) retainedLines.add(line);
+      evidenceByPath.set(path, retainedLines);
     }
-    storyEvidence.set(coverage.storyKey, evidence);
+    storyEvidence.set(coverage.storyKey, [...evidenceByPath].map(([path, addedLines]) => ({
+      path,
+      addedLines: [...addedLines],
+    })));
   }
 }
 
@@ -1960,7 +2824,7 @@ async function finalCandidateEvidenceIssue({ source, candidate, stories, storyCo
   return null;
 }
 
-function failedValidation(reason) {
+function failedValidation(reason, details = {}) {
   return Object.freeze({
     code: 1,
     signal: null,
@@ -1968,6 +2832,8 @@ function failedValidation(reason) {
     outputBytes: Buffer.byteLength(reason),
     outputDigest: sha256(reason),
     outputExcerpt: reason,
+    validationCommand: details.validationCommand ?? null,
+    validationCategory: details.validationCategory ?? "CHECK_FAILED",
   });
 }
 

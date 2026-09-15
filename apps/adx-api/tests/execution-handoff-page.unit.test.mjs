@@ -262,13 +262,34 @@ test("execution handoff explains transient gateway failures and validation failu
   assert.match(validationFailure.nextAction, /ADX already retried from a clean workspace/);
   assert.match(validationFailure.nextAction, /npm run verify:production/);
 
+  const semanticFailure = describeExecutionFailure(
+    {
+      validationCommand: "candidate semantic verifier",
+      validationCategory: "SEMANTIC_VERIFICATION_FAILED",
+      validationFailureReason: "STORY-1 is not wired into the onboarding route.",
+    },
+    "MODEL_PATCH_VALIDATION_FAILED",
+  );
+  assert.equal(
+    semanticFailure.summary,
+    "Story acceptance failed after the candidate was built.",
+  );
+  assert.match(semanticFailure.reason, /not wired into the onboarding route/);
+  assert.match(semanticFailure.nextAction, /routed owners, handlers, and workflows/);
+  assert.equal(semanticFailure.hint, "No candidate was promoted");
+
   const storyCoverageFailure = describeExecutionFailure(
-    { responseIssue: "STORY_COVERAGE_INVALID" },
+    {
+      responseIssue: "STORY_COVERAGE_OWNER_MISSING",
+      responseCorrection: "Patch and cite the missing authoritative API owner.",
+      modelAttempts: 4,
+    },
     "MODEL_PATCH_RESPONSE_INVALID",
   );
   assert.match(storyCoverageFailure.summary, /every approved story/i);
-  assert.match(storyCoverageFailure.reason, /STORY_COVERAGE_INVALID/);
-  assert.match(storyCoverageFailure.nextAction, /implementation and test files/i);
+  assert.match(storyCoverageFailure.reason, /STORY_COVERAGE_OWNER_MISSING/);
+  assert.equal(storyCoverageFailure.nextAction, "Patch and cite the missing authoritative API owner.");
+  assert.match(storyCoverageFailure.hint, /4 attempts/);
 
   const legacyResponseFailure = describeExecutionFailure(
     {},
@@ -295,13 +316,21 @@ test("execution handoff presents durable live run status without exposing unvali
   assert.match(page, /AgentRunLeased/);
   assert.match(page, /AgentRunStarted/);
   assert.match(page, /AgentRunCompleted/);
-  assert.match(page, /Model request sent/);
-  assert.match(page, /Model response received/);
+  assert.match(page, /Feature implementation/);
+  assert.match(page, /waiting for the model gateway/);
   assert.match(page, /setInterval\(poll, 2000\)/);
   assert.match(page, /renderFailurePanel\(snapshot\)/);
   assert.match(page, /renderCompletionActions\(snapshot\)/);
   assert.match(page, /renderRunCommentary\(snapshot\)/);
   assert.match(page, /renderRunWarning\(snapshot\)/);
+  assert.match(page, /Story evidence rejected/);
+  assert.match(page, /Required correction/);
+  assert.match(page, /Model attempts/);
+  assert.match(page, /details\.responseCorrection/);
+  assert.match(page, /uiRevision/);
+  assert.match(page, /adx:execution-ui-reload:/);
+  assert.match(page, /location\.reload\(\)/);
+  assert.match(page, /snapshot\.uiRevision !== config\.uiRevision/);
   assert.match(page, /leaseWarning\(snapshot\)/);
   assert.match(page, /runClockKey/);
   assert.match(page, /resetRunClock\(\)/);
@@ -312,9 +341,20 @@ test("execution handoff presents durable live run status without exposing unvali
   assert.match(page, /Previous runs/);
   assert.match(page, /MEASURED TIMINGS/);
   assert.match(page, /Where the run spent time/);
+  assert.match(page, /Model calls/);
+  assert.match(page, /follow-live/);
+  assert.match(page, /jump-latest/);
+  assert.match(page, /height:360px/);
+  assert.match(page, /overflow-y:scroll/);
+  assert.match(page, /scrollbar-gutter:stable/);
+  assert.match(page, /scrollbar-color:#6b8798 #e5edf0/);
+  assert.match(page, /eventFollowStorageKey/);
+  assert.match(page, /sessionStorage\.setItem\(eventFollowStorageKey/);
+  assert.match(page, /eventSignature === renderedEventSignature/);
+  assert.match(page, /if \(eventFollowLive\) scrollEventLogToLatest\(log\)/);
   assert.match(page, /attempt-card/);
   assert.match(page, /const attempts = groupRuns\(snapshot\)\.slice\(1\)/);
-  assert.match(page, /section\.open = false/);
+  assert.doesNotMatch(page, /section\.open = false/);
   assert.match(page, /collapseRunHistory\(\)/);
   assert.match(page, /#dispatch-form\[data-running="true"\] > :not\(#status\)\{display:none\}/);
   assert.match(page, /.history-toggle:focus-visible/);
@@ -328,7 +368,10 @@ test("execution handoff refreshes the live event log while a run is still active
   const page = renderExecutionHandoffPage(changeCase, options);
   assert.match(page, /renderEvents\(currentRunEvents\(snapshot\)\);/);
   assert.match(page, /renderRunHistory\(snapshot\);/);
-  assert.match(page, /renderCompletionActions\(snapshot\);\s*scrollToLiveConsole\(\);\s*return;/);
+  const applySnapshotSource = page.slice(page.indexOf('function applySnapshot'), page.indexOf('async function bootstrapCurrentRun'));
+  assert.doesNotMatch(applySnapshotSource, /scrollToLiveConsole\(\)/);
+  const completionSource = page.slice(page.indexOf('function renderCompletionActions'), page.indexOf('function applySnapshot'));
+  assert.doesNotMatch(completionSource, /scrollToLiveConsole\(\)/);
 });
 
 test("execution handoff stays idle until a fresh bounded implementation is submitted", () => {
@@ -482,7 +525,7 @@ test("execution live script keeps the current run primary and collapses previous
   };
 
   vm.runInNewContext(
-    `${script}\nrenderRunHistory(${JSON.stringify(snapshot)}); globalThis.historyHtml = document.getElementById('run-history').innerHTML;`,
+    `${script}\nrenderRunHistory(${JSON.stringify(snapshot)}); document.getElementById('run-history').open = true; renderRunHistory(${JSON.stringify(snapshot)}); globalThis.historyHtml = document.getElementById('run-history').innerHTML; globalThis.historyOpen = document.getElementById('run-history').open;`,
     context,
   );
 
@@ -495,5 +538,5 @@ test("execution live script keeps the current run primary and collapses previous
   assert.doesNotMatch(context.historyHtml, /run-3/);
   assert.match(context.historyHtml, /run-2/);
   assert.match(context.historyHtml, /run-1/);
-  assert.equal(historySection.open, false);
+  assert.equal(context.historyOpen, true);
 });

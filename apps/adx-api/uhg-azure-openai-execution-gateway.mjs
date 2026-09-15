@@ -1,4 +1,4 @@
-import { createAzureOpenAiGatewayAdapter, createDefaultAzureAdTokenProvider, createInteractiveAzureAdTokenProvider } from './azure-openai-gateway-adapter.mjs'
+import { createAzureOpenAiGatewayAdapter, createCachedTokenProvider, createDefaultAzureAdTokenProvider, createInteractiveAzureAdTokenProvider } from './azure-openai-gateway-adapter.mjs'
 
 const supportedModes = new Set(['aml', 'interactive'])
 
@@ -7,9 +7,10 @@ export function createUhgAzureOpenAiExecutionGateway(env = process.env) {
   const authMode = String(env.ADX_CODING_MODEL_AUTH_MODE ?? 'aml').trim().toLowerCase()
   if (!supportedModes.has(authMode)) return null
   if (authMode === 'interactive' && (env.NODE_ENV === 'production' || env.ADX_CODING_MODEL_ALLOW_INTERACTIVE_LOCAL !== '1')) return null
-  const tokenProvider = authMode === 'aml'
+  const acquireToken = authMode === 'aml'
     ? createDefaultAzureAdTokenProvider()
     : createInteractiveAzureAdTokenProvider({ tenantId: optionalValue(env.ADX_CODING_MODEL_TENANT_ID ?? env.ADX_UHG_AZURE_TENANT_ID) })
+  const tokenProvider = createCachedTokenProvider(acquireToken)
   return createAzureOpenAiGatewayAdapter({
     endpoint: env.ADX_CODING_MODEL_ENDPOINT ?? env.ADX_UHG_AZURE_OPENAI_ENDPOINT,
     apiVersion: env.ADX_CODING_MODEL_API_VERSION ?? env.ADX_UHG_AZURE_OPENAI_API_VERSION ?? '2025-01-01-preview',

@@ -78,11 +78,11 @@ test('gateway failures retain only the sanitized rejected request field in the d
   assert.doesNotMatch(JSON.stringify(calls[2][1].result), /Do not retain this/)
 })
 
-test('story coverage response issues survive execution diagnostic sanitization', async () => {
+test('precise patch response issues survive execution diagnostic sanitization', async () => {
   const failure = new ChangeCaseError('MODEL_PATCH_RESPONSE_INVALID', 'Do not retain this model response.', {
     details: {
-      responseIssue: 'PATCH_DESTRUCTIVE_REWRITE',
-      responseCorrection: 'Patch the declared test path.',
+      responseIssue: 'PATCH_PATH_DUPLICATE',
+      responseCorrection: 'Emit the shared path exactly once.',
       modelFinishReason: 'stop',
       modelAttempts: 3,
       providerRequestId: 'request-story-coverage',
@@ -91,8 +91,8 @@ test('story coverage response issues survive execution diagnostic sanitization',
   const { service, calls } = harness(failure)
   await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-story-coverage-failure' })
   assert.equal(calls[2][1].result.errorCode, 'MODEL_PATCH_RESPONSE_INVALID')
-  assert.equal(calls[2][1].result.errorDetails.responseIssue, 'PATCH_DESTRUCTIVE_REWRITE')
-  assert.equal(calls[2][1].result.errorDetails.responseCorrection, 'Patch the declared test path.')
+  assert.equal(calls[2][1].result.errorDetails.responseIssue, 'PATCH_PATH_DUPLICATE')
+  assert.equal(calls[2][1].result.errorDetails.responseCorrection, 'Emit the shared path exactly once.')
   assert.equal(calls[2][1].result.errorDetails.modelAttempts, 3)
   assert.doesNotMatch(JSON.stringify(calls[2][1].result), /Do not retain this model response/)
 })

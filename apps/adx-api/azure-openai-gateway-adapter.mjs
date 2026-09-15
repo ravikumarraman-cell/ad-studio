@@ -6,6 +6,53 @@ const transientGatewayStatuses = new Set([502, 503, 504])
 const maxSystemCharacters = 16 * 1024
 const maxPromptCharacters = 256 * 1024
 
+// Share token acquisition across concurrent model calls. The value remains in
+// process memory only; it is never persisted in an execution record, artifact,
+// or candidate workspace. Azure credential responses retain their expiry here,
+// so a signed-in session is used until shortly before its real token expires.
+export function createCachedTokenProvider(tokenProvider, { maxAgeMs = 3_300_000, refreshSkewMs = 120_000, acquisitionTimeoutMs = 20_000, now = () => Date.now() } = {}) {
+  if (typeof tokenProvider !== 'function') throw new TypeError('TOKEN_PROVIDER_REQUIRED')
+  let cachedToken = null
+  let cachedUntil = 0
+  let inFlight = null
+  return async (request) => {
+    const current = now()
+    if (cachedToken && current < cachedUntil) return cachedToken
+    if (!inFlight) {
+      inFlight = acquireTokenWithinDeadline(tokenProvider, request, acquisitionTimeoutMs)
+        .then((credential) => {
+          const token = tokenValue(credential)
+          if (validToken(token)) {
+            cachedToken = token
+            cachedUntil = cacheExpiry(credential, { now: now(), maxAgeMs, refreshSkewMs })
+          }
+          return token
+        })
+        .finally(() => { inFlight = null })
+    }
+    return inFlight
+  }
+}
+
+async function acquireTokenWithinDeadline(tokenProvider, request, timeoutMs) {
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) return tokenProvider(request)
+  let timeout
+  try {
+    return await Promise.race([
+      Promise.resolve(tokenProvider(request)),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new ChangeCaseError(
+          'AZURE_OPENAI_GATEWAY_CREDENTIAL_TIMEOUT',
+          'Azure AD token acquisition did not complete promptly. Complete sign-in or configure a server-owned workload identity, then retry.',
+          { retryable: true, severity: 'warning' },
+        )), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
+}
+
 /**
  * Azure OpenAI Chat Completions transport for the UHG reasoning gateway.
  * Credentials are loaded only when live authentication is requested; tests and
@@ -17,7 +64,7 @@ export function createAzureOpenAiGatewayAdapter({ endpoint, apiVersion = '2025-0
   const configured = Boolean(gateway && configuration && typeof tokenProvider === 'function' && fetchImpl)
   return Object.freeze({
     status: () => Object.freeze({ configured, provider: configured ? 'AZURE_OPENAI_GATEWAY' : null, deployment: configured ? configuration.deployment : null, model: configured ? configuration.model : null, projectId: configured ? configuration.projectId : null, endpoint: configured ? gateway.origin : null, apiVersion: configured ? apiVersion : null }),
-    async complete({ system, prompt, correlationId, maxTokens = 2_000, temperature = 1, responseSchema = null, timeoutMs = 900_000 }) {
+    async complete({ system, prompt, correlationId, maxTokens = 2_000, temperature = 1, responseSchema = null, timeoutMs = 90_000 }) {
       if (!configured) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_NOT_CONFIGURED', 'The Azure OpenAI gateway adapter requires its approved endpoint, deployment, project ID, Azure AD token provider, and fetch implementation.', { severity: 'warning' })
       const request = normalizeRequest({ system, prompt, correlationId, maxTokens, temperature, responseSchema })
       const accessToken = await tokenProvider({ scope: defaultScope, audience: gateway.origin, deployment: configuration.deployment, projectId: configuration.projectId, correlationId: request.correlationId })
@@ -41,12 +88,10 @@ export function createAzureOpenAiGatewayAdapter({ endpoint, apiVersion = '2025-0
 }
 
 export function createDefaultAzureAdTokenProvider() {
-  let credentialPromise
   return async ({ scope = defaultScope } = {}) => {
     try {
-      credentialPromise ??= import('@azure/identity').then(({ DefaultAzureCredential }) => new DefaultAzureCredential())
-      const accessToken = await (await credentialPromise).getToken(scope)
-      if (accessToken?.token) return accessToken.token
+      const accessToken = await (await defaultAzureCredential()).getToken(scope)
+      if (accessToken?.token) return accessToken
     } catch (error) {
       if (error?.code === 'ERR_MODULE_NOT_FOUND') throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_IDENTITY_LIBRARY_MISSING', 'Install @azure/identity before enabling Azure AD gateway authentication.', { severity: 'warning' })
     }
@@ -55,17 +100,36 @@ export function createDefaultAzureAdTokenProvider() {
 }
 
 export function createInteractiveAzureAdTokenProvider({ tenantId } = {}) {
-  let credentialPromise
   return async ({ scope = defaultScope } = {}) => {
     try {
-      credentialPromise ??= import('@azure/identity').then(({ InteractiveBrowserCredential }) => new InteractiveBrowserCredential(tenantId ? { tenantId } : undefined))
-      const accessToken = await (await credentialPromise).getToken(scope)
-      if (accessToken?.token) return accessToken.token
+      const accessToken = await (await interactiveAzureCredential(tenantId)).getToken(scope)
+      if (accessToken?.token) return accessToken
     } catch (error) {
       if (error?.code === 'ERR_MODULE_NOT_FOUND') throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_IDENTITY_LIBRARY_MISSING', 'Install @azure/identity before enabling Azure AD gateway authentication.', { severity: 'warning' })
     }
     throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_CREDENTIAL_UNAVAILABLE', 'Interactive Azure AD sign-in did not provide a Cognitive Services token. Sign in with the approved Optum Microsoft identity and verify project access.', { retryable: true, severity: 'warning' })
   }
+}
+
+// The credential object owns MSAL's in-process account/session cache. Keeping
+// it module-scoped means all executor gateways in this server reuse one signed-
+// in Azure session rather than recreating a browser credential per execution.
+let defaultCredentialPromise
+const interactiveCredentialPromises = new Map()
+
+function defaultAzureCredential() {
+  defaultCredentialPromise ??= import('@azure/identity').then(({ DefaultAzureCredential }) => new DefaultAzureCredential())
+  return defaultCredentialPromise
+}
+
+function interactiveAzureCredential(tenantId) {
+  const key = tenantId ?? ''
+  let credential = interactiveCredentialPromises.get(key)
+  if (!credential) {
+    credential = import('@azure/identity').then(({ InteractiveBrowserCredential }) => new InteractiveBrowserCredential(tenantId ? { tenantId } : undefined))
+    interactiveCredentialPromises.set(key, credential)
+  }
+  return credential
 }
 
 function normalizeGateway(endpoint, deployment, apiVersion) {
@@ -129,17 +193,29 @@ async function sendGatewayRequest(fetchImpl, url, headers, body, timeoutMs) {
 }
 
 async function sendCompatibleGatewayRequest(fetchImpl, url, headers, body, timeoutMs) {
+  const deadline = requestDeadline(timeoutMs)
   let currentBody = body
   let result
   const applied = new Set()
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    result = await sendGatewayRequest(fetchImpl, url, headers, currentBody, timeoutMs)
+    result = await sendGatewayRequest(fetchImpl, url, headers, currentBody, remainingRequestTime(deadline))
     const adjustment = compatibleBodyAdjustment(result.response, result.payload, currentBody)
     if (!adjustment || applied.has(adjustment.kind)) return result
     applied.add(adjustment.kind)
     currentBody = adjustment.body
   }
   return result
+}
+
+function requestDeadline(timeoutMs) {
+  const duration = Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 90_000
+  return Date.now() + duration
+}
+
+function remainingRequestTime(deadline) {
+  const remaining = deadline - Date.now()
+  if (remaining < 1) throw new ChangeCaseError('AZURE_OPENAI_GATEWAY_REQUEST_TIMEOUT', 'The Azure OpenAI gateway request timed out before returning a completion.', { retryable: true, severity: 'warning', details: { provider: 'AZURE_OPENAI_GATEWAY' } })
+  return remaining
 }
 
 function compatibleBodyAdjustment(response, payload, body) {
@@ -178,6 +254,15 @@ function withoutResponseFormat(body) { const { response_format: _responseFormat,
 function normalizeUsage(usage) { return Object.freeze({ inputTokens: Number.isInteger(usage?.prompt_tokens) ? usage.prompt_tokens : null, outputTokens: Number.isInteger(usage?.completion_tokens) ? usage.completion_tokens : null, totalTokens: Number.isInteger(usage?.total_tokens) ? usage.total_tokens : null }) }
 function safeFinishReason(value) { return ['stop', 'length', 'content_filter'].includes(value) ? value : null }
 function credentialValue(headerName, accessToken) { return headerName === 'authorization' ? `Bearer ${accessToken}` : accessToken }
+function tokenValue(credential) { return typeof credential === 'string' ? credential : credential?.token }
+function cacheExpiry(credential, { now, maxAgeMs, refreshSkewMs }) {
+  const boundedMaxAge = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? maxAgeMs : 0
+  const expiry = Number(credential?.expiresOnTimestamp)
+  const safeExpiry = Number.isFinite(expiry) && expiry > now
+    ? Math.max(now, expiry - Math.max(0, Number(refreshSkewMs) || 0))
+    : now + boundedMaxAge
+  return Math.min(now + boundedMaxAge, safeExpiry)
+}
 function safeGatewayError(error) { if (!error || typeof error !== 'object') return null; const detail = {}; for (const field of ['code', 'type', 'param']) if (token(error[field])) detail[field] = String(error[field]).trim(); return Object.keys(detail).length ? Object.freeze(detail) : null }
 function safeCompletionSummary(payload) { const choice = payload?.choices?.[0]; const content = choice?.message?.content; return Object.freeze({ choiceCount: Array.isArray(payload?.choices) ? payload.choices.length : 0, finishReason: token(choice?.finish_reason) ? String(choice.finish_reason).trim() : null, contentType: content === null ? 'null' : Array.isArray(content) ? 'array' : typeof content, contentLength: typeof content === 'string' ? content.length : null, hasReasoningContent: Boolean(choice?.message?.reasoning_content) }) }
 function failureMessage(status) { if (status === 401 || status === 403) return 'The Azure OpenAI gateway rejected ADX Azure AD credentials or project access. Verify the approved Azure AD credential, shared-quota project access, and gateway routing.'; if (status === 404) return 'The Azure OpenAI gateway route or deployment is unavailable. Verify the reasoning endpoint, deployment name, and API version.'; if (status === 429) return 'The Azure OpenAI gateway quota is temporarily exhausted. Retry after the gateway rate limit resets.'; return 'The Azure OpenAI gateway did not return a usable model response.' }

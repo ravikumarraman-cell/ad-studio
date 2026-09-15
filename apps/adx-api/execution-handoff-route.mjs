@@ -2,6 +2,8 @@ import { listAgentSpecTemplates } from "./agent-spec-templates.mjs";
 import { renderExecutionHandoffPage } from "./execution-handoff-page.mjs";
 import { changeCaseBasePath, changeCaseResource } from "./change-case-route-utils.mjs";
 
+export { executionUiRevision } from "./execution-run-components.mjs";
+
 export function handleExecutionHandoffRoute({
   response,
   traceId,

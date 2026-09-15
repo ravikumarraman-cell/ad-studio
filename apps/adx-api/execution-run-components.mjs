@@ -8,6 +8,10 @@ function escapeHtml(value) {
   }[character]));
 }
 
+import { randomUUID } from "node:crypto";
+
+export const executionUiRevision = randomUUID();
+
 export function buildExecutionStatusScript({ dispatchEndpoint, changeCaseVersion, submissionAvailable }) {
   return `
 <script>
@@ -91,7 +95,7 @@ export function buildExecutionLiveScript({ statusEndpoint, projectRepository, in
   const initialSnapshotJson = JSON.stringify(initialSnapshot ?? null).replace(/</g, '\u003c');
   return `
 <script>
-const config = ${JSON.stringify({ statusEndpoint, evidenceReviewUrl: '/evidence-review', candidateUrl: '/generated-candidate' }).replace(/</g, '\u003c')};
+const config = ${JSON.stringify({ statusEndpoint, evidenceReviewUrl: '/evidence-review', candidateUrl: '/generated-candidate', uiRevision: executionUiRevision }).replace(/</g, '\u003c')};
 const projectLabel = ${JSON.stringify(projectLabel)};
 let initialSnapshot = ${initialSnapshotJson};
 const stageOrder = ['leased', 'started', 'validated'];
@@ -100,6 +104,13 @@ let clockTimer = null;
 let runStartedAt = null;
 let runClockKey = null;
 let currentRunId = null;
+let eventConsoleInitialized = false;
+let renderedEventSignature = '';
+const eventFollowStorageKey = 'adx:follow-live:' + (typeof location === 'undefined' ? 'execution' : location.pathname);
+let eventFollowLive = true;
+try {
+  eventFollowLive = sessionStorage.getItem(eventFollowStorageKey) !== 'false';
+} catch {}
 
 const byId = (id) => document.getElementById(id);
 const escapeMarkup = (value) => String(value ?? '').replace(/[&<>"]/g, (character) => ({
@@ -121,9 +132,12 @@ const eventLabels = {
 
 const phaseStages = {
   CONTEXT_COLLECTION: 'leased',
+  CONTEXT_READY: 'started',
   MODEL_REQUEST: 'started',
   MODEL_RESPONSE: 'started',
+  PATCH_APPLIED: 'started',
   VALIDATION: 'validated',
+  VALIDATION_RESULT: 'validated',
   CANDIDATE_PROMOTION: 'validated',
 };
 
@@ -135,13 +149,46 @@ const statusLabels = {
   CANCELLED: { label: 'Cancelled', tone: 'failure' },
 };
 
-function progressEventLabel(phase) {
+function activityLabel(value) {
+  return ({
+    WORKSPACE_PREPARATION: 'Workspace preparation',
+    IMPLEMENTATION: 'Feature implementation',
+    EVIDENCE_REPAIR: 'Evidence repair',
+    SEMANTIC_VERIFICATION: 'Semantic verification',
+    SEMANTIC_REPAIR: 'Semantic repair',
+    EXECUTABLE_VALIDATION: 'Executable validation',
+  })[String(value || '').toUpperCase()] || 'Model operation';
+}
+
+function formatMilliseconds(value) {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds < 0) return '00:00';
+  const totalSeconds = Math.max(0, Math.round(milliseconds / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return String(minutes).padStart(2, '0') + ':' + String(seconds).padStart(2, '0');
+}
+
+function operationDetail(details) {
+  const index = Number(details?.operationIndex || 0);
+  const count = Number(details?.operationCount || 0);
+  const stories = Array.isArray(details?.storyKeys) ? details.storyKeys : [];
+  const position = index && count ? ' · ' + index + ' of ' + count : '';
+  const strategy = details?.batchStrategy === 'AFFINITY_CAPACITY' ? ' · affinity batch' : '';
+  const storyLabel = stories.length ? ' · ' + stories.join(', ') : '';
+  return activityLabel(details?.activity) + position + strategy + storyLabel;
+}
+
+function progressEventLabel(phase, details = {}) {
   const normalized = String(phase || '').toUpperCase();
-  if (normalized === 'MODEL_REQUEST') return { title: 'Model request sent', detail: 'ADX has called the model gateway and is waiting for the patch response.', stage: 'started' };
-  if (normalized === 'MODEL_RESPONSE') return { title: 'Model response received', detail: 'The model returned a patch candidate and the run is moving to validation.', stage: 'started' };
-  if (normalized === 'VALIDATION') return { title: 'Validation started', detail: 'ADX is running the fixed validation command against the disposable candidate.', stage: 'validated' };
+  if (normalized === 'MODEL_REQUEST') return { title: activityLabel(details.activity) + ' started', detail: operationDetail(details) + ' · waiting for the model gateway', stage: 'started' };
+  if (normalized === 'MODEL_RESPONSE') return { title: activityLabel(details.activity) + ' response received', detail: operationDetail(details) + ' · ' + formatMilliseconds(details.durationMs), stage: 'started' };
+  if (normalized === 'PATCH_APPLIED') return { title: 'Patch applied', detail: operationDetail(details) + ' · ' + String(details.patchCount || 0) + ' files · ' + formatMilliseconds(details.durationMs), stage: 'started' };
+  if (normalized === 'VALIDATION') return { title: 'Executable validation started', detail: operationDetail(details) + ' · ' + String(details.commandCount || 0) + ' command groups', stage: 'validated' };
+  if (normalized === 'VALIDATION_RESULT') return { title: Number(details.exitCode) === 0 ? 'Executable validation passed' : 'Executable validation failed', detail: operationDetail(details) + ' · ' + formatMilliseconds(details.durationMs), stage: 'validated' };
   if (normalized === 'CANDIDATE_PROMOTION') return { title: 'Candidate promotion recorded', detail: 'The validated candidate is being retained for review.', stage: 'validated' };
   if (normalized === 'CONTEXT_COLLECTION') return { title: 'Workspace preparing', detail: 'ADX is collecting the bounded context and preparing the disposable workspace.', stage: 'leased' };
+  if (normalized === 'CONTEXT_READY') return { title: 'Workspace ready', detail: String(details.fileCount || 0) + ' files indexed · ' + formatMilliseconds(details.durationMs), stage: 'started' };
   return null;
 }
 
@@ -176,7 +223,7 @@ function formatDuration(startedAt, endedAt = null) {
 
 function summarizeEvent(event) {
   const eventName = normalizeEventName(event?.eventType || event?.kind);
-  const phaseEntry = eventName === 'AgentRunProgressed' ? progressEventLabel(event?.phase) : null;
+  const phaseEntry = eventName === 'AgentRunProgressed' ? progressEventLabel(event?.phase, event?.details) : null;
   const entry = phaseEntry || eventLabels[eventName] || { title: eventName || 'Event', detail: event.detail || '', stage: phaseStages[String(event?.phase || '').toUpperCase()] || 'started' };
   const errorCode = String(event?.errorCode || '').trim();
   const errorDetails = event?.errorDetails && typeof event.errorDetails === 'object' ? event.errorDetails : null;
@@ -247,25 +294,104 @@ function describeLivePhase(snapshot) {
   if (status === 'COMPLETED') return 'Phase: candidate ready for Gate D review';
   if (status === 'FAILED' || status === 'CANCELLED') return 'Phase: run stopped';
   if (latestKind === 'AgentRunCompleted') return 'Phase: candidate ready for Gate D review';
-  if (latestKind === 'AgentRunStarted' || latestPhase === 'MODEL_REQUEST') return 'Phase: validation is in progress';
-  if (latestPhase === 'MODEL_RESPONSE') return 'Phase: validation is in progress';
+  if (latestPhase === 'MODEL_REQUEST') return 'Phase: ' + activityLabel(latestEvent?.details?.activity).toLowerCase() + ' is waiting for the model';
+  if (latestPhase === 'MODEL_RESPONSE' || latestPhase === 'PATCH_APPLIED') return 'Phase: applying and checking the generated change';
   if (latestKind === 'AgentRunLeased' || latestPhase === 'CONTEXT_COLLECTION') return 'Phase: workspace preparing';
+  if (latestPhase === 'CONTEXT_READY') return 'Phase: workspace ready';
   if (latestPhase === 'VALIDATION') return 'Phase: validation is in progress';
+  if (latestPhase === 'VALIDATION_RESULT') return 'Phase: validation result recorded';
   if (latestPhase === 'CANDIDATE_PROMOTION') return 'Phase: candidate promotion is being recorded';
   return 'Phase: coding agent is working';
+}
+
+function isNearBottom(element) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+}
+
+function setEventFollowLive(value) {
+  eventFollowLive = Boolean(value);
+  const follow = byId('follow-live');
+  if (follow) follow.checked = eventFollowLive;
+  try {
+    sessionStorage.setItem(eventFollowStorageKey, String(eventFollowLive));
+  } catch {}
+}
+
+function scrollEventLogToLatest(log) {
+  if (!log) return;
+  log.scrollTop = log.scrollHeight;
+}
+
+function ensureEventConsoleControls() {
+  if (eventConsoleInitialized) return;
+  const log = byId('progress-events');
+  if (!log) return;
+  let follow = byId('follow-live');
+  let latest = byId('jump-latest');
+  if (!follow || !latest) {
+    const heading = log.parentNode?.querySelector('h3');
+    const header = document.createElement('div');
+    header.className = 'event-header';
+    header.innerHTML = '<div><p class="eyebrow">LIVE TRACE</p><h3>Live events</h3></div><div class="event-tools"><label class="follow-live"><input id="follow-live" type="checkbox" checked> Follow live</label><button id="jump-latest" class="event-jump" type="button" title="Jump to latest event">Latest</button></div>';
+    if (heading) heading.replaceWith(header);
+    else log.insertAdjacentElement('beforebegin', header);
+    follow = byId('follow-live');
+    latest = byId('jump-latest');
+  }
+  if (!follow || !latest) return;
+  eventConsoleInitialized = true;
+  follow.checked = eventFollowLive;
+  log.addEventListener('wheel', (event) => {
+    if (eventFollowLive && event.deltaY < 0) setEventFollowLive(false);
+  }, { passive: true });
+  log.addEventListener('touchstart', () => {
+    if (eventFollowLive) setEventFollowLive(false);
+  }, { passive: true });
+  log.addEventListener('pointerdown', () => {
+    if (eventFollowLive) setEventFollowLive(false);
+  }, { passive: true });
+  log.addEventListener('keydown', (event) => {
+    if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) setEventFollowLive(false);
+  });
+  follow.addEventListener('change', () => {
+    setEventFollowLive(follow.checked);
+    if (eventFollowLive) scrollEventLogToLatest(log);
+  });
+  latest.addEventListener('click', () => {
+    setEventFollowLive(true);
+    scrollEventLogToLatest(log);
+  });
 }
 
 function renderEvents(events, emptyMessage = 'The coding agent has not produced a snapshot yet.') {
   const log = byId('progress-events');
   if (!log) return;
+  ensureEventConsoleControls();
+  const previousScrollTop = log.scrollTop;
   if (!Array.isArray(events) || !events.length) {
+    renderedEventSignature = 'empty:' + emptyMessage;
     log.innerHTML = '<li><time>--:--:--</time><strong>No live events yet</strong><p>' + escapeMarkup(emptyMessage) + '</p></li>';
     return;
   }
-  log.innerHTML = events.map((event) => {
+  const eventSignature = JSON.stringify(events.map((event) => [event.id, event.sequence, event.eventType, event.kind, event.phase, event.occurredAt, event.details]));
+  if (eventSignature === renderedEventSignature) {
+    const currentDuration = log.querySelector('li.current .event-duration');
+    const currentStartedAt = events.at(-1)?.occurredAt;
+    if (currentDuration) currentDuration.textContent = formatDuration(currentStartedAt);
+    if (eventFollowLive) scrollEventLogToLatest(log);
+    return;
+  }
+  renderedEventSignature = eventSignature;
+  log.innerHTML = events.map((event, index) => {
     const entry = summarizeEvent(event);
-    return '<li><time>' + eventTime(event.occurredAt) + '</time><strong>' + entry.title + '</strong><p>' + entry.detail + '</p></li>';
+    const startMs = Date.parse(event.occurredAt || '');
+    const nextMs = Date.parse(events[index + 1]?.occurredAt || '');
+    const endMs = Number.isFinite(nextMs) ? nextMs : Date.now();
+    const duration = Number.isFinite(startMs) ? formatMilliseconds(endMs - startMs) : '00:00';
+    return '<li' + (index === events.length - 1 ? ' class="current"' : '') + '><time>' + eventTime(event.occurredAt) + '</time><strong>' + escapeMarkup(entry.title) + '</strong><span class="event-duration">' + duration + '</span><p>' + escapeMarkup(entry.detail) + '</p></li>';
   }).join('');
+  if (eventFollowLive) scrollEventLogToLatest(log);
+  else log.scrollTop = previousScrollTop;
 }
 
 function renderRunHistory(snapshot) {
@@ -285,7 +411,6 @@ function renderRunHistory(snapshot) {
     section.className = 'run-history';
     summary.insertAdjacentElement('afterend', section);
   }
-  section.open = false;
 
   const cards = attempts.map((attempt, index) => {
     const attemptNumber = attempts.length - index;
@@ -362,8 +487,34 @@ function renderRunTimings(snapshot) {
   const startedAt = snapshot?.startedAt || run?.startedAt || run?.createdAt || events[0]?.occurredAt || null;
   const endedAt = run?.updatedAt || events.at(-1)?.occurredAt || null;
   const status = String(run?.status || '').toUpperCase();
+  const terminalTimings = [...events].reverse().find((event) => event?.timings)?.timings || null;
+  const liveTimings = { contextMs: 0, modelMs: 0, patchMs: 0, validationMs: 0 };
+  let modelCalls = 0;
+  events.forEach((event, index) => {
+    const phase = String(event?.phase || '').toUpperCase();
+    const measured = Number(event?.details?.durationMs);
+    const startedMs = Date.parse(event?.occurredAt || '');
+    const nextMs = Date.parse(events[index + 1]?.occurredAt || '');
+    const inferred = Number.isFinite(startedMs)
+      ? Math.max(0, (Number.isFinite(nextMs) ? nextMs : status === 'RUNNING' ? Date.now() : startedMs) - startedMs)
+      : 0;
+    if (phase === 'MODEL_REQUEST') {
+      modelCalls += 1;
+      liveTimings.modelMs += inferred;
+    }
+    if (phase === 'CONTEXT_READY' && Number.isFinite(measured)) liveTimings.contextMs += measured;
+    if (phase === 'PATCH_APPLIED' && Number.isFinite(measured)) liveTimings.patchMs += measured;
+    if (phase === 'VALIDATION_RESULT' && Number.isFinite(measured)) liveTimings.validationMs += measured;
+    if (phase === 'VALIDATION' && !events[index + 1]) liveTimings.validationMs += inferred;
+  });
+  const timings = terminalTimings || liveTimings;
   const rows = [
     ['Elapsed', formatDuration(startedAt, status === 'RUNNING' || status === 'LEASED' ? null : endedAt)],
+    ['Model', formatMilliseconds(timings.modelMs)],
+    ['Workspace', formatMilliseconds(Number(timings.contextMs || 0) + Number(timings.workspaceCopyMs || 0))],
+    ['Patch application', formatMilliseconds(timings.patchMs)],
+    ['Validation', formatMilliseconds(timings.validationMs)],
+    ['Model calls', String(modelCalls)],
     ['Started', startedAt ? new Date(startedAt).toLocaleString() : 'Unavailable'],
     ['Last update', endedAt ? new Date(endedAt).toLocaleString() : 'Unavailable'],
   ];
@@ -641,6 +792,10 @@ function summarizeFailure(snapshot) {
   const validationCategory = String(details.validationCategory ?? event.validationCategory ?? '').trim();
   const validationFailureReason = String(details.validationFailureReason ?? details.validationOutputExcerpt ?? event.validationFailureReason ?? event.validationOutputExcerpt ?? '').trim();
   const validationOutputExcerpt = String(details.validationOutputExcerpt ?? event.validationOutputExcerpt ?? '').trim();
+  const responseIssue = String(details.responseIssue ?? event.responseIssue ?? '').trim();
+  const responseCorrection = String(details.responseCorrection ?? event.responseCorrection ?? '').trim();
+  const modelAttempts = Number(details.modelAttempts ?? event.modelAttempts ?? 0) || 0;
+  const modelFinishReason = String(details.modelFinishReason ?? event.modelFinishReason ?? '').trim();
   const outputDigest = String(event.outputDigest ?? snapshot.outputDigest ?? '').trim();
   const outputBytes = Number(event.outputBytes ?? snapshot.outputBytes ?? 0) || 0;
   const kind = String(event.kind || event.eventType || '').toLowerCase();
@@ -669,7 +824,26 @@ function summarizeFailure(snapshot) {
       ],
     };
   }
-  const isGateway = errorCode.includes('GATEWAY') || providerStatus > 0 || gatewayCode || gatewayParam || kind.includes('failed');
+  if (errorCode === 'MODEL_PATCH_RESPONSE_INVALID') {
+    const storyCoverageIssue = responseIssue.startsWith('STORY_COVERAGE_');
+    return {
+      title: storyCoverageIssue ? 'Story evidence rejected' : 'Model response rejected',
+      summary: storyCoverageIssue
+        ? 'The model response did not provide valid implementation evidence for every approved story.'
+        : 'The model response did not satisfy the bounded patch contract.',
+      nextAction: responseCorrection || 'Retry once to capture a precise response correction.',
+      hint: responseIssue || 'Detailed response issue unavailable',
+      trace: [
+        ['Diagnostic code', errorCode],
+        ['Response issue', responseIssue || 'Unavailable'],
+        ['Required correction', responseCorrection || 'Unavailable'],
+        ['Model attempts', modelAttempts ? String(modelAttempts) : 'Unavailable'],
+        ['Finish reason', modelFinishReason || 'Unavailable'],
+        ['Provider request ID', providerRequestId || 'Unavailable'],
+      ],
+    };
+  }
+  const isGateway = errorCode.includes('GATEWAY') || providerStatus > 0 || gatewayCode || gatewayParam;
   const isValidation = errorCode.includes('VALIDATION') || validationCommand || validationCategory || validationFailureReason;
   if (isGateway) {
     const summary = providerStatus === 403 || providerStatus === 401
@@ -702,6 +876,7 @@ function summarizeFailure(snapshot) {
     return { title: 'Gateway request failed', summary, nextAction, hint: providerStatus ? 'Status ' + providerStatus : 'Gateway failure', trace };
   }
   if (isValidation) {
+    const semanticFailure = validationCategory === 'SEMANTIC_VERIFICATION_FAILED';
     const trace = [
       ['Diagnostic code', errorCode || 'Unknown'],
       ['Validation command', validationCommand || 'Unavailable'],
@@ -712,12 +887,16 @@ function summarizeFailure(snapshot) {
       ['Model output digest', outputDigest || 'Unavailable'],
     ];
     return {
-      title: 'Validation failed',
-      summary: 'The candidate was built, but the fixed validation command did not pass.',
-      nextAction: validationCommand
+      title: semanticFailure ? 'Story acceptance failed' : 'Validation failed',
+      summary: semanticFailure
+        ? 'The candidate files were created, but they did not implement the approved stories through reachable application workflows.'
+        : 'The candidate was built, but the fixed validation command did not pass.',
+      nextAction: semanticFailure
+        ? 'Review the semantic findings below. The next implementation must change and test the named routed owners, handlers, and workflows rather than isolated helpers.'
+        : validationCommand
         ? 'Inspect the output from ' + validationCommand + ' and update the candidate accordingly.'
         : 'Inspect the validation output and repair the candidate before retrying.',
-      hint: validationCategory || 'Validation failure',
+      hint: semanticFailure ? 'No candidate was promoted' : validationCategory || 'Validation failure',
       trace,
     };
   }
@@ -766,6 +945,7 @@ function renderCompletionActions(snapshot) {
   const errorCode = String(latestEvent?.errorCode || latestEvent?.eventType || '').trim();
   const validationCommand = String(latestEvent?.errorDetails?.validationCommand || '').trim();
   const validationReason = String(latestEvent?.errorDetails?.validationFailureReason || '').trim();
+  const responseIssue = String(latestEvent?.errorDetails?.responseIssue || '').trim();
 
   const running = run?.status === 'RUNNING' || run?.status === 'LEASED';
   const completed = run?.status === 'COMPLETED';
@@ -802,7 +982,6 @@ function renderCompletionActions(snapshot) {
     renderRunCommentary(snapshot);
     renderRunSteps(snapshot);
     renderRunHistory(snapshot);
-    scrollToLiveConsole();
     return;
   }
 
@@ -838,7 +1017,7 @@ function renderCompletionActions(snapshot) {
       ['Status', status],
       ['Latest event', latestKind],
       ['Validation command', validationCommand || 'Unavailable'],
-      ['Failure reason', validationReason || 'Unavailable'],
+      ['Failure reason', validationReason || responseIssue || 'Unavailable'],
       ['Diagnostic code', errorCode || 'Unavailable'],
     ].map(([label, value]) => '<div><dt>' + escapeMarkup(label) + '</dt><dd>' + escapeMarkup(value) + '</dd></div>').join('');
     runDetails.setAttribute('data-status', status);
@@ -870,7 +1049,6 @@ function renderCompletionActions(snapshot) {
   if (failed && typeof window.syncDispatchControls === 'function') {
     window.syncDispatchControls();
   }
-  scrollToLiveConsole();
 }
 
 function applySnapshot(snapshot) {
@@ -898,7 +1076,6 @@ function applySnapshot(snapshot) {
     renderEvents(currentRunEvents(snapshot));
     renderRunHistory(snapshot);
     renderCompletionActions(snapshot);
-    scrollToLiveConsole();
     return;
   }
   if (pollTimer) {
@@ -925,7 +1102,6 @@ function applySnapshot(snapshot) {
   renderEvents(currentRunEvents(snapshot));
   renderRunHistory(snapshot);
   renderFailurePanel(snapshot);
-  scrollToLiveConsole();
 }
 
 async function bootstrapCurrentRun() {
@@ -957,7 +1133,16 @@ async function poll() {
   try {
     const response = await fetch(config.statusEndpoint);
     if (!response.ok) throw new Error('Execution status request failed with HTTP ' + response.status + '.');
-    applySnapshot(await response.json());
+    const snapshot = await response.json();
+    if (snapshot?.uiRevision && snapshot.uiRevision !== config.uiRevision) {
+      const reloadKey = 'adx:execution-ui-reload:' + snapshot.uiRevision;
+      if (sessionStorage.getItem(reloadKey) !== 'true') {
+        sessionStorage.setItem(reloadKey, 'true');
+        location.reload();
+        return;
+      }
+    }
+    applySnapshot(snapshot);
   } catch {
     const warning = ensureRunWarningNode();
     if (warning) {
@@ -1013,9 +1198,8 @@ async function beginRun(runId) {
 window.beginRun = beginRun;
 window.primeAcceptedRun = primeAcceptedRun;
 
+ensureEventConsoleControls();
 bootstrapCurrentRun();
-
-window.addEventListener('hashchange', scrollToLiveConsole);
 
 window.addEventListener('beforeunload', stopTimers);
 </script>`;
@@ -1030,6 +1214,8 @@ export function describeExecutionFailure(snapshot = {}, diagnosticCode = '') {
   const gatewayCode = snapshot.gatewayCode || '';
   const gatewayParam = snapshot.gatewayParam || '';
   const responseIssue = snapshot.responseIssue || '';
+  const responseCorrection = snapshot.responseCorrection || '';
+  const modelAttempts = Number(snapshot.modelAttempts || 0);
 
   if (code === 'EXECUTION_LEASE_EXPIRED') {
     return Object.freeze({
@@ -1049,10 +1235,12 @@ export function describeExecutionFailure(snapshot = {}, diagnosticCode = '') {
       reason: responseIssue
         ? `The response was rejected with ${responseIssue}.`
         : 'The failed run was recorded before detailed model-response diagnostics were retained.',
-      nextAction: storyCoverageIssue
+      nextAction: responseCorrection || (storyCoverageIssue
         ? 'Retry once. The coding agent must patch genuine implementation and test files and map every approved story to both.'
-        : 'Retry once to capture the detailed response issue, then correct the rejected schema or patch paths.',
-      hint: responseIssue || 'Detailed response issue unavailable',
+        : 'Retry once to capture the detailed response issue, then correct the rejected schema or patch paths.'),
+      hint: responseIssue
+        ? `${responseIssue}${modelAttempts ? ` · ${modelAttempts} attempts` : ''}`
+        : 'Detailed response issue unavailable',
     });
   }
 
@@ -1082,13 +1270,20 @@ export function describeExecutionFailure(snapshot = {}, diagnosticCode = '') {
   }
 
   if (code.includes('VALIDATION') || validationCommand || validationCategory || validationFailureReason) {
+    const semanticFailure = validationCategory === 'SEMANTIC_VERIFICATION_FAILED';
     return Object.freeze({
-      summary: 'Validation failed after the candidate was built.',
+      summary: semanticFailure
+        ? 'Story acceptance failed after the candidate was built.'
+        : 'Validation failed after the candidate was built.',
       reason: validationFailureReason || 'The fixed validation command did not pass for the generated candidate.',
-      nextAction: validationCommand
+      nextAction: semanticFailure
+        ? 'Review the semantic findings and update the named routed owners, handlers, and workflows rather than isolated helpers.'
+        : validationCommand
         ? `ADX already retried from a clean workspace. Inspect the output from ${validationCommand} and update the candidate to satisfy it.`
         : 'ADX already retried from a clean workspace. Inspect the validation output and update the candidate to satisfy it.',
-      hint: validationCommand && validationCategory
+      hint: semanticFailure
+        ? 'No candidate was promoted'
+        : validationCommand && validationCategory
         ? `${validationCategory} · ${validationCommand}`
         : validationCommand || validationCategory || 'Validation details unavailable',
     });
