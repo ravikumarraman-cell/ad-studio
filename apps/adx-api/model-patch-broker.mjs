@@ -281,19 +281,11 @@ export class ModelPatchBroker {
             });
             return { ...descriptor, response, contextMs, operationDetails };
           }));
-          assertDisjointBatchResponses(waveResults);
-          timings.modelMs = Number(timings.modelMs ?? 0) + Math.max(
-            0,
-            ...waveResults.map(({ modelMs }) => modelMs),
-          );
-          for (const { response, contextMs, operationDetails } of waveResults.sort(
-            (left, right) => left.batchIndex - right.batchIndex,
-          )) {
+          const applyBatchResponse = async ({ response, contextMs, operationDetails }) => {
             timings.contextMs = Number(timings.contextMs ?? 0) + contextMs;
             completions.push(response.completion);
-            mergeStoryCoverage(coverage, response.storyCoverage);
             featureSpotlight ??= response.featureSpotlight;
-
+            mergeStoryCoverage(coverage, response.storyCoverage);
             const patchStartedAt = Date.now();
             const previousTestContent = await readCandidateFiles(
               candidate,
@@ -306,13 +298,70 @@ export class ModelPatchBroker {
               executionState.lastTouchedPaths = new Set(touchedPaths);
             }
             await captureStoryEvidence(candidate, response.storyCoverage, previousTestContent, storyEvidence);
-            timings.patchMs = Number(timings.patchMs ?? 0) + elapsed(patchStartedAt);
+            const patchMs = elapsed(patchStartedAt);
+            timings.patchMs = Number(timings.patchMs ?? 0) + patchMs;
             await reportProgress(onProgress, "PATCH_APPLIED", {
               ...operationDetails,
-              durationMs: elapsed(patchStartedAt),
+              durationMs: patchMs,
               patchCount: response.patches.length,
             });
+          };
+          const collisionPaths = batchResponseCollisionPaths(waveResults);
+          if (collisionPaths.length) {
+            // No files have been written yet. Preserve the first valid result,
+            // then replay every remaining descriptor against the materialized
+            // candidate. This turns an unpredictable parallel overlap into a
+            // deterministic, bounded serial continuation instead of failing
+            // the entire change case.
+            const ordered = waveResults.sort((left, right) => left.batchIndex - right.batchIndex);
+            timings.modelMs = Number(timings.modelMs ?? 0) + Math.max(0, ...ordered.map(({ modelMs }) => modelMs));
+            await reportProgress(onProgress, "MODEL_REQUEST", {
+              activity: "COLLISION_SERIAL_FALLBACK",
+              batchStrategy: "COLLISION_SERIAL_FALLBACK",
+              collisionPaths,
+              operationCount: ordered.length,
+              operationIndex: 1,
+              storyKeys: ordered.flatMap(({ batchTask }) => batchTask.stories.map((story) => story.key)),
+            });
+            await applyBatchResponse(ordered[0]);
+            for (let index = 1; index < ordered.length; index += 1) {
+              const descriptor = ordered[index];
+              const contextStartedAt = Date.now();
+              const replayContext = await collectContext(candidate, contextCatalog, descriptor.batchTask, descriptor.priorityPaths);
+              const replayContextMs = elapsed(contextStartedAt);
+              const replayStartedAt = Date.now();
+              const replayOperationDetails = {
+                ...descriptor.operationDetails,
+                batchStrategy: "COLLISION_SERIAL_FALLBACK",
+                operationIndex: descriptor.batchIndex + 1,
+              };
+              const response = await requestValidatedPatches({
+                gateway: this.gateway,
+                task: descriptor.batchTask,
+                context: replayContext,
+                candidate,
+                writePaths,
+                previousValidationIssue,
+                timeoutMs: modelTimeoutMs,
+              });
+              const replayMs = elapsed(replayStartedAt);
+              timings.modelMs = Number(timings.modelMs ?? 0) + replayMs;
+              await reportProgress(onProgress, "MODEL_RESPONSE", { ...replayOperationDetails, durationMs: replayMs });
+              await applyBatchResponse({
+                ...descriptor,
+                response,
+                contextMs: replayContextMs,
+                operationDetails: replayOperationDetails,
+              });
+            }
+            continue;
           }
+          timings.modelMs = Number(timings.modelMs ?? 0) + Math.max(
+            0,
+            ...waveResults.map(({ modelMs }) => modelMs),
+          );
+          for (const result of waveResults.sort((left, right) => left.batchIndex - right.batchIndex))
+            await applyBatchResponse(result);
         }
         storyCoverage = orderedStoryCoverage(coverage, normalizedTask.stories);
         executionState.lastTouchedPaths = new Set(touchedPaths);
@@ -891,8 +940,22 @@ function semanticRepairOwnerPaths(contextCatalog, task, findings) {
       // coverage diagnostic request an owner instead of generating a fake one.
       add(routeOwners);
     }
+    // A funding view is only reachable when the routed page *and* the surface
+    // it renders change together. This prevents a repeated leaf-component
+    // repair from being accepted as page wiring.
+    if (/onboarding.*funding.*ui|funding.*ui.*unreach|unreachable.*funding.*ui/.test(text)) {
+      add(pathsFor(/frontend\/src\/pages\/TenantDetails\.jsx$/i, 1));
+      add(pathsFor(/frontend\/src\/components\/tenantDetails\/IntegrationReadiness\.jsx$/i, 1));
+      add(pathsFor(/api\/routes\/v1\/entity\/knowledgegraph(?:_service)?\.py$/i, 2));
+    }
     if (/extract|funding.*validation|authoritative|stale.*funding|workflow/.test(text))
       add(pathsFor(/tenant_workflow_rules\/(?:handler|account_discovery|funding_validation)\.py$/i, 3));
+    // Financial-contract findings require the real extracted-account caller
+    // and adapter boundary together; mocking the adapter alone is not proof.
+    if (/financial.*api.*contract|contract.*unverified|extracted.*account.*financial/.test(text))
+      add(pathsFor(/tenant_workflow_rules\/(?:account_discovery|funding_validation|handler)\.py$/i, 3));
+    if (/projection|funding.*read|route|api response|page-loading|client request/.test(text))
+      add(pathsFor(/api\/routes\/v1\/entity\/(?:knowledgegraph(?:_service)?|reports)\.py$/i, 2));
     if (/follow.?up|action|notification/.test(text))
       add(pathsFor(/tenant_action\/(?:account_field_log|handler|action_writer)\.py$/i, 2));
     if (/sbl|tooling|guard/.test(text))
@@ -928,6 +991,10 @@ function ownerBudgetedRepairBatches(task, stories, ownerTargets, maxOwners = 4) 
 
 function repairDirectiveForFinding(finding) {
   const text = `${finding.code} ${finding.message}`.toLowerCase();
+  if (/test_not_behavioral|source text|syntax without exercising|parse[sd]? the file/.test(text))
+      return `Repair directive: replace the non-behavioral test at ${finding.evidencePaths.filter(isTestPath).join(", ") || "the cited test path"}. The replacement must import and invoke the named public production owner with mocked infrastructure boundaries, then assert its observable blocked result or absence of downstream writes. Reading source text, parsing syntax/ASTs, extracting a helper, or asserting substrings is prohibited.`;
+  if (/projection|unreachable.*funding.*read|unused.*sbl.*guard|historical.*ui.*unverified/.test(text))
+    return `Repair directive: patch the named production owner chain end to end. A projection must be invoked by a registered API route and consumed by the routed page's client-loading path; do not inject its value as a test prop. A guard must be called by each named public lambda_handler before any downstream read or write, and each handler must be invoked in its own behavioral test. A historical report must be rendered and asserted in the reachable page/component test.`;
   if (/reachab|routed|rendered|owner/.test(text))
     return "Repair directive: patch and test the reachable routed owner itself, including its real data-loading path; a direct leaf/helper render or synthetic wrapper is not acceptance evidence.";
   if (/workflow|handler|invok|caller|unreachable|guard/.test(text))
@@ -1007,20 +1074,31 @@ function setsAreDisjoint(left, right) {
   return true;
 }
 
-function assertDisjointBatchResponses(results) {
-  if (results.length < 2) return;
+function batchResponseCollisionPaths(results) {
+  if (results.length < 2) return [];
   const owners = new Map();
+  const collisions = new Set();
   for (const result of results) {
     for (const patch of result.response.patches) {
       if (owners.has(patch.path))
-        throw new ChangeCaseError(
-          "MODEL_PATCH_BATCH_PATH_COLLISION",
-          "Concurrent implementation batches selected the same patch path; no candidate files were written.",
-          { severity: "warning", details: { collisionPath: patch.path } },
-        );
+        collisions.add(patch.path);
       owners.set(patch.path, result.batchIndex);
     }
   }
+  return [...collisions].sort();
+}
+
+// Semantic-repair batches are intentionally serialized. Retain this guard for
+// that path so an accidental future parallelization cannot silently overwrite
+// a repair, while initial implementation batches use the replay fallback.
+function assertDisjointBatchResponses(results) {
+  const collisionPaths = batchResponseCollisionPaths(results);
+  if (collisionPaths.length)
+    throw new ChangeCaseError(
+      "MODEL_PATCH_BATCH_PATH_COLLISION",
+      "Concurrent semantic-repair batches selected the same patch path; no candidate files were written.",
+      { severity: "warning", details: { collisionPath: collisionPaths[0] } },
+    );
 }
 
 async function verifyDeterministicCandidateSemantics({ source, candidate, task, storyCoverage }) {
@@ -1997,8 +2075,16 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
           error?.details?.responseIssue,
           error?.details?.responseCorrection,
         );
-        if (missingOwners.length)
+        if (missingOwners.length) {
+          // Owner corrections are not merely a coverage hint. Carry the
+          // exact supplied production path into the same mandatory-patch
+          // channel used for missing test evidence.
+          error.details.requiredResponsePatchPaths = [
+            ...(error.details.requiredResponsePatchPaths ?? []),
+            ...missingOwners.flatMap((owner) => owner.suppliedCandidatePaths),
+          ];
           error.details.responseCorrection = `${error.details.responseCorrection} Exact required repair: ${missingOwners.map((owner) => `${owner.storyKey}:${owner.owner} => ${owner.suppliedCandidatePaths[0]}`).join("; ")}. The next response must emit a patch for every listed path and cite that same path in the matching storyCoverage implementationPaths; a component, helper, or direct helper test is not an acceptable substitute.`;
+        }
       }
       const repeatedUnchangedIssue =
         lastError?.details?.responseIssue === error?.details?.responseIssue &&
@@ -2914,7 +3000,8 @@ function parseStoryCoverage(
         "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
         "Every approved story must retain patched implementation and test evidence.",
         completion,
-        `Your next response MUST emit at least one implementation patch and one test patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}. Use minimal anchored replacements for existing implementation files to reserve response space for the required test patch.`,
+        `Your next response must emit every missing evidence patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}. Use minimal anchored replacements for existing implementation files to reserve response space for the required test patch.`,
+        { requiredResponsePatchPaths: [...missingImplementationPaths, ...missingTestPaths] },
       );
     }
     if (
@@ -2978,7 +3065,7 @@ function unwrapJsonFence(text) {
   return match ? match[1].trim() : trimmed;
 }
 
-function patchResponseError(responseIssue, message, completion, responseCorrection = null) {
+function patchResponseError(responseIssue, message, completion, responseCorrection = null, additionalDetails = {}) {
   const finishReason = completion?.finishReason ?? null;
   const safeFinishReason = ["stop", "length", "content_filter"].includes(
     finishReason,
@@ -3000,6 +3087,7 @@ function patchResponseError(responseIssue, message, completion, responseCorrecti
           : null,
       modelFinishReason: safeFinishReason,
       providerRequestId,
+      ...additionalDetails,
     },
   });
 }
@@ -3007,6 +3095,10 @@ function patchResponseError(responseIssue, message, completion, responseCorrecti
 function defaultResponseCorrection(responseIssue) {
   if (responseIssue === "NON_JSON" || responseIssue === "SCHEMA_INVALID")
     return "Return exactly one JSON object matching responseSchema, with a non-empty patches array, featureSpotlight, and storyCoverage. Do not include markdown or explanatory text.";
+  if (responseIssue === "SEMANTIC_VERIFICATION_SCHEMA_INVALID")
+    return "Return exactly one adx-candidate-semantic-verification-v1 JSON object. Use passed:true with findings:[], or passed:false with at least one finding containing an approved storyKey, non-empty code/message, and evidencePaths drawn only from supplied files. Do not include any other fields or prose.";
+  if (responseIssue === "SEMANTIC_VERIFICATION_NON_JSON")
+    return "Return exactly one adx-candidate-semantic-verification-v1 JSON object with no markdown or prose.";
   if (responseIssue === "PATCH_INVALID")
     return "Return only authorized relative writable paths. For each patch, provide either complete string content with no replacements or null content with at least one exact anchored replacement.";
   return null;

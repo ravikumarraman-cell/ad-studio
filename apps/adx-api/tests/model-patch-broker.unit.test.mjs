@@ -1279,7 +1279,7 @@ test("semantic verification retries malformed verdicts with explicit schema corr
   assert.equal(verifierPrompts.length, 3);
   assert.equal(verifierPrompts[1].previousResponseIssue, "SEMANTIC_VERIFICATION_NON_JSON");
   assert.equal(verifierPrompts[2].previousResponseIssue, "SEMANTIC_VERIFICATION_SCHEMA_INVALID");
-  assert.match(verifierPrompts[2].previousResponseCorrection, /passed=true requires findings=\[\]/);
+  assert.match(verifierPrompts[2].previousResponseCorrection, /passed:true with findings:\[\]/);
   await rm(root, { recursive: true, force: true });
 });
 
@@ -2534,6 +2534,8 @@ test("model-patch broker tells a retry when a story has no patched test evidence
   assert.match(calls[1].prompt, /"previousResponseIssue":"STORY_COVERAGE_PATCHED_EVIDENCE_MISSING"/);
   assert.match(calls[1].prompt, /Missing implementation patches: none/);
   assert.match(calls[1].prompt, /Missing test patches: src\/marker\.test\.js/);
+  assert.match(calls[1].prompt, /"requiredResponsePatchPaths":\["src\/marker\.test\.js"\]/);
+  assert.match(calls[1].prompt, /Mandatory correction patch paths: src\/marker\.test\.js/);
   assert.match(calls[1].prompt, /Exact emitted patch paths: src\/marker\.js/);
   assert.match(calls[1].prompt, /Previously accepted patches are retained transactionally/);
   assert.equal(await readFile(join(candidate, "src", "marker.js"), "utf8"), 'export const marker = "after"\n');
@@ -2621,6 +2623,8 @@ test("model-patch broker retains valid patches for one focused owner correction"
   assert.equal(result.promoted, true);
   assert.equal(calls.length, 2);
   assert.equal(calls[1].previousResponseIssue, "STORY_COVERAGE_OWNER_MISSING");
+  assert.deepEqual(calls[1].requiredResponsePatchPaths, ["src/frontend/pages/Funding.jsx"]);
+  assert.match(calls[1].rules.join("\n"), /Mandatory correction patch paths: src\/frontend\/pages\/Funding\.jsx/);
   assert.match(calls[1].previousResponseCorrection, /Previously accepted patches are retained transactionally/);
   assert.equal(await readFile(join(candidate, "src", "reports", "funding-report.js"), "utf8"), 'export const report = "after"\n');
   assert.equal(await readFile(join(candidate, "src", "frontend", "pages", "Funding.jsx"), "utf8"), 'export const page = "after"\n');
