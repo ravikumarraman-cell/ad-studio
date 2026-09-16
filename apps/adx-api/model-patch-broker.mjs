@@ -34,7 +34,10 @@ const maxSemanticFindings = 20;
 // Semantic findings can span separate production owners. Keep repairs bounded,
 // but allow each focused repair/verification cycle to close one dependency
 // chain rather than abandoning the candidate after a single broad attempt.
-const maxCandidateRepairRounds = 5;
+// One owner-focused repair follows the full deterministic verification. Any
+// remaining defect is returned with evidence rather than starting another
+// speculative model cycle.
+const maxCandidateRepairRounds = 1;
 const maxCandidateValidationAttempts = 2;
 const maxCandidateEvidenceRepairAttempts = 1;
 const maxStoriesPerBatch = 3;
@@ -355,6 +358,7 @@ export class ModelPatchBroker {
         ];
         let candidateBlocked = false;
         let previousSemanticFindingSignature = null;
+        let nextVerificationStoryKeys = null;
         for (
           let verificationRound = 0;
           candidateVerifiers.length &&
@@ -362,10 +366,13 @@ export class ModelPatchBroker {
             verificationRound <= maxCandidateRepairRounds;
           verificationRound += 1
         ) {
+          const verificationTask = nextVerificationStoryKeys
+            ? { ...normalizedTask, stories: normalizedTask.stories.filter((story) => nextVerificationStoryKeys.has(story.key)) }
+            : normalizedTask;
           const deterministicVerification = await verifyDeterministicCandidateSemantics({
             source,
             candidate,
-            task: normalizedTask,
+            task: verificationTask,
             storyCoverage,
           });
           const verifierContextStartedAt = Date.now();
@@ -378,13 +385,13 @@ export class ModelPatchBroker {
           ]);
           const verifierPriorityPaths = repairIntegrationPriorityPaths(
             contextCatalog,
-            normalizedTask,
+            verificationTask,
             verifierEvidencePaths,
           );
           const verifierContext = await collectContext(
             candidate,
             contextCatalog,
-            normalizedTask,
+            verificationTask,
             verifierPriorityPaths,
           );
           timings.contextMs = Number(timings.contextMs ?? 0) + elapsed(verifierContextStartedAt);
@@ -393,14 +400,14 @@ export class ModelPatchBroker {
             activity: "SEMANTIC_VERIFICATION",
             operationIndex: verificationRound + 1,
             operationCount: maxCandidateRepairRounds + 1,
-            storyKeys: normalizedTask.stories.map((story) => story.key),
+            storyKeys: verificationTask.stories.map((story) => story.key),
           };
           let verification = deterministicVerification;
           if (deterministicVerification.passed) {
             await reportProgress(onProgress, "MODEL_REQUEST", verificationDetails);
             verification = await runCandidateVerifiers({
               verifiers: candidateVerifiers,
-              task: normalizedTask,
+              task: verificationTask,
               context: verifierContext,
               storyCoverage,
               touchedPaths,
@@ -441,13 +448,23 @@ export class ModelPatchBroker {
           const failedStoryKeys = new Set(
             verification.findings.map((finding) => finding.storyKey),
           );
+          nextVerificationStoryKeys = verificationStoryKeysAfterRepair(normalizedTask.stories, storyCoverage, failedStoryKeys);
           const repairStories = normalizedTask.stories.filter((story) =>
             failedStoryKeys.has(story.key),
           );
-          const repairBatches = storyBatchTasks({
-            ...normalizedTask,
-            stories: repairStories,
-          });
+          // Split only an owner-heavy repair. Small related repairs retain
+          // affinity batching; a page + workflow + action + report repair is
+          // partitioned before it can exceed the hard 12-patch response cap.
+          const repairOwnerTargets = semanticRepairOwnerPaths(
+            contextCatalog,
+            { ...normalizedTask, stories: repairStories },
+            verification.findings.filter((finding) => failedStoryKeys.has(finding.storyKey)),
+          );
+          const repairOwnerCount = Object.values(repairOwnerTargets)
+            .reduce((count, paths) => count + paths.length, 0);
+          const repairBatches = repairOwnerCount > 4
+            ? ownerBudgetedRepairBatches(normalizedTask, repairStories, repairOwnerTargets)
+            : storyBatchTasks({ ...normalizedTask, stories: repairStories });
           const repairDescriptors = repairBatches.map((repairTask, batchIndex) => {
             const repairStoryKeys = new Set(repairTask.stories.map((story) => story.key));
             const repairFindings = verification.findings.filter((finding) => repairStoryKeys.has(finding.storyKey));
@@ -457,18 +474,31 @@ export class ModelPatchBroker {
                 ...entry.implementationPaths, ...entry.testPaths,
               ]),
             ]);
-            const repairContextTaskValue = repairContextTask(repairTask, repairFindings);
+            const mandatoryOwnerPaths = semanticRepairOwnerPaths(
+              contextCatalog,
+              repairTask,
+              repairFindings,
+            );
+            const repairContextTaskValue = repairContextTask(
+              repairTask,
+              repairFindings,
+              mandatoryOwnerPaths,
+            );
             return {
               batchIndex,
               repairTask,
               repairStoryKeys,
               repairFindings,
               repairContextTaskValue,
-              repairPriorityPaths: repairIntegrationPriorityPaths(contextCatalog, repairContextTaskValue, repairEvidencePaths),
+              repairPriorityPaths: repairIntegrationPriorityPaths(contextCatalog, repairContextTaskValue, new Set([...repairEvidencePaths, ...Object.values(mandatoryOwnerPaths).flat()])),
               ownerPaths: implementationOwnerPaths(contextCatalog, repairContextTaskValue),
             };
           });
-          for (const wave of implementationBatchWaves(repairDescriptors)) {
+          // Repair prompts are allowed to modify shared domain files even when
+          // their initially inferred owners differ. Run them transactionally in
+          // order; initial implementation remains safely parallelized, while a
+          // semantic repair can never end in an overlapping-write collision.
+          for (const wave of implementationBatchWaves(repairDescriptors, false)) {
             const preparedWave = await Promise.all(wave.map(async (descriptor) => {
               const contextStartedAt = Date.now();
               const context = await collectContext(candidate, contextCatalog, descriptor.repairContextTaskValue, descriptor.repairPriorityPaths);
@@ -797,9 +827,19 @@ function storiesForValidationIssue(issue, stories, storyCoverage) {
   return Object.freeze(matchedStories.length ? matchedStories : [...stories]);
 }
 
-function repairContextTask(task, findings) {
+function verificationStoryKeysAfterRepair(stories, coverage, repairedKeys) {
+  const repairedPaths = new Set(coverage.filter((entry) => repairedKeys.has(entry.storyKey)).flatMap((entry) => entry.implementationPaths));
+  return new Set(stories.filter((story) => {
+    if (repairedKeys.has(story.key)) return true;
+    const entry = coverage.find((candidate) => candidate.storyKey === story.key);
+    return entry?.implementationPaths.some((path) => repairedPaths.has(path));
+  }).map((story) => story.key));
+}
+
+function repairContextTask(task, findings, mandatoryOwnerPaths = {}) {
   return {
     ...task,
+    mandatoryOwnerPaths,
     objective: [
       task.objective,
       ...findings.flatMap((finding) => [
@@ -808,6 +848,82 @@ function repairContextTask(task, findings) {
       ]),
     ].filter(Boolean).join(" "),
   };
+}
+
+function semanticRepairOwnerPaths(contextCatalog, task, findings) {
+  const available = [...contextCatalog.keys()].filter((path) => !isTestPath(path));
+  // A file's directory is not evidence that it owns a route.  Feature leaf
+  // components are often colocated under src/pages; choosing one of those for
+  // a reachability repair creates an attractive but invalid helper-only fix.
+  // Restrict this class of repair to files that are plausible application
+  // owners and prefer names that conventionally identify a routed surface.
+  const isFrontendRouteOwner = (path) => {
+    if (!/(?:^|\/)frontend\/src\/(?:pages?|routes?)\//i.test(path)) return false;
+    const basename = path.split("/").at(-1)?.replace(/\.[^.]+$/, "") ?? "";
+    return /(?:page|route|workflow|onboard|tenant|detail|dashboard|report)/i.test(basename) &&
+      !/(?:status|card|panel|widget|component|view|display)$/i.test(basename);
+  };
+  const pathsFor = (pattern, limit = 2) => available
+    .filter((path) => pattern.test(path))
+    .sort((left, right) =>
+      contextPathScore(right, contextSearchTerms(task)) - contextPathScore(left, contextSearchTerms(task)) ||
+      left.localeCompare(right),
+    )
+    .slice(0, limit);
+  const required = {};
+  for (const finding of findings) {
+    const text = `${finding.code} ${finding.message}`.toLowerCase();
+    const add = (paths) => {
+      const current = new Set(required[finding.storyKey] ?? []);
+      for (const path of paths) current.add(path);
+      required[finding.storyKey] = [...current];
+    };
+    if (/ui|frontend|reachab|render/.test(text)) {
+      const routeOwners = available
+        .filter(isFrontendRouteOwner)
+        .sort((left, right) =>
+          contextPathScore(right, contextSearchTerms(task)) - contextPathScore(left, contextSearchTerms(task)) ||
+          left.localeCompare(right),
+        )
+        .slice(0, 1);
+      // Do not silently fall back to a leaf component. If no real route owner
+      // is in the supplied context, omit the forced path and let the normal
+      // coverage diagnostic request an owner instead of generating a fake one.
+      add(routeOwners);
+    }
+    if (/extract|funding.*validation|authoritative|stale.*funding|workflow/.test(text))
+      add(pathsFor(/tenant_workflow_rules\/(?:handler|account_discovery|funding_validation)\.py$/i, 3));
+    if (/follow.?up|action|notification/.test(text))
+      add(pathsFor(/tenant_action\/(?:account_field_log|handler|action_writer)\.py$/i, 2));
+    if (/sbl|tooling|guard/.test(text))
+      add(pathsFor(/lambda\/sbl\/.*\/handler\.py$/i, 2));
+    if (/report|historical|dashboard/.test(text))
+      add(pathsFor(/api\/routes\/.*\/reports?\.py$/i, 1));
+  }
+  return required;
+}
+
+function ownerBudgetedRepairBatches(task, stories, ownerTargets, maxOwners = 4) {
+  const batches = [];
+  let current = [];
+  let currentWeight = 0;
+  const flush = () => {
+    if (current.length) batches.push({ ...task, stories: current });
+    current = [];
+    currentWeight = 0;
+  };
+  for (const story of stories) {
+    // A concrete owner usually needs both production and behavioral-test edits.
+    // Four owners therefore stays comfortably inside the twelve-patch contract
+    // while avoiding the one-story-per-request slowdown.
+    const weight = Math.max(1, new Set(ownerTargets[story.key] ?? []).size);
+    if (current.length && currentWeight + weight > maxOwners) flush();
+    current.push(story);
+    currentWeight += weight;
+    if (currentWeight >= maxOwners) flush();
+  }
+  flush();
+  return batches;
 }
 
 function repairDirectiveForFinding(finding) {
@@ -1477,7 +1593,13 @@ async function collectContext(root, contextCatalog, task, priorityPaths = new Se
       break;
     }
     bytes += size;
-    files.push({ path, content: suppliedContent, writable, ...(truncated ? { truncated: true } : {}) });
+    files.push({
+      path,
+      content: suppliedContent,
+      writable,
+      ...(writable ? { existing: true, fullContentSupplied: !truncated } : {}),
+      ...(truncated ? { truncated: true } : {}),
+    });
   }
   if (!files.length)
     throw new ChangeCaseError(
@@ -1490,28 +1612,25 @@ async function collectContext(root, contextCatalog, task, priorityPaths = new Se
 function contextExcerpt(content, task, byteLimit = maxFileBytes) {
   const lines = content.split("\n");
   const terms = contextSearchTerms(task);
-  const ranges = [[0, 35], [Math.max(0, lines.length - 140), lines.length]];
-  for (const term of terms) {
-    for (let index = 0; index < lines.length; index += 1) {
-      if (lines[index].toLowerCase().includes(term)) ranges.push([index - 6, index + 7]);
+  // Anchors must be literal source text. One contiguous excerpt prevents the
+  // model from joining distant sections across an omission marker.
+  let matchedLine = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (terms.some((term) => lines[index].toLowerCase().includes(term))) {
+      matchedLine = index;
+      break;
     }
   }
-  let excerpt = "";
-  const included = new Set();
-  for (const [rawStart, rawEnd] of ranges) {
-    const blockLines = [];
-    for (let index = Math.max(0, rawStart); index < Math.min(lines.length, rawEnd); index += 1) {
-      if (!included.has(index)) blockLines.push(lines[index]);
-    }
-    if (!blockLines.length) continue;
-    const current = blockLines.join("\n");
-    const addition = `${excerpt ? "\n\n[... omitted unchanged lines ...]\n\n" : ""}${current}`;
-    if (Buffer.byteLength(excerpt + addition) > byteLimit) continue;
-    excerpt += addition;
-    for (let index = Math.max(0, rawStart); index < Math.min(lines.length, rawEnd); index += 1)
-      included.add(index);
+  const start = Math.max(0, (matchedLine < 0 ? 0 : matchedLine) - 24);
+  const selected = [];
+  let usedBytes = 0;
+  for (let index = start; index < lines.length; index += 1) {
+    const lineBytes = Buffer.byteLength(`${selected.length ? "\n" : ""}${lines[index]}`);
+    if (usedBytes + lineBytes > byteLimit) break;
+    selected.push(lines[index]);
+    usedBytes += lineBytes;
   }
-  return excerpt;
+  return selected.join("\n");
 }
 
 function rankContextPaths(allowedPaths, task) {
@@ -1586,6 +1705,10 @@ function buildPatchPrompt(
 ) {
   const ownerContext = requiredOwnerContext(task, files, acceptedStoryCoverage);
   const ownerCorrection = focusedOwnerCorrection(ownerContext, previousResponseIssue, previousResponseCorrection);
+  const repairDeltaStoryKeys = [...new Set((previousValidationIssue?.verifierFindings ?? [])
+    .map((finding) => finding?.storyKey)
+    .filter((storyKey) => task.stories.some((story) => story.key === storyKey)))];
+  const focusedRepairPaths = focusedRepairFiles(files, ownerContext, acceptedStoryCoverage, previousValidationIssue, repairDeltaStoryKeys).map((file) => file.path);
   return JSON.stringify({
     schema: "adx-model-patch-request-v1",
     objective: task.objective,
@@ -1593,8 +1716,11 @@ function buildPatchPrompt(
     stories: task.stories,
     provisionalExternalContracts: task.provisionalExternalContracts ?? [],
     acceptedStoryCoverage,
+    requiredResponsePatchPaths: task.requiredResponsePatchPaths ?? [],
     requiredOwnerContext: ownerContext,
     ownerCorrection,
+    repairDeltaStoryKeys,
+    focusedRepairPaths,
     validation: task.allowedCommands,
     responseSchema: {
       schema: "adx-model-patch-response-v1",
@@ -1625,13 +1751,20 @@ function buildPatchPrompt(
     previousValidationIssue,
     rules: [
       "Return JSON only.",
+      `Emit at most ${maxPatches} patches. Combine every change to a shared file into one patch and cite that same path from each applicable storyCoverage entry.`,
       ...(ownerCorrection.length ? [
         "This is an owner-only correction. Retain prior staged patches; patch and cite every exact ownerCorrection.suppliedCandidatePaths target. Do not substitute a new component, generic helper, or a different similarly named file.",
         "For each ownerCorrection entry, its storyCoverage implementationPaths must contain one of its suppliedCandidatePaths exactly. Return the owner patch and an owner-level behavioral test before any optional work.",
       ] : []),
+      ...(repairDeltaStoryKeys.length ? [
+        `Repair delta required for: ${repairDeltaStoryKeys.join(", ")}. For each listed story, emit at least one new implementation or owner-level test patch that closes its verifier finding. Previously accepted paths may be cited as supporting coverage only; they cannot be the entire repair delta.`,
+      ] : []),
+      ...(task.requiredResponsePatchPaths?.length ? [
+        `Mandatory correction patch paths: ${task.requiredResponsePatchPaths.join(", ")}. This response is invalid unless patches contains every one of these exact paths. Do not substitute a different test file, cite an unpatched path, or spend a patch slot on optional work before these paths are emitted.`,
+      ] : []),
       "Modify existing files only when they are supplied with writable:true. You may create a new file under an approved writable root when necessary, especially a domain-local test file. Files marked writable:false are read-only verification context and must never be included in patches.",
-      "For an existing supplied file, prefer minimal exact anchored replacements: set content to null and copy each oldText from one contiguous supplied excerpt so it occurs exactly once. Use complete replacement content only when it is compact and preserves the whole existing file.",
-      "For files marked truncated:true, anchored replacements are mandatory. For a new file, provide complete content and an empty replacements array.",
+      "Every supplied file is annotated existing:true. For an existing file, use minimal exact anchored replacements: set content to null and copy each oldText from one contiguous supplied excerpt so it occurs exactly once. Never return a partial snippet as complete file content.",
+      "Anchored replacements are mandatory for files marked truncated:true. Each oldText must be copied from one contiguous supplied excerpt only; an omission marker is explanatory, never source text, and must never appear in oldText. A complete replacement is permitted only for existing:true + fullContentSupplied:true when it retains all unrelated behavior and the complete supplied file; otherwise use anchors. For a new file, provide complete content and an empty replacements array.",
       "Emit each patch path exactly once. When multiple stories change the same file, combine all changes into one patch and reference that shared path from each applicable storyCoverage entry.",
       "Implement every supplied approved story and all of its Given/When/Then scenarios.",
       "For every provisionalExternalContracts entry, create a source-owned adapter boundary that makes the provisional state visible to developers and returns an explicit UNKNOWN result when authoritative data is unavailable. Do not invent an endpoint, credential, response field, or funded/unfunded value. Preserve the retained warning for developer follow-up.",
@@ -1656,13 +1789,32 @@ function buildPatchPrompt(
   });
 }
 
+function focusedRepairFiles(files, ownerContext, acceptedCoverage, issue, repairStoryKeys) {
+  if (!repairStoryKeys.length) return files;
+  const paths = new Set((issue?.verifierFindings ?? []).flatMap((finding) => finding.evidencePaths ?? []));
+  for (const owner of ownerContext)
+    if (repairStoryKeys.includes(owner.storyKey)) for (const path of owner.suppliedCandidatePaths) paths.add(path);
+  for (const entry of acceptedCoverage)
+    if (repairStoryKeys.includes(entry.storyKey))
+      for (const path of [...entry.implementationPaths, ...entry.testPaths]) paths.add(path);
+  const selected = files.filter((file) => paths.has(file.path));
+  // Never make a repair blind: retain its complete already-collected context if
+  // the precise evidence set is too small to explain an owner-level data flow.
+  return selected.length >= 2 ? selected : files;
+}
+
 function requiredOwnerContext(task, files, acceptedStoryCoverage = []) {
-  return task.stories.flatMap((story) =>
+  const inferred = task.stories.flatMap((story) =>
     requiredStoryOwnerRequirements(story).map((requirement) => {
-      const suppliedCandidatePaths = files
+      const candidates = files
         .filter((file) => !isTestPath(file.path) && isConcreteOwnerCandidate(requirement, file))
-        .map((file) => file.path)
-        .slice(0, 4);
+        .map((file) => file.path);
+      // SBL and tooling are separate production boundaries. Give the model one
+      // precise, ranked handler for each instead of a broad interchangeable
+      // list that invites it to patch a helper or satisfy both with one path.
+      const exactOwner = ["SBL owner", "tooling owner"].includes(requirement.label);
+      const suppliedCandidatePaths = rankOwnerCandidates(requirement, candidates)
+        .slice(0, exactOwner ? 1 : 4);
       const acceptedPaths = acceptedStoryCoverage
         .find((entry) => entry.storyKey === story.key)
         ?.implementationPaths.filter((path) => suppliedCandidatePaths.includes(path)) ?? [];
@@ -1680,6 +1832,54 @@ function requiredOwnerContext(task, files, acceptedStoryCoverage = []) {
       };
     })
   );
+  const mandatory = Object.entries(task.mandatoryOwnerPaths ?? {}).flatMap(([storyKey, paths]) =>
+    [...new Set(paths)].filter((path) => files.some((file) => file.path === path)).map((path) => ({
+      storyKey,
+      owner: "semantic repair production owner",
+      acceptanceProof: "Patch this exact production owner and invoke its reachable behavior in an owner-level regression.",
+      requiredInThisResponse: true,
+      acceptedPaths: [],
+      suppliedCandidatePaths: [path],
+      ownerDiscovery: "SEMANTIC_FINDING_OWNER",
+    })),
+  );
+  return [...inferred, ...mandatory];
+}
+
+function rankOwnerCandidates(requirement, candidates) {
+  if (!["frontend/page owner", "report owner", "action persistence owner", "SBL owner", "tooling owner"].includes(requirement.label))
+    return [...candidates];
+  const score = (path) => {
+    const normalized = path.toLowerCase();
+    if (requirement.label === "frontend/page owner") {
+      if (/\/frontend\/src\/(?:pages?|routes?)\//.test(normalized)) return 100;
+      if (/(?:^|\/)(?:pages?|routes?)\//.test(normalized)) return 90;
+      if (/\/components?\//.test(normalized)) return 10;
+    }
+    if (requirement.label === "report owner") {
+      if (/\/api\/routes?\/.*\/reports?\.(?:py|m?js|ts)$/.test(normalized)) return 100;
+      if (/\/frontend\/src\/(?:pages?|routes?)\//.test(normalized)) return 90;
+      if (/\/reports?\.(?:py|m?js|ts)$/.test(normalized)) return 80;
+    }
+    if (requirement.label === "action persistence owner") {
+      if (/\/tenant_action\/handler\.(?:py|m?js|ts)$/.test(normalized)) return 100;
+      if (/\/tenant_action\/.*(?:field_log|action_writer)\.(?:py|m?js|ts)$/.test(normalized)) return 90;
+    }
+    if (requirement.label === "SBL owner") {
+      if (/sbl_tenant_service_mapping[^/]*\/handler\./.test(normalized)) return 100;
+      if (/\/sbl\/.*\/handler\./.test(normalized)) return 80;
+    }
+    if (requirement.label === "tooling owner") {
+      if (/sbl_service_account_request_daily\/handler\./.test(normalized)) return 100;
+      if (/\/tooling\/.*\/handler\./.test(normalized)) return 95;
+      if (/\/sbl\/.*\/handler\./.test(normalized)) return 70;
+    }
+    return 0;
+  };
+  return candidates
+    .map((path, index) => ({ path, index }))
+    .sort((left, right) => score(right.path) - score(left.path) || left.index - right.index)
+    .map(({ path }) => path);
 }
 
 function focusedOwnerCorrection(ownerContext, issue, correction) {
@@ -1692,13 +1892,21 @@ function focusedOwnerCorrection(ownerContext, issue, correction) {
   ).map((owner) => Object.freeze({
     storyKey: owner.storyKey,
     owner: owner.owner,
-    suppliedCandidatePaths: owner.suppliedCandidatePaths,
+    // A correction must be executable, not another choice set. The ranking
+    // already puts a reachable production page/route/handler first.
+    suppliedCandidatePaths: [owner.suppliedCandidatePaths[0]],
     acceptanceProof: owner.acceptanceProof,
   })));
 }
 
 function isConcreteOwnerCandidate(requirement, file) {
-  if (requirement.pathPattern.test(file.path)) return true;
+  if (requirement.label === "SBL owner" || requirement.label === "tooling owner") {
+    const path = file.path.toLowerCase();
+    if (/\/sbl\/.*\/handler\.(?:py|m?js|ts)$/i.test(path)) return true;
+    // Keep a supplied non-handler SBL owner available for repositories whose
+    // production boundary is a routed component or service rather than Lambda.
+    if (requirement.pathPattern.test(file.path)) return true;
+  } else if (requirement.pathPattern.test(file.path)) return true;
   const content = String(file.content ?? "");
   if (requirement.label === "notification delivery owner")
     return /\b(?:send|deliver|dispatch|notify)\w*\b[\s\S]{0,100}\b(?:email|mail|notification|message)\b|\b(?:ms[ _-]?graph|graph.*mail)\b/i.test(content);
@@ -1727,6 +1935,7 @@ function ownerAcceptanceProof(label) {
 async function requestValidatedPatches({ gateway, task, context, candidate, writePaths, acceptedStoryCoverage = [], previousValidationIssue = null, timeoutMs = 900_000 }) {
   let lastError;
   let ownerCorrectionAttempts = 0;
+  let requiredResponsePatchPaths = [];
   const stagedPatches = new Map();
   // Resolve owners before asking the model.  Coverage must be checked against
   // real, supplied production paths—not guessed filename conventions after a
@@ -1737,7 +1946,9 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       system:
         "You are a bounded code-editing worker. Return only valid JSON matching the requested schema. Never include markdown, explanations, credentials, commands, or files outside the supplied writable context.",
       prompt: buildPatchPrompt(
-        task,
+        requiredResponsePatchPaths.length
+          ? { ...task, requiredResponsePatchPaths }
+          : task,
         context,
         attempt,
         lastError?.details?.responseIssue,
@@ -1779,7 +1990,16 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
     } catch (error) {
       const ownerCoverageMissing =
         error?.details?.responseIssue === "STORY_COVERAGE_OWNER_MISSING";
-      if (ownerCoverageMissing) ownerCorrectionAttempts += 1;
+      if (ownerCoverageMissing) {
+        ownerCorrectionAttempts += 1;
+        const missingOwners = focusedOwnerCorrection(
+          ownerContext,
+          error?.details?.responseIssue,
+          error?.details?.responseCorrection,
+        );
+        if (missingOwners.length)
+          error.details.responseCorrection = `${error.details.responseCorrection} Exact required repair: ${missingOwners.map((owner) => `${owner.storyKey}:${owner.owner} => ${owner.suppliedCandidatePaths[0]}`).join("; ")}. The next response must emit a patch for every listed path and cite that same path in the matching storyCoverage implementationPaths; a component, helper, or direct helper test is not an acceptable substitute.`;
+      }
       const repeatedUnchangedIssue =
         lastError?.details?.responseIssue === error?.details?.responseIssue &&
         lastError?.details?.responseCorrection === error?.details?.responseCorrection;
@@ -1787,7 +2007,10 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         error?.code !== "MODEL_PATCH_RESPONSE_INVALID" ||
         attempt === maxPatchResponseAttempts ||
         repeatedUnchangedIssue ||
-        ownerCorrectionAttempts > 1
+        // Initial response plus two path-explicit owner repairs. This is the
+        // smallest bounded allowance that can recover when the first repair
+        // repeats the generic diagnostic instead of changing the named owner.
+        ownerCorrectionAttempts > 2
       )
         throw withAttempts(error, attempt);
       if (
@@ -1796,7 +2019,14 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       ) {
         const partial = parseModelResponse(completion.text, writePaths, completion, [], [], ownerContext);
         for (const patch of partial.patches) stagedPatches.set(patch.path, patch);
-        error.details.responseCorrection = `${error.details.responseCorrection} Previously accepted patches are retained transactionally for the next attempt. Emit only missing owner or evidence patches, but return complete storyCoverage citing both retained and new patch paths.`;
+        requiredResponsePatchPaths = [...new Set([
+          ...requiredResponsePatchPaths,
+          ...(error?.details?.requiredResponsePatchPaths ?? []),
+        ])];
+        const requiredPatchInstruction = requiredResponsePatchPaths.length
+          ? ` Required emitted patch paths for the next response: ${requiredResponsePatchPaths.join(", ")}. Each exact path must occur in patches; do not merely cite it in storyCoverage.`
+          : "";
+        error.details.responseCorrection = `${error.details.responseCorrection} Previously accepted patches are retained transactionally for the next attempt. Emit only missing owner or evidence patches, but return complete storyCoverage citing both retained and new patch paths.${requiredPatchInstruction}`;
       }
       lastError = error;
     }
@@ -1823,14 +2053,13 @@ async function materializeValidatedPatches(root, patches, completion) {
     if (patch.content !== null) {
       if (
         content !== null &&
-        Buffer.byteLength(content) >= 4 * 1024 &&
-        Buffer.byteLength(patch.content) < Buffer.byteLength(content) * 0.85
+        isDestructiveReplacement(content, patch.content)
       )
         throw patchResponseError(
           "PATCH_DESTRUCTIVE_REWRITE",
-          `Replacement for ${patch.path} would remove more than 15 percent of an existing file.`,
+          `Replacement for ${patch.path} would remove unrelated existing behavior.`,
           completion,
-          `Preserve unrelated behavior in ${patch.path}. Emit the complete existing file with only the required minimal change, or use exact anchored replacements copied from the supplied content.`,
+          `Preserve unrelated behavior in ${patch.path}. Use content:null with exact anchored replacements copied from the supplied content. Do not return a partial function, class, or snippet as a complete file. A complete replacement is allowed only when it retains the whole supplied file plus the minimal change.`,
         );
       materialized.push(patch);
       continue;
@@ -1870,6 +2099,27 @@ async function materializeValidatedPatches(root, patches, completion) {
     }));
   }
   return Object.freeze(materialized);
+}
+
+function isDestructiveReplacement(existingContent, replacementContent) {
+  const existingBytes = Buffer.byteLength(existingContent);
+  // Very small files are often intentionally replaced in full. Larger files
+  // must retain both their overall size and most non-empty source lines.
+  if (existingBytes < 1024) return false;
+  if (Buffer.byteLength(replacementContent) < existingBytes * 0.85) return true;
+  const sourceLines = existingContent.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (sourceLines.length < 8) return false;
+  const replacementCounts = new Map();
+  for (const line of replacementContent.split("\n").map((line) => line.trim()).filter(Boolean))
+    replacementCounts.set(line, (replacementCounts.get(line) ?? 0) + 1);
+  let retained = 0;
+  for (const line of sourceLines) {
+    const available = replacementCounts.get(line) ?? 0;
+    if (!available) continue;
+    replacementCounts.set(line, available - 1);
+    retained += 1;
+  }
+  return retained / sourceLines.length < 0.75;
 }
 
 function whitespaceEquivalentAnchorRange(content, oldText) {
@@ -2038,7 +2288,7 @@ async function completeGatewayWithinDeadline(gateway, request) {
   const timeoutMs = boundedModelRequestTimeout(request.timeoutMs);
   let timeout;
   try {
-    return await Promise.race([
+    const completion = await Promise.race([
       Promise.resolve(gateway.complete(request)),
       new Promise((_, reject) => {
         timeout = setTimeout(() => reject(new ChangeCaseError(
@@ -2048,6 +2298,15 @@ async function completeGatewayWithinDeadline(gateway, request) {
         )), timeoutMs);
       }),
     ]);
+    // Do not let an adapter's empty or malformed result become an
+    // unclassified TypeError during response parsing.
+    if (!completion || typeof completion !== "object" || typeof completion.text !== "string")
+      throw new ChangeCaseError(
+        "MODEL_PATCH_GATEWAY_RESPONSE_INVALID",
+        "The coding-model gateway returned an invalid completion envelope.",
+        { retryable: true, severity: "warning" },
+      );
+    return completion;
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -2509,6 +2768,12 @@ function validateStoryOwnerCoverage(storyCoverage, requiredStories, completion, 
       const candidates = owner?.suppliedCandidatePaths ?? [];
       if (candidates.length && !coverage.implementationPaths.some((path) => candidates.includes(path)))
         missing.push(`${story.key}:${requirement.label}`);
+    }
+    for (const owner of ownerContext.filter((entry) =>
+      entry.storyKey === story.key && entry.owner === "semantic repair production owner",
+    )) {
+      if (!coverage.implementationPaths.some((path) => owner.suppliedCandidatePaths.includes(path)))
+        missing.push(`${story.key}:${owner.owner}:${owner.suppliedCandidatePaths[0]}`);
     }
   }
   if (!missing.length) return;

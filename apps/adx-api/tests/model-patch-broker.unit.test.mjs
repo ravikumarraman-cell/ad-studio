@@ -962,6 +962,86 @@ test("semantic verification rejects an isolated component and requires a reachab
   await rm(root, { recursive: true, force: true });
 });
 
+test("semantic UI repair selects a routed page owner, never a colocated status leaf", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "frontend", "src", "pages"), { recursive: true });
+  await writeFile(join(source, "frontend", "src", "pages", "TenantWorkflow.jsx"), 'export const TenantWorkflow = "before"\n');
+  await writeFile(join(source, "frontend", "src", "pages", "TenantOnboardingFundingStatus.jsx"), 'export const FundingStatus = "leaf"\n');
+  const codingPrompts = [];
+  let codingAttempt = 0;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    semanticVerification: true,
+    gateway: {
+      status: () => ({ configured: true, model: "gpt-5.6-terra" }),
+      complete: async (request) => {
+        const prompt = JSON.parse(request.prompt);
+        if (request.responseSchema.name === "adx_candidate_semantic_verification") {
+          return {
+            text: JSON.stringify(codingAttempt === 1
+              ? { schema: "adx-candidate-semantic-verification-v1", passed: false, findings: [{
+                storyKey: "STORY-1", code: "UI_NOT_REACHABLE",
+                message: "The funding-status leaf is not rendered by Tenant Onboarding.",
+                evidencePaths: ["frontend/src/pages/TenantOnboardingFundingStatus.jsx"],
+              }] }
+              : { schema: "adx-candidate-semantic-verification-v1", passed: true, findings: [] }),
+          };
+        }
+        codingAttempt += 1;
+        codingPrompts.push(prompt);
+        return {
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: codingAttempt === 1
+              ? [
+                { path: "frontend/src/pages/TenantOnboardingFundingStatus.jsx", content: 'export const FundingStatus = "changed-leaf"\n' },
+                { path: "frontend/src/pages/TenantOnboardingFundingStatus.test.jsx", content: 'export const testLeaf = true\n' },
+              ]
+              : [
+                { path: "frontend/src/pages/TenantWorkflow.jsx", content: 'export const TenantWorkflow = "wired"\n' },
+                { path: "frontend/src/pages/TenantWorkflow.funding.test.jsx", content: 'export const testOwner = true\n' },
+              ],
+            featureSpotlight: null,
+            storyCoverage: [{ storyKey: "STORY-1", implementationPaths: codingAttempt === 1
+              ? ["frontend/src/pages/TenantOnboardingFundingStatus.jsx"]
+              : ["frontend/src/pages/TenantWorkflow.jsx"], testPaths: codingAttempt === 1
+                ? ["frontend/src/pages/TenantOnboardingFundingStatus.test.jsx"]
+                : ["frontend/src/pages/TenantWorkflow.funding.test.jsx"] }],
+          }),
+        };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+  const result = await broker.execute({
+    adapter,
+    repository: { writePaths: ["frontend/src/**"] },
+    task: {
+      ...task,
+      objective: "Show the funding decision on the Tenant Onboarding page.",
+      stories: [{
+        key: "STORY-1", title: "Funding visibility",
+        narrative: "As an onboarding operator, I need the persisted funding decision on the routed page.",
+        scenarios: [{ given: "a tenant has a persisted decision", when: "the onboarding route renders", then: "the decision is visible" }],
+      }],
+    },
+  });
+
+  assert.equal(result.promoted, true);
+  assert.equal(codingPrompts.length, 2);
+  assert.ok(codingPrompts[1].requiredOwnerContext.some((entry) =>
+    entry.suppliedCandidatePaths.includes("frontend/src/pages/TenantWorkflow.jsx") &&
+    entry.owner === "semantic repair production owner"), JSON.stringify(codingPrompts[1].requiredOwnerContext));
+  assert.equal(codingPrompts[1].requiredOwnerContext.some((entry) =>
+    entry.suppliedCandidatePaths.includes("frontend/src/pages/TenantOnboardingFundingStatus.jsx") &&
+    entry.owner === "semantic repair production owner"), false);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("semantic repair preserves previously accepted owner coverage without repatching it", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -2063,6 +2143,13 @@ test("model-patch broker corrects a destructive replacement before writing the b
 
   assert.equal(result.promoted, true, JSON.stringify(result));
   assert.equal(requests.length, 2);
+  const suppliedTenantFile = requests[0].files.find((file) => file.path === "src/tenant.js");
+  assert.equal(suppliedTenantFile.existing, true);
+  assert.equal(suppliedTenantFile.fullContentSupplied, true);
+  assert.equal(
+    requests[0].rules.some((rule) => rule.includes("Never return a partial snippet as complete file content")),
+    true,
+  );
   assert.equal(requests[1].previousResponseIssue, "PATCH_DESTRUCTIVE_REWRITE");
   assert.match(requests[1].previousResponseCorrection, /Preserve unrelated behavior/);
   assert.match(await readFile(join(candidate, "src", "tenant.js"), "utf8"), /tenantStatus = "after"/);
@@ -2697,6 +2784,25 @@ test("model-patch broker fails a non-settling model call at its bounded deadline
   await assert.rejects(
     broker.execute({ adapter, task, repository, timeoutMs: 20 }),
     (error) => error.code === "MODEL_PATCH_GATEWAY_TIMEOUT" && error.details.timeoutMs === 20,
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker classifies an invalid gateway completion instead of leaking an unstructured runner failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: { status: () => ({ configured: true }), complete: async () => ({}) },
+  });
+  await assert.rejects(
+    broker.execute({ adapter, task, repository, timeoutMs: 20 }),
+    (error) => error.code === "MODEL_PATCH_GATEWAY_RESPONSE_INVALID",
   );
   await rm(root, { recursive: true, force: true });
 });

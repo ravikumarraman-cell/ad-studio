@@ -263,12 +263,15 @@ export class CodingAgentExecutionService {
 
 function failureResult(error) {
   const code =
-    error instanceof ChangeCaseError
+    typeof error?.code === "string" && error.code.trim()
+      ? error.code.trim()
+      : error instanceof ChangeCaseError
       ? error.code
       : "CODING_AGENT_EXECUTION_FAILED";
   const errorDetails = safeErrorDetails({
     ...error?.details,
     failureStage: failureStageFor(code),
+    failureReason: failureReasonFor(code),
   });
   return {
     accepted: false,
@@ -349,6 +352,10 @@ function publicResult(result) {
     outputDigest: result.outputDigest ?? sha256(""),
     outputBytes: Number(result.outputBytes ?? 0),
     errorCode: result.errorCode ?? null,
+    // These fields have already passed safeErrorDetails validation in the
+    // terminal completion record. Returning them lets the handoff render the
+    // actionable nested diagnostic instead of only its wrapper code.
+    errorDetails: safeErrorDetails(result.errorDetails),
   });
 }
 
@@ -397,7 +404,8 @@ function safeErrorDetails(details) {
     "PATCH_REPLACEMENT_INVALID",
     "PATCH_REPLACEMENT_TOO_LARGE",
     "PATCH_PATH_DUPLICATE",
-  ].includes(details?.responseIssue)
+  ].includes(details?.responseIssue) ||
+    (typeof details?.responseIssue === "string" && /^[A-Z][A-Z0-9_]{2,127}$/.test(details.responseIssue))
     ? details.responseIssue
     : null;
   const responseCorrection =
@@ -483,11 +491,24 @@ function safeErrorDetails(details) {
     validationCategory,
     validationOutputExcerpt,
     validationFailureReason,
+    failureReason:
+      typeof details?.failureReason === "string" &&
+      details.failureReason.length <= 256
+        ? details.failureReason
+        : null,
     unresolvedCapabilities: unresolvedCapabilities.length
       ? unresolvedCapabilities
       : null,
   };
   return Object.values(safe).some(Boolean) ? safe : null;
+}
+
+function failureReasonFor(code) {
+  if (code === "MODEL_PATCH_GATEWAY_TIMEOUT")
+    return "A bounded coding-model request did not settle before its 90-second deadline.";
+  if (code === "AZURE_OPENAI_GATEWAY_CREDENTIAL_TIMEOUT")
+    return "Azure AD token acquisition did not settle before its bounded deadline.";
+  return null;
 }
 
 function failureStageFor(code) {

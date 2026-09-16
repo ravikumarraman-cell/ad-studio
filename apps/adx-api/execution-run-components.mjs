@@ -794,6 +794,7 @@ function summarizeFailure(snapshot) {
   const validationOutputExcerpt = String(details.validationOutputExcerpt ?? event.validationOutputExcerpt ?? '').trim();
   const responseIssue = String(details.responseIssue ?? event.responseIssue ?? '').trim();
   const responseCorrection = String(details.responseCorrection ?? event.responseCorrection ?? '').trim();
+  const failureReason = String(details.failureReason ?? event.failureReason ?? '').trim();
   const modelAttempts = Number(details.modelAttempts ?? event.modelAttempts ?? 0) || 0;
   const modelFinishReason = String(details.modelFinishReason ?? event.modelFinishReason ?? '').trim();
   const outputDigest = String(event.outputDigest ?? snapshot.outputDigest ?? '').trim();
@@ -839,6 +840,19 @@ function summarizeFailure(snapshot) {
         ['Required correction', responseCorrection || 'Unavailable'],
         ['Model attempts', modelAttempts ? String(modelAttempts) : 'Unavailable'],
         ['Finish reason', modelFinishReason || 'Unavailable'],
+        ['Provider request ID', providerRequestId || 'Unavailable'],
+      ],
+    };
+  }
+  if (errorCode === 'MODEL_PATCH_GATEWAY_TIMEOUT') {
+    return {
+      title: 'Coding-model request timed out',
+      summary: 'One bounded model request did not settle before ADX stopped it. No candidate was promoted.',
+      nextAction: 'Retry once. ADX will use a fresh request and preserves the precise timeout diagnostic if it repeats.',
+      hint: 'Gateway request deadline reached',
+      trace: [
+        ['Diagnostic code', errorCode],
+        ['Failure reason', failureReason || 'The coding-model request exceeded its bounded deadline.'],
         ['Provider request ID', providerRequestId || 'Unavailable'],
       ],
     };
@@ -904,8 +918,11 @@ function summarizeFailure(snapshot) {
     title: 'Runner stopped',
     summary: 'The bounded runner stopped before producing a usable candidate.',
     nextAction: 'Inspect the recorded diagnostic code and retry once after fixing the request.',
-    hint: 'No structured failure details were recorded',
-    trace: [['Diagnostic code', errorCode || 'Unavailable']],
+    hint: failureReason || 'No structured failure details were recorded',
+    trace: [
+      ['Diagnostic code', errorCode || 'Unavailable'],
+      ['Failure reason', failureReason || 'Unavailable'],
+    ],
   };
 }
 

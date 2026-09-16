@@ -97,6 +97,19 @@ test('precise patch response issues survive execution diagnostic sanitization', 
   assert.doesNotMatch(JSON.stringify(calls[2][1].result), /Do not retain this model response/)
 })
 
+test('a bounded gateway timeout keeps its precise code even across an untyped error boundary', async () => {
+  const timeout = Object.assign(new Error('Do not persist raw transport errors.'), {
+    code: 'MODEL_PATCH_GATEWAY_TIMEOUT',
+  })
+  const { service, calls } = harness(timeout)
+
+  await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-gateway-timeout' })
+
+  assert.equal(calls[2][1].result.errorCode, 'MODEL_PATCH_GATEWAY_TIMEOUT')
+  assert.equal(calls[2][1].result.errorDetails.failureReason, 'A bounded coding-model request did not settle before its 90-second deadline.')
+  assert.doesNotMatch(JSON.stringify(calls[2][1].result), /raw transport errors/i)
+})
+
 test('starting bounded implementation returns the run identity before the broker completes', async () => {
   let completeBroker
   const { service, calls } = harness({ accepted: true, promoted: true, provider: 'LOCAL_TEST', code: 0, outputDigest: 'sha256:output', outputBytes: 12, candidateDigest: 'sha256:candidate' })

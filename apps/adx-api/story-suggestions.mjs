@@ -160,7 +160,7 @@ async function gatewayCompletion({ providerId, gatewayAdapter, changeCase, gover
   try {
     return await gatewayAdapter.complete({ system: instructionsWithGuidance(prompt.instructions, guidance), prompt: prompt.context, correlationId, maxTokens, temperature: 1 })
   } catch (error) {
-    throw new ChangeCaseError('STORY_AI_REQUEST_FAILED', 'The configured gateway story-suggestion provider did not return a usable response.', { retryable: Boolean(error?.retryable), severity: 'warning', details: { provider: providerId, providerCode: error?.code ?? null, providerRequestId: error?.details?.providerRequestId ?? null } })
+    throw new ChangeCaseError('STORY_AI_REQUEST_FAILED', 'The configured gateway story-suggestion provider did not return a usable response.', { retryable: Boolean(error?.retryable), severity: 'warning', details: { provider: providerId, providerCode: error?.code ?? null, providerStatus: error?.details?.providerStatus ?? null, providerRequestId: error?.details?.providerRequestId ?? null, gatewayCode: error?.details?.gatewayError?.code ?? null } })
   }
 }
 
