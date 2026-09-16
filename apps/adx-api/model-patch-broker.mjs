@@ -1067,7 +1067,16 @@ function repairIntegrationPriorityPaths(contextCatalog, task, evidencePaths) {
       .sort((left, right) => left.localeCompare(right))
       .slice(0, 2)
     : [];
-  return new Set([...evidencePaths, ...ownerPaths, ...accountDiscoveryTests, ...candidates]);
+  const lambdaOwnerDirectories = implementationOwnerPaths(contextCatalog, task)
+    .filter((path) => /(?:^|\/)lambda\/.+\/handler\.py$/i.test(path))
+    .map((path) => `${dirname(path)}/`);
+  const lambdaOwnerTests = lambdaOwnerDirectories.length
+    ? [...contextCatalog.keys()]
+      .filter((path) => isTestPath(path) && lambdaOwnerDirectories.some((directory) => path.startsWith(directory)))
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, 4)
+    : [];
+  return new Set([...evidencePaths, ...ownerPaths, ...accountDiscoveryTests, ...lambdaOwnerTests, ...candidates]);
 }
 
 function implementationOwnerPaths(contextCatalog, task) {
@@ -1999,6 +2008,17 @@ function establishedLambdaOwnerTestPaths(files, ownerContext) {
   return pathsByOwner;
 }
 
+function buildLambdaOwnerTestContracts(pathsByOwner) {
+  return Object.freeze([...pathsByOwner.entries()].flatMap(([ownerPath, testPaths]) =>
+    testPaths.map((testPath) => Object.freeze({
+      ownerPath,
+      testPath,
+      invocation: "lambda_handler(event, context)",
+      observable: "a blocked response, persisted write, or delivery result",
+    })),
+  ));
+}
+
 function suppliedFrontendRoutedOwnerPaths(files) {
   return files
     .filter((file) => {
@@ -2119,6 +2139,7 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
   const accountDiscoveryOwnerTestPaths = establishedAccountDiscoveryTestPaths(context, ownerContext);
   const fundingAdapterPaths = authoritativeFundingAdapterPaths(context, ownerContext);
   const lambdaOwnerTestPaths = establishedLambdaOwnerTestPaths(context, ownerContext);
+  const lambdaOwnerTestContracts = buildLambdaOwnerTestContracts(lambdaOwnerTestPaths);
   const frontendRoutedOwnerPaths = suppliedFrontendRoutedOwnerPaths(context);
   // Make the highest-confidence supplied owner for every uncovered boundary a
   // first-request requirement. Previously these paths were only descriptive
@@ -2143,9 +2164,11 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       system:
         "You are a bounded code-editing worker. Return only valid JSON matching the requested schema. Never include markdown, explanations, credentials, commands, or files outside the supplied writable context.",
       prompt: buildPatchPrompt(
-        requiredResponsePatchPaths.length
-          ? { ...task, requiredResponsePatchPaths }
-          : task,
+        {
+          ...task,
+          ...(requiredResponsePatchPaths.length ? { requiredResponsePatchPaths } : {}),
+          lambdaOwnerTestContracts,
+        },
         recoveryFiles,
         attempt,
         lastError?.details?.responseIssue,
