@@ -27,22 +27,17 @@ import { ChangeCaseError, sha256 } from "./change-case-ledger.mjs";
 import { PostgresChangeCaseRepository } from "./change-case-repository.mjs";
 import { PostgresProjectPassportRepository } from "./project-passport-repository.mjs";
 import { PostgresExecutionRepository } from "./execution-repository.mjs";
-import { CodingAgentExecutionService } from "./coding-agent-execution-service.mjs";
 import { LocalCodingAgentBroker } from "./local-coding-agent-broker.mjs";
 import { ModelPatchBroker } from "./model-patch-broker.mjs";
 import {
-  createCodingAgentAdapter,
-  codingAgentProviders,
-} from "./coding-agent-adapters.mjs";
+  createLocalCodingAgentExecution,
+  createUhgModelCodingExecution,
+  resolveModelPatchProfile,
+} from "./coding-agent-execution-configuration.mjs";
 import { PostgresEvidenceRepository } from "./evidence-repository.mjs";
 import { PostgresPreviewDeliveryRepository } from "./git-delivery-repository.mjs";
 import { PostgresPreviewCiRepository } from "./ci-review-repository.mjs";
-import { createPreviewDeliveryService } from "./preview-delivery-service.mjs";
-import { createGitHubDraftPrClient } from "./github-draft-pr-client.mjs";
-import { createGitHubDraftPrExecutionService } from "./github-draft-pr-execution-service.mjs";
-import { createGitHubMilestoneStoryClient } from "./github-milestone-story-client.mjs";
 import { StoryMilestoneRepository } from "./story-milestone-repository.mjs";
-import { createStoryMilestoneService } from "./story-milestone-service.mjs";
 import { PostgresOutcomeRepository } from "./outcome-repository.mjs";
 import { createOutcomeRecord } from "./outcome-record.mjs";
 import { createStorySuggestionService } from "./story-suggestions.mjs";
@@ -67,9 +62,7 @@ import { handleStoryReviewRoute, handleStoryReleasePlanningRoute } from "./story
 import { handleDesignWorkbenchRoute, handleDesignReviewRoute } from "./design-route.mjs";
 import { handleGeneratedCandidateRoute } from "./generated-candidate-route.mjs";
 import { handleApplicationPreviewRoute } from "./preview-route.mjs";
-import { selectPreviewCheckout } from "./preview-checkout-selection.mjs";
 import { createPublicGitHubMilestoneClient } from "./github-public-milestones.mjs";
-import { createPrivateGitHubMilestoneClient } from "./github-private-milestones.mjs";
 import workflowContract from "../../packages/domain/src/change-case-workflow.json" with { type: "json" };
 import { escapeHtml, htmlScriptConfig } from "./review-page-utils.mjs";
 import { outcomeReviewPage } from "./outcome-review-page.mjs";
@@ -81,12 +74,18 @@ import {
   authorizationAction as projectAuthorizationAction,
   matchProjectRoute,
 } from "./project-routes.mjs";
+import { validateModelPatchRuntimeConfiguration } from "./runtime-config.mjs";
 import {
-  validateModelPatchRuntimeConfiguration,
-  validateReadableFilePath,
-} from "./runtime-config.mjs";
+  createConfiguredGitHubDraftPrExecution,
+  createConfiguredPreviewDeliveryPreparation,
+  createConfiguredPrivateGitHubMilestones,
+  createConfiguredStoryMilestones,
+  validatePreviewRuntimeConfiguration,
+} from "./server-integration-configuration.mjs";
 import { write, writeHtml, uiRedirectLocation, realWorkspaceLocation } from "./response-utils.mjs";
 import { createDecisionFor } from "./authorization-decision.mjs";
+import { handleExecutionApiRoute } from "./execution-api-route.mjs";
+import { handleGitHubMilestoneApiRoute } from "./github-milestone-api-route.mjs";
 
 const ids = Object.freeze({
   orgA: "11111111-1111-4111-8111-111111111111",
@@ -281,11 +280,14 @@ const configuredModelCoding = createUhgModelCodingExecution({
   changeCases,
   broker: modelPatchBroker,
   gateway: uhgAzureOpenAiExecutionGateway,
+  environment: process.env,
+  modelPatchProfile,
 });
 const configuredLocalCoding = createLocalCodingAgentExecution({
   executions,
   changeCases,
   broker: localCodingAgentBroker,
+  environment: process.env,
 });
 const configuredCoding = configuredModelCoding ?? configuredLocalCoding;
 const codingAgentExecution = configuredCoding?.service ?? null;
@@ -361,222 +363,6 @@ const localIndependentVerifier =
     : null;
 const oauthTransactions = new Map();
 const browserSessionHandoffs = new Map();
-
-function createConfiguredPreviewDeliveryPreparation({
-  changeCases,
-  evidenceRepository,
-  previewDeliveries,
-  storyRepository,
-  environment,
-}) {
-  const providerId = environment.ADX_PREVIEW_GIT_PROVIDER_ID;
-  const repositoriesJson = environment.ADX_PREVIEW_GIT_REPOSITORIES_JSON;
-  const serviceId = environment.ADX_PREVIEW_DELIVERY_SERVICE_ID;
-  const sourceRoot = selectPreviewCheckout(
-    environment.ADX_PREVIEW_SOURCE_ROOT,
-    environment.ADX_CODING_MODEL_SOURCE_ROOT,
-    environment.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT,
-  );
-  const candidateRoot = selectPreviewCheckout(
-    environment.ADX_PREVIEW_CANDIDATE_ROOT,
-    environment.ADX_CODING_MODEL_CANDIDATE_ROOT,
-    environment.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT,
-  );
-  if (
-    !providerId &&
-    !repositoriesJson &&
-    !serviceId &&
-    !sourceRoot &&
-    !candidateRoot
-  )
-    return { service: null, code: "GIT_PREVIEW_DELIVERY_NOT_CONFIGURED" };
-  if (
-    !providerId ||
-    !repositoriesJson ||
-    !serviceId ||
-    !sourceRoot ||
-    !candidateRoot ||
-    !changeCases ||
-    !evidenceRepository ||
-    !previewDeliveries
-  )
-    return {
-      service: null,
-      code: "GIT_PREVIEW_DELIVERY_CONFIGURATION_INCOMPLETE",
-    };
-  try {
-    return {
-      service: createPreviewDeliveryService({
-        providerId,
-        repositories: JSON.parse(repositoriesJson),
-        deliveryRepository: previewDeliveries,
-        evidenceRepository,
-        changeCaseRepository: changeCases,
-        storyRepository,
-        servicePrincipal: { type: "service", id: serviceId },
-        sourceRoot,
-        candidateRoot,
-      }),
-      code: null,
-    };
-  } catch {
-    return {
-      service: null,
-      code: "GIT_PREVIEW_DELIVERY_CONFIGURATION_INVALID",
-    };
-  }
-}
-
-function resolveModelPatchProfile(environment) {
-  const profile = String(
-    environment.ADX_CODING_MODEL_EXECUTION_PROFILE ?? "legacy",
-  )
-    .trim()
-    .toLowerCase();
-  if (profile === "health-x")
-    return Object.freeze({
-      id: "health-x",
-      sourceRoot:
-        environment.ADX_HEALTH_X_MODEL_SOURCE_ROOT ??
-        environment.ADX_CODING_MODEL_SOURCE_ROOT,
-      candidateRoot:
-        environment.ADX_HEALTH_X_MODEL_CANDIDATE_ROOT ??
-        environment.ADX_CODING_MODEL_CANDIDATE_ROOT,
-      repositoryId: String(
-        environment.ADX_HEALTH_X_MODEL_REPOSITORY_ID ?? "local:health-x",
-      ).trim(),
-      ref: String(
-        environment.ADX_HEALTH_X_MODEL_REF ?? "refs/heads/main",
-      ).trim(),
-      writePaths: configuredWritePaths(
-        environment.ADX_HEALTH_X_MODEL_WRITE_PATHS,
-        ["app/**"],
-      ),
-      readOnlyContextPaths: Object.freeze(["scripts/verify-production.mjs"]),
-      validationCommand: "npm run verify:production",
-      linkSourceDependencies: true,
-    });
-  return Object.freeze({
-    id: profile === "cloud-asset-inventory" ? profile : "legacy",
-    sourceRoot:
-      environment.ADX_CODING_MODEL_SOURCE_ROOT ??
-      environment.ADX_LOCAL_CODING_AGENT_SOURCE_ROOT,
-    candidateRoot:
-      environment.ADX_CODING_MODEL_CANDIDATE_ROOT ??
-      environment.ADX_LOCAL_VERIFIER_CANDIDATE_ROOT,
-    repositoryId: String(
-      environment.ADX_CODING_MODEL_REPOSITORY_ID ??
-        environment.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ??
-        "",
-    ).trim(),
-    ref: String(
-      environment.ADX_CODING_MODEL_REF ??
-        environment.ADX_LOCAL_CODING_AGENT_REF ??
-        "",
-    ).trim(),
-    writePaths: configuredWritePaths(
-      environment.ADX_CODING_MODEL_WRITE_PATHS ??
-        environment.ADX_LOCAL_CODING_AGENT_WRITE_PATHS,
-      [],
-    ),
-    readOnlyContextPaths: Object.freeze([]),
-    validationCommand:
-      profile === "cloud-asset-inventory"
-        ? "cloud-asset-inventory verify"
-        : "npm --prefix frontend test -- --runInBand",
-    linkSourceDependencies: true,
-  });
-}
-
-function configuredWritePaths(value, fallback) {
-  if (typeof value !== "string" || !value.trim())
-    return Object.freeze(fallback);
-  return Object.freeze(
-    value
-      .split(",")
-      .map((path) => path.trim())
-      .filter(Boolean),
-  );
-}
-
-async function validatePreviewRuntimeConfiguration(previewProfiles) {
-  if (!(previewProfiles instanceof Map) || previewProfiles.size === 0) return;
-  for (const profile of previewProfiles.values()) {
-    if (!profile?.npmrcSecretRequired) continue;
-    if (typeof profile.npmrcSecretPath !== "string" || !profile.npmrcSecretPath.trim())
-      throw new Error("API_START_PREVIEW_NPMRC_FILE_MISSING: Configure ADX_PREVIEW_NPMRC_FILE as a readable server-owned file before starting preview-enabled profiles.");
-    await validateReadableFilePath(profile.npmrcSecretPath, "PREVIEW_NPMRC_FILE").catch(() => {
-      throw new Error("API_START_PREVIEW_NPMRC_FILE_UNAVAILABLE: The configured ADX_PREVIEW_NPMRC_FILE path is unreadable or missing.");
-    });
-  }
-}
-
-function createConfiguredGitHubDraftPrExecution({
-  previewDeliveries,
-  previewCi,
-  environment,
-}) {
-  const token = environment.ADX_GITHUB_DRAFT_PR_TOKEN;
-  const sourceRoot = environment.ADX_PREVIEW_SOURCE_ROOT;
-  const candidateRoot = environment.ADX_PREVIEW_CANDIDATE_ROOT;
-  if (!token && !sourceRoot && !candidateRoot)
-    return { service: null, code: "GITHUB_DRAFT_PR_NOT_CONFIGURED" };
-  if (
-    !token ||
-    !sourceRoot ||
-    !candidateRoot ||
-    !previewDeliveries ||
-    !previewCi
-  )
-    return { service: null, code: "GITHUB_DRAFT_PR_CONFIGURATION_INCOMPLETE" };
-  try {
-    return {
-      service: createGitHubDraftPrExecutionService({
-        deliveryRepository: previewDeliveries,
-        previewCi,
-        client: createGitHubDraftPrClient({ token }),
-        servicePrincipal: {
-          type: "service",
-          id: "adx-github-draft-pr-delivery",
-        },
-        sourceRoot,
-        candidateRoot,
-      }),
-      code: null,
-    };
-  } catch {
-    return { service: null, code: "GITHUB_DRAFT_PR_CONFIGURATION_INVALID" };
-  }
-}
-
-function createConfiguredStoryMilestones({ repository, environment }) {
-  const token = environment.ADX_GITHUB_MILESTONE_TOKEN;
-  if (!token) return { service: null, code: "GITHUB_MILESTONE_NOT_CONFIGURED" };
-  if (!repository)
-    return { service: null, code: "GITHUB_MILESTONE_CONFIGURATION_INCOMPLETE" };
-  try {
-    return {
-      service: createStoryMilestoneService({
-        repository,
-        client: createGitHubMilestoneStoryClient({ token }),
-      }),
-      code: null,
-    };
-  } catch {
-    return { service: null, code: "GITHUB_MILESTONE_CONFIGURATION_INVALID" };
-  }
-}
-
-function createConfiguredPrivateGitHubMilestones(environment) {
-  if (!environment.ADX_GITHUB_PRIVATE_READ_TOKEN) return null;
-  try {
-    return createPrivateGitHubMilestoneClient({
-      token: environment.ADX_GITHUB_PRIVATE_READ_TOKEN,
-    });
-  } catch {
-    return null;
-  }
-}
 
 function oidcCallbackFailureReason(error) {
   if (!(error instanceof Error)) return "OIDC_TOKEN_VERIFICATION_FAILED";
@@ -939,190 +725,6 @@ function createLedgerSigner(env) {
     return { keyId: "adx-test-ledger-ed25519", ...keys };
   }
   return null;
-}
-function createLocalCodingAgentExecution({ executions, changeCases, broker }) {
-  const provider = String(process.env.ADX_LOCAL_CODING_AGENT_PROVIDER ?? "")
-    .trim()
-    .toUpperCase();
-  const version = String(
-    process.env.ADX_LOCAL_CODING_AGENT_VERSION ?? "",
-  ).trim();
-  const repositoryId = String(
-    process.env.ADX_LOCAL_CODING_AGENT_REPOSITORY_ID ?? "",
-  ).trim();
-  const ref = String(process.env.ADX_LOCAL_CODING_AGENT_REF ?? "").trim();
-  const writePaths = String(
-    process.env.ADX_LOCAL_CODING_AGENT_WRITE_PATHS ?? "",
-  )
-    .split(",")
-    .map((path) => path.trim())
-    .filter(Boolean);
-  if (
-    !executions ||
-    !changeCases ||
-    !broker.configured() ||
-    !codingAgentProviders.includes(provider) ||
-    !version ||
-    !repositoryId ||
-    !ref.startsWith("refs/") ||
-    !writePaths.length
-  )
-    return null;
-  const capabilities = {
-    shell: true,
-    gitRead: true,
-    gitWrite: true,
-    browser: false,
-    network: false,
-    secrets: false,
-    deploy: false,
-  };
-  const adapter = createCodingAgentAdapter({
-    provider,
-    version,
-    capabilities,
-    enabled: true,
-  });
-  const policy = {
-    version: "adx-local-coding-agent-v1",
-    agentPrincipal: { id: `agent:${adapter.adapterId}` },
-    repository: { repositoryId, ref, writePaths },
-    capabilities,
-    limits: {
-      maxDurationSeconds: 900,
-      maxToolCalls: 100,
-      maxCostUsd: 0,
-      maxNetworkBytes: 0,
-      maxOutputBytes: 64 * 1024,
-      maxWorkspaceBytes: 64 * 1024 * 1024,
-    },
-    durationSeconds: 900,
-    taskFor: (changeCase) => ({
-      objective: changeCase.title,
-      changeDigest: sha256({
-        changeCaseId: changeCase.id,
-        projectionVersion: changeCase.projectionVersion,
-      }),
-      allowedCommands: ["node --test"],
-    }),
-  };
-  const service = new CodingAgentExecutionService({
-    executionRepository: executions,
-    changeCaseRepository: changeCases,
-    broker,
-    resolveAdapter: (requestedProvider) => {
-      if (requestedProvider !== provider)
-        throw new ChangeCaseError(
-          "CODING_AGENT_PROVIDER_NOT_ENABLED",
-          "The requested coding-agent provider is not enabled on this ADX server.",
-        );
-      return adapter;
-    },
-    policy,
-  });
-  return Object.freeze({
-    service,
-    provider: Object.freeze({
-      id: provider,
-      label:
-        provider === "CLAUDE_CODE"
-          ? "Claude Code CLI"
-          : provider === "GITHUB_COPILOT"
-            ? "GitHub Copilot CLI"
-            : "Codex CLI",
-      description:
-        "Server-configured CLI implementation runner. ADX issues a signed lease and produces a disposable candidate.",
-    }),
-  });
-}
-function createUhgModelCodingExecution({
-  executions,
-  changeCases,
-  broker,
-  gateway,
-}) {
-  const provider = "UHG_AZURE_OPENAI";
-  const version = String(process.env.ADX_CODING_MODEL_VERSION ?? "").trim();
-  const {
-    repositoryId,
-    ref,
-    writePaths,
-    validationCommand,
-    id: profileId,
-  } = modelPatchProfile;
-  if (
-    !executions ||
-    !changeCases ||
-    !broker.configured() ||
-    !gateway?.status?.().configured ||
-    !version ||
-    !repositoryId ||
-    !ref.startsWith("refs/") ||
-    !writePaths.length
-  )
-    return null;
-  const capabilities = {
-    shell: true,
-    gitRead: true,
-    gitWrite: true,
-    browser: false,
-    network: false,
-    secrets: false,
-    deploy: false,
-  };
-  const adapter = createCodingAgentAdapter({
-    provider,
-    version,
-    capabilities,
-    enabled: true,
-  });
-  const policy = {
-    version: `adx-uhg-model-patch-${profileId}-v1`,
-    agentPrincipal: { id: `agent:${adapter.adapterId}` },
-    repository: { repositoryId, ref, writePaths },
-    capabilities,
-    limits: {
-      maxDurationSeconds: 1800,
-      maxToolCalls: 2,
-      maxCostUsd: 0,
-      maxNetworkBytes: 0,
-      maxOutputBytes: 64 * 1024,
-      maxWorkspaceBytes: 64 * 1024 * 1024,
-    },
-    durationSeconds: 1800,
-    taskFor: (changeCase) => ({
-      objective: changeCase.title,
-      changeDigest: sha256({
-        changeCaseId: changeCase.id,
-        projectionVersion: changeCase.projectionVersion,
-      }),
-      allowedCommands: [validationCommand],
-    }),
-  };
-  const service = new CodingAgentExecutionService({
-    executionRepository: executions,
-    changeCaseRepository: changeCases,
-    broker,
-    resolveAdapter: (requestedProvider) => {
-      if (requestedProvider !== provider)
-        throw new ChangeCaseError(
-          "CODING_AGENT_PROVIDER_NOT_ENABLED",
-          "The requested coding-agent provider is not enabled on this ADX server.",
-        );
-      return adapter;
-    },
-    policy,
-  });
-  const model = gateway.status().model ?? "UHG model";
-  return Object.freeze({
-    service,
-    validationCommand,
-    provider: Object.freeze({
-      id: provider,
-      label: `${model} (UHG)`,
-      description: `Health-X bounded runner · validates with ${validationCommand}.`,
-    }),
-  });
 }
 function codingAgentProvidersForUi() {
   if (!codingAgentExecution?.configured() || !configuredCoding?.provider)
@@ -1873,295 +1475,44 @@ const server = createServer(async (request, response) => {
     }
   }
 
-  const publicGitHubMatch = url.pathname.match(
-    /^\/v1\/workspaces\/([0-9a-f-]+)\/github-public\/(milestones|milestone-import)$/i,
-  );
-  if (publicGitHubMatch) {
-    const [, workspaceId, operation] = publicGitHubMatch;
-    const membership = session.memberships.find(
-      (item) => item.workspaceId === workspaceId,
-    );
-    if (!membership)
-      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
-    if (!changeCases)
-      return write(
-        response,
-        503,
-        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
-        traceId,
-      );
-    const scope = {
-      organizationId: membership.organizationId,
-      workspaceId: membership.workspaceId,
-    };
-    const action =
-      operation === "milestones" && request.method === "GET"
-        ? "workspace.read"
-        : operation === "milestone-import" && request.method === "POST"
-          ? "workspace.manage"
-          : null;
-    if (!action)
-      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
-    const decision = decisionFor({
+  if (
+    await handleGitHubMilestoneApiRoute({
+      request,
+      response,
+      url,
       session,
-      resource: workspaceResource(workspaceId, membership.organizationId),
-      action,
-    });
-    if (decision.outcome !== "ALLOW")
-      return write(response, 403, { code: decision.reason }, traceId);
-    try {
-      if (operation === "milestones")
-        return write(
-          response,
-          200,
-          {
-            milestones: await publicGitHubMilestones.listMilestones({
-              owner: url.searchParams.get("owner"),
-              repository: url.searchParams.get("repository"),
-            }),
-          },
-          traceId,
-        );
-      const body = await readJson(request);
-      const features = await publicGitHubMilestones.featuresFromMilestone({
-        owner: body?.owner,
-        repository: body?.repository,
-        milestone: body?.milestone,
-        featureOwner: body?.featureOwner,
-        targetRepository: body?.targetRepository,
-        riskTier: body?.riskTier,
-      });
-      return write(
-        response,
-        200,
-        await importFeatureBatch({
-          scope,
-          principal: session.principal,
-          importId: body?.importId,
-          features,
-          correlationId: traceId,
-        }),
-        traceId,
-      );
-    } catch (error) {
-      return commandError(response, error, traceId);
-    }
-  }
+      traceId,
+      changeCases,
+      publicGitHubMilestones,
+      privateGitHubMilestones,
+      decisionFor,
+      workspaceResource,
+      importFeatures: importFeatureBatch,
+      commandError,
+      write,
+    })
+  )
+    return;
 
-  const privateGitHubMatch = url.pathname.match(
-    /^\/v1\/workspaces\/([0-9a-f-]+)\/github-private\/(milestones|milestone-import)$/i,
-  );
-  if (privateGitHubMatch) {
-    const [, workspaceId, operation] = privateGitHubMatch;
-    const membership = session.memberships.find(
-      (item) => item.workspaceId === workspaceId,
-    );
-    if (!membership)
-      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
-    if (!changeCases)
-      return write(
-        response,
-        503,
-        { code: "CHANGE_CASE_LEDGER_NOT_CONFIGURED" },
-        traceId,
-      );
-    if (!privateGitHubMilestones)
-      return write(
-        response,
-        503,
-        { code: "GITHUB_PRIVATE_REPOSITORY_READ_NOT_CONFIGURED" },
-        traceId,
-      );
-    const scope = {
-      organizationId: membership.organizationId,
-      workspaceId: membership.workspaceId,
-    };
-    const action =
-      operation === "milestones" && request.method === "GET"
-        ? "workspace.read"
-        : operation === "milestone-import" && request.method === "POST"
-          ? "workspace.manage"
-          : null;
-    if (!action)
-      return write(response, 405, { code: "METHOD_NOT_ALLOWED" }, traceId);
-    const decision = decisionFor({
+  if (
+    await handleExecutionApiRoute({
+      request,
+      response,
+      url,
       session,
-      resource: workspaceResource(workspaceId, membership.organizationId),
-      action,
-    });
-    if (decision.outcome !== "ALLOW")
-      return write(response, 403, { code: decision.reason }, traceId);
-    try {
-      if (operation === "milestones")
-        return write(
-          response,
-          200,
-          {
-            milestones: await privateGitHubMilestones.listMilestones({
-              owner: url.searchParams.get("owner"),
-              repository: url.searchParams.get("repository"),
-            }),
-          },
-          traceId,
-        );
-      const body = await readJson(request);
-      if (
-        ["token", "accessToken", "githubToken"].some((key) =>
-          Object.hasOwn(body ?? {}, key),
-        )
-      )
-        throw new ChangeCaseError(
-          "GITHUB_PRIVATE_BROWSER_CREDENTIAL_REJECTED",
-          "GitHub credentials must remain server-side and cannot be supplied by the browser.",
-          { retryable: false, severity: "warning" },
-        );
-      const features = await privateGitHubMilestones.featuresFromMilestone({
-        owner: body?.owner,
-        repository: body?.repository,
-        milestone: body?.milestone,
-        featureOwner: body?.featureOwner,
-        targetRepository: body?.targetRepository,
-        riskTier: body?.riskTier,
-      });
-      return write(
-        response,
-        200,
-        await importFeatureBatch({
-          scope,
-          principal: session.principal,
-          importId: body?.importId,
-          features,
-          correlationId: traceId,
-        }),
-        traceId,
-      );
-    } catch (error) {
-      return commandError(response, error, traceId);
-    }
-  }
-
-  const executionMatch = url.pathname.match(
-    /^\/v1\/workspaces\/([0-9a-f-]+)\/change-cases\/([0-9a-f-]+)\/execution(?:\/(leases)(?:\/([0-9a-f-]+)\/(revoke))?|\/(dispatch))?$/i,
-  );
-  if (executionMatch) {
-    const [
-      ,
-      workspaceId,
-      changeCaseId,
-      collection,
-      leaseId,
-      command,
-      dispatch,
-    ] = executionMatch;
-    const membership = session.memberships.find(
-      (item) => item.workspaceId === workspaceId,
-    );
-    if (!membership)
-      return write(response, 403, { code: "WORKSPACE_ACCESS_DENIED" }, traceId);
-    if (!changeCases || !executions)
-      return write(
-        response,
-        503,
-        { code: "EXECUTION_GOVERNANCE_NOT_CONFIGURED" },
-        traceId,
-      );
-    const scope = {
-      organizationId: membership.organizationId,
-      workspaceId: membership.workspaceId,
-    };
-    const current = await changeCases.get(scope, changeCaseId);
-    if (!current)
-      return write(response, 404, { code: "CHANGE_CASE_NOT_FOUND" }, traceId);
-    const action =
-      request.method === "GET" ? "resource.read" : "resource.write";
-    const decision = decisionFor({
-      session,
-      resource: changeCaseResource(current, scope),
-      action,
-    });
-    if (decision.outcome !== "ALLOW")
-      return write(response, 403, { code: decision.reason }, traceId);
-    if (request.method === "GET" && !collection)
-      return write(
-        response,
-        200,
-        {
-          ...(await executions.view(scope, changeCaseId)),
-          uiRevision: executionUiRevision,
-        },
-        traceId,
-      );
-    const body = await readJson(request);
-    try {
-      if (request.method === "POST" && dispatch === "dispatch") {
-        if (!codingAgentExecution)
-          throw new ChangeCaseError(
-            "CODING_AGENT_EXECUTOR_NOT_CONFIGURED",
-            "Coding-agent execution is not configured for this ADX server.",
-          );
-        const governance = await changeCases.intakeView(scope, changeCaseId);
-        return write(
-          response,
-          202,
-          await codingAgentExecution.start({
-            scope,
-            principal: session.principal,
-            changeCase: current,
-            provider: body?.provider,
-            task: executionTask(current, governance, body?.templateId),
-            expectedVersion: body?.expectedVersion,
-            idempotencyKey: request.headers["idempotency-key"],
-          }),
-          traceId,
-        );
-      }
-      if (request.method === "POST" && collection === "leases" && !leaseId)
-        return write(
-          response,
-          201,
-          await executions.issueLease({
-            scope,
-            principal: session.principal,
-            changeCaseId,
-            request: body,
-          }),
-          traceId,
-        );
-      if (
-        request.method === "POST" &&
-        collection === "leases" &&
-        leaseId &&
-        command === "revoke"
-      )
-        return write(
-          response,
-          200,
-          await executions.revokeLease({
-            scope,
-            principal: session.principal,
-            leaseId,
-            reason: body?.reason,
-          }),
-          traceId,
-        );
-      return write(
-        response,
-        400,
-        {
-          error: {
-            code: "EXECUTION_COMMAND_INVALID",
-            message: "The execution governance command is invalid.",
-            retryable: false,
-            severity: "warning",
-            correlationId: traceId,
-          },
-        },
-        traceId,
-      );
-    } catch (error) {
-      return commandError(response, error, traceId);
-    }
-  }
+      traceId,
+      changeCases,
+      executions,
+      codingAgentExecution,
+      executionUiRevision,
+      decisionFor,
+      changeCaseResource,
+      executionTask,
+      commandError,
+      write,
+    })
+  )
+    return;
 
   const changeCaseMatch = matchChangeCaseRoute(url.pathname);
   if (changeCaseMatch) {
