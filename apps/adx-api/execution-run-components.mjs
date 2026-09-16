@@ -19,8 +19,19 @@ const form = document.getElementById('dispatch-form');
 const button = document.getElementById('submit');
 const status = document.getElementById('status');
 const confirmation = document.getElementById('confirmation');
+let verificationIntensity = document.getElementById('verification-intensity');
+let verificationIntensityValue = document.getElementById('verification-intensity-value');
 const providers = [...document.querySelectorAll('input[name="provider"]')];
 const submissionAvailable = ${JSON.stringify(Boolean(submissionAvailable))};
+
+if (form && confirmation && !verificationIntensity) {
+  const control = document.createElement('label');
+  control.className = 'select-label verification-control';
+  control.innerHTML = 'Semantic verification intensity <output id="verification-intensity-value" for="verification-intensity">100</output><input id="verification-intensity" type="range" min="0" max="100" step="1" value="100" aria-describedby="verification-intensity-help"><small id="verification-intensity-help">0 keeps fixed repository validation only; 1–49 runs a focused semantic check; 50–99 runs a standard one-pass check; 100 enables full semantic verification with one bounded repair round.</small>';
+  confirmation.closest('label')?.before(control);
+  verificationIntensity = control.querySelector('#verification-intensity');
+  verificationIntensityValue = control.querySelector('#verification-intensity-value');
+}
 
 function syncRunningState(running) {
   if (!form || !button) return;
@@ -28,6 +39,7 @@ function syncRunningState(running) {
   button.dataset.running = running ? 'true' : 'false';
   button.setAttribute('aria-busy', running ? 'true' : 'false');
   button.disabled = running;
+  if (verificationIntensity) verificationIntensity.disabled = running;
 }
 
 if (form && button && status) {
@@ -45,6 +57,9 @@ if (form && button && status) {
   };
 
   confirmation?.addEventListener('change', syncControls);
+  verificationIntensity?.addEventListener('input', () => {
+    if (verificationIntensityValue) verificationIntensityValue.value = verificationIntensity.value;
+  });
   providers.forEach((input) => input.addEventListener('change', syncControls));
   window.syncDispatchControls = syncControls;
   syncControls();
@@ -69,6 +84,7 @@ if (form && button && status) {
         body: JSON.stringify({
           provider: document.querySelector('input[name="provider"]:checked')?.value,
           templateId: document.getElementById('coding-spec-template')?.value,
+          verificationIntensity: Number(verificationIntensity?.value ?? 100),
           expectedVersion: ${JSON.stringify(changeCaseVersion)},
         }),
       });

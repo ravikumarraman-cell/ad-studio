@@ -220,7 +220,8 @@ test("model-patch broker requires the established public Lambda owner test inste
   await writeFile(join(source, ownerTestPath), [
     "def test_reachable_workflow_owner():",
     "    handler = load_module('workflow_owner', 'lambda/tenant_workflow_rules/handler.py')",
-    "    result = handler.lambda_handler({}, None)",
+    "    event = {'tenant_id': 'tenant-1'}",
+    "    result = handler.lambda_handler(event, None)",
     "    assert result['status'] is True",
   ].join("\n"));
   const prompts = [];
@@ -335,6 +336,104 @@ test("model-patch broker requires an exact supplied notification owner instead o
   assert.match(prompts[1].previousResponseCorrection, /STORY-4:notification delivery owner/);
   const notificationOwner = prompts[0].requiredOwnerContext.find((owner) => owner.owner === "notification delivery owner");
   assert.deepEqual(notificationOwner.suppliedCandidatePaths, [actionPath, senderPath]);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker retries account-discovery coverage with an explicit owner-test contract", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  const accountDiscoveryPath = "backend/inventory/lambda/tenant_workflow_rules/account_discovery.py";
+  const fundingValidationPath = "backend/inventory/lambda/tenant_workflow_rules/funding_validation.py";
+  const testPath = "backend/inventory/tests/test_account_discovery_funding_validation.py";
+  for (const path of [accountDiscoveryPath, fundingValidationPath, testPath]) await mkdir(dirname(join(source, path)), { recursive: true });
+  await writeFile(join(source, accountDiscoveryPath), "def process_account_discovery(extracted_accounts):\n    return extracted_accounts\n");
+  await writeFile(join(source, fundingValidationPath), "def validate_funding():\n    return 'unknown'\n");
+  await writeFile(join(source, testPath), "# process_account_discovery(\ndef test_funding():\n    assert True\n");
+  const prompts = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        prompts.push(JSON.parse(request.prompt));
+        const testReplacement = prompts.length === 1
+          ? { oldText: "# process_account_discovery(", newText: "# detached helper test" }
+          : { oldText: "# process_account_discovery(", newText: [
+            "from tenant_workflow_rules.account_discovery import process_account_discovery",
+            "from tenant_workflow_rules import funding_validation",
+            "",
+            "def test_story_1_persists_extracted_account_funding():",
+            "    extracted_accounts = [{'tenant_id': 'tenant-1', 'aide_id': 'aide-1'}]",
+            "    tenant_table = Mock()",
+            "    process_account_discovery(extracted_accounts)",
+            "    tenant_table.update_item.assert_called()",
+          ].join("\n") };
+        return { text: JSON.stringify({
+          schema: "adx-model-patch-response-v1",
+          patches: prompts.length === 1 ? [
+            { path: accountDiscoveryPath, content: null, replacements: [{ oldText: "    return extracted_accounts", newText: "    return list(extracted_accounts)" }] },
+            { path: testPath, content: null, replacements: [testReplacement] },
+          ] : [
+            { path: fundingValidationPath, content: null, replacements: [{ oldText: "    return 'unknown'", newText: "    return 'UNKNOWN'" }] },
+            { path: testPath, content: null, replacements: [testReplacement] },
+          ],
+          featureSpotlight: null,
+          storyCoverage: [{
+            storyKey: "STORY-1",
+            implementationPaths: prompts.length === 1
+              ? [accountDiscoveryPath]
+              : [accountDiscoveryPath, fundingValidationPath],
+            testPaths: [testPath],
+          }],
+        }) };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Validate extracted account funding",
+        narrative: "Validate extracted account data through account discovery.",
+        scenarios: [{ given: "extracted account data", when: "account discovery runs", then: "a tenant funding decision is persisted" }],
+      }],
+      mandatoryOwnerPaths: { "STORY-1": [accountDiscoveryPath] },
+    },
+    repository: { writePaths: ["backend/**"] },
+  });
+
+  assert.equal(result.promoted, true);
+  assert.equal(prompts.length, 2);
+  assert.equal(prompts[1].ownerTestRepair, null);
+  assert.deepEqual(prompts[1].authoritativeAdapterRepair, {
+    storyKey: "STORY-1",
+    adapterPath: fundingValidationPath,
+    testPath,
+    ownerPath: accountDiscoveryPath,
+  });
+  assert.deepEqual(
+    [...prompts[1].requiredResponsePatchPaths].sort(),
+    [fundingValidationPath, testPath].sort(),
+  );
+  assert.deepEqual(prompts[1].authoritativeAdapterRecovery, {
+    patchPaths: [fundingValidationPath, testPath],
+    retainStagedProductionPatches: true,
+    patchCount: 2,
+  });
+  assert.deepEqual(
+    prompts[1].files.map((file) => file.path).sort(),
+    [accountDiscoveryPath, fundingValidationPath, testPath].sort(),
+  );
+  assert.match(prompts[1].previousResponseCorrection, /Emit only missing owner or evidence patches/);
+  assert.ok(prompts[1].rules.some((rule) => rule.includes("authoritativeAdapterRepair.adapterPath")));
+  assert.ok(prompts[1].rules.some((rule) => rule.includes("Return exactly two patches")));
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1042,12 +1141,83 @@ test("semantic verification rejects an isolated component and requires a reachab
   await rm(root, { recursive: true, force: true });
 });
 
+test("deterministic verification rejects a swallowed tenant-action scope error before model semantics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  const actionPath = "backend/inventory/lambda/tenant_action/account_field_log.py";
+  const testPath = "backend/inventory/lambda/tenant_action/test_account_field_log.py";
+  await mkdir(dirname(join(source, actionPath)), { recursive: true });
+  await writeFile(join(source, actionPath), "def updateTenantActionTable(tenant_id):\n    return tenant_id\n");
+  const requests = [];
+  let codingAttempt = 0;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    semanticVerification: true,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        const prompt = JSON.parse(request.prompt);
+        requests.push({ name: request.responseSchema.name, prompt });
+        if (request.responseSchema.name === "adx_candidate_semantic_verification")
+          return { text: JSON.stringify({ schema: "adx-candidate-semantic-verification-v1", passed: true, findings: [] }) };
+        codingAttempt += 1;
+        const invalid = codingAttempt === 1;
+        return { text: JSON.stringify({
+          schema: "adx-model-patch-response-v1",
+          patches: [
+            {
+              path: actionPath,
+              content: null,
+              replacements: [{
+                oldText: invalid
+                  ? "def updateTenantActionTable(tenant_id):\n    return tenant_id"
+                  : "def updateTenantActionTable(tenant_id):\n    try:\n        return tenant.get('tenant_status')\n    except Exception:\n        return None",
+                newText: invalid
+                  ? "def updateTenantActionTable(tenant_id):\n    try:\n        return tenant.get('tenant_status')\n    except Exception:\n        return None"
+                  : "def updateTenantActionTable(tenant_id):\n    return tenant_id",
+              }],
+            },
+            { path: testPath, content: "def test_follow_up():\n    assert True\n", replacements: [] },
+          ],
+          featureSpotlight: null,
+          storyCoverage: [{ storyKey: "STORY-3", implementationPaths: [actionPath], testPaths: [testPath] }],
+        }) };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-3",
+        title: "Record an active-unfunded follow-up action",
+        narrative: "Persist the action before notifying operations.",
+        scenarios: [{ given: "an unfunded tenant", when: "the action owner runs", then: "the action is recorded before notification" }],
+      }],
+      mandatoryOwnerPaths: { "STORY-3": [actionPath] },
+    },
+    repository: { writePaths: ["backend/**"] },
+  });
+  assert.equal(result.promoted, true);
+  assert.equal(codingAttempt, 2);
+  const repairPrompt = requests.filter((request) => request.name === "adx_model_patch_response")[1].prompt;
+  assert.match(repairPrompt.previousValidationIssue.validationOutputExcerpt, /ACTION_OWNER_SCOPE_ERROR/);
+  assert.match(repairPrompt.objective, /action owner executable before notification/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("semantic UI repair selects a routed page owner, never a colocated status leaf", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
   const candidate = join(root, "candidate");
   await mkdir(join(source, "frontend", "src", "pages"), { recursive: true });
   await writeFile(join(source, "frontend", "src", "pages", "TenantWorkflow.jsx"), 'export const TenantWorkflow = "before"\n');
+  await writeFile(join(source, "frontend", "src", "pages", "TenantDetails.jsx"), 'export const TenantDetails = "before"\n');
   await writeFile(join(source, "frontend", "src", "pages", "TenantOnboardingFundingStatus.jsx"), 'export const FundingStatus = "leaf"\n');
   const codingPrompts = [];
   let codingAttempt = 0;
@@ -1119,6 +1289,11 @@ test("semantic UI repair selects a routed page owner, never a colocated status l
   assert.equal(codingPrompts[1].requiredOwnerContext.some((entry) =>
     entry.suppliedCandidatePaths.includes("frontend/src/pages/TenantOnboardingFundingStatus.jsx") &&
     entry.owner === "semantic repair production owner"), false);
+  assert.equal(codingPrompts[1].requiredOwnerContext.some((entry) =>
+    entry.suppliedCandidatePaths.includes("frontend/src/pages/TenantDetails.jsx") &&
+    entry.owner === "semantic repair production owner"), false);
+  assert.ok(codingPrompts[1].rules.some((rule) => /actual onboarding\/workflow routed page/.test(rule)));
+  assert.ok(codingPrompts[1].rules.some((rule) => /complete production edge/.test(rule)));
   await rm(root, { recursive: true, force: true });
 });
 
@@ -2158,6 +2333,14 @@ test("model-patch broker retries a non-unique anchor before writing the batch", 
     true,
   );
   assert.match(requests[1].previousResponseCorrection, /Do not reuse that exact oldText/);
+  assert.deepEqual(requests[1].requiredResponsePatchPaths, ["src/large-tenant.js"]);
+  assert.deepEqual(requests[1].anchorRepair, {
+    path: "src/large-tenant.js",
+    rejectedOldText: "// repeated",
+    matchCount: 2200,
+    currentExcerpt: null,
+  });
+  assert.ok(requests[1].rules.some((rule) => rule.includes("stale or non-unique anchor correction")));
   assert.equal(
     (await readFile(join(candidate, "src", "large-tenant.test.js"), "utf8")),
     'test("STORY-1 tenant status", () => {})\n',
@@ -2606,6 +2789,8 @@ test("model-patch broker retries one malformed model response with deterministic
   assert.equal(calls[0].responseSchema.strict, true);
   assert.match(calls[1].prompt, /"previousResponseIssue":"NON_JSON"/);
   assert.match(calls[1].prompt, /Return exactly one JSON object matching responseSchema/);
+  assert.match(calls[1].prompt, /This is a JSON-format recovery/);
+  assert.match(calls[1].prompt, /featureSpotlight:null/);
 });
 
 test("model-patch broker gives a story-key-specific correction when coverage is omitted", async () => {
@@ -2728,6 +2913,52 @@ test("model-patch broker tells a retry when a story has no patched test evidence
   assert.match(calls[1].prompt, /Previously accepted patches are retained transactionally/);
   assert.equal(await readFile(join(candidate, "src", "marker.js"), "utf8"), 'export const marker = "after"\n');
   assert.equal(await readFile(join(candidate, "src", "marker.test.js"), "utf8"), 'export const expected = "after"\n');
+  await rm(root, { recursive: true, force: true });
+});
+
+test("model-patch broker retains one unclaimed emitted test when coverage cites a stale test path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async () => ({ text: JSON.stringify({
+        schema: "adx-model-patch-response-v1",
+        patches: [
+          { path: "src/marker.js", content: 'export const marker = "after"\n', replacements: [] },
+          { path: "src/funding-status-owner.test.js", content: 'test("STORY-6", () => {})\n', replacements: [] },
+        ],
+        featureSpotlight: null,
+        storyCoverage: [{
+          storyKey: "STORY-6",
+          implementationPaths: ["src/marker.js"],
+          testPaths: ["src/stale-tooling-guard.test.js"],
+        }],
+      }) }),
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-6",
+        title: "Retain patched funding owner evidence",
+        narrative: "Keep the emitted behavioral test attached to the story.",
+        scenarios: [{ given: "a patch", when: "coverage is returned", then: "the emitted test is retained" }],
+      }],
+    },
+    repository,
+  });
+  assert.equal(result.promoted, true);
+  assert.deepEqual(result.storyCoverage[0].testPaths, ["src/funding-status-owner.test.js"]);
   await rm(root, { recursive: true, force: true });
 });
 

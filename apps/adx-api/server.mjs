@@ -48,6 +48,7 @@ import {
 } from "./agent-spec-templates.mjs";
 import { createUhgAzureOpenAiStoryGateway } from "./uhg-azure-openai-story-gateway.mjs";
 import { createUhgAzureOpenAiExecutionGateway } from "./uhg-azure-openai-execution-gateway.mjs";
+import { normalizeVerificationIntensity } from "./verification-intensity.mjs";
 import { createUhgClaudeStoryGateway } from "./uhg-claude-story-gateway.mjs";
 import { LocalIndependentVerifier } from "./local-independent-verifier.mjs";
 import { digestCandidateTree } from "./verification-evidence.mjs";
@@ -731,7 +732,7 @@ function codingAgentProvidersForUi() {
     return [];
   return [{ ...configuredCoding.provider, enabled: true }];
 }
-function executionTask(changeCase, governance, templateId) {
+function executionTask(changeCase, governance, templateId, verificationIntensity) {
   const intent = governance?.intent;
   if (!intent?.outcome || !intent?.acceptanceCriteria)
     throw new ChangeCaseError(
@@ -741,6 +742,12 @@ function executionTask(changeCase, governance, templateId) {
   const storyRevision = governance?.stories;
   const stories = Array.isArray(storyRevision?.stories) ? storyRevision.stories : [];
   const template = resolveAgentSpecTemplate("coding", templateId);
+  let normalizedVerificationIntensity;
+  try {
+    normalizedVerificationIntensity = normalizeVerificationIntensity(verificationIntensity);
+  } catch {
+    throw new ChangeCaseError("VERIFICATION_INTENSITY_INVALID", "Verification intensity must be an integer from 0 through 100.");
+  }
   const storySummary = stories.length
     ? `\n\nApproved stories (${stories.length}):\n${stories.map((story, index) => {
         const narrative = String(story?.narrative ?? '').trim();
@@ -777,6 +784,7 @@ function executionTask(changeCase, governance, templateId) {
         : null,
     }),
     allowedCommands: [configuredCoding?.validationCommand ?? "node --test"],
+    verificationIntensity: normalizedVerificationIntensity,
     template: template
       ? { id: template.id, version: template.version, digest: template.digest }
       : null,

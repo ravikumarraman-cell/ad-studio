@@ -64,7 +64,23 @@ test("execution handoff requests a bounded implementation run instead of attesti
   assert.match(page, /status\.className = 'status loading'/);
   assert.match(page, /progress-console/);
   assert.match(page, /Requesting the signed lease and preparing the disposable workspace/);
+  assert.match(page, /Semantic verification intensity/);
+  assert.match(page, /verification-intensity/);
+  assert.match(page, /verificationIntensity: Number\(verificationIntensity\?\.value \?\? 100\)/);
+  assert.match(page, /:not\(\.verification-control\)\{display:none\}/);
   assert.match(accessiblePageFoundation, /input\[type="checkbox"\],input\[type="radio"\]\{width:auto!important/);
+});
+
+test("execution handoff presents the execution controls as a compact, responsive workspace", () => {
+  const page = renderExecutionHandoffPage(changeCase, options);
+
+  assert.match(page, /\.hero h1\{max-width:19ch/);
+  assert.match(page, /\.assurance\{position:relative;z-index:1;display:grid/);
+  assert.match(page, /CONTROL ENVELOPE/);
+  assert.match(page, /class="request-intro"/);
+  assert.match(page, /class="run-url"/);
+  assert.match(page, /class="run-phase"/);
+  assert.match(page, /\.hero,.request-intro\{grid-template-columns:1fr\}/);
 });
 
 test("execution handoff does not expose submission controls outside execution readiness", () => {
@@ -356,7 +372,7 @@ test("execution handoff presents durable live run status without exposing unvali
   assert.match(page, /const attempts = groupRuns\(snapshot\)\.slice\(1\)/);
   assert.doesNotMatch(page, /section\.open = false/);
   assert.match(page, /collapseRunHistory\(\)/);
-  assert.match(page, /#dispatch-form\[data-running="true"\] > :not\(#status\)\{display:none\}/);
+  assert.match(page, /#dispatch-form\[data-running="true"\] > :not\(#status\):not\(\.verification-control\)\{display:none\}/);
   assert.match(page, /.history-toggle:focus-visible/);
   assert.match(page, /Coding agent is still running\. Waiting for the workspace to finish\./);
   assert.match(page, /Coding agent completed\. Review the candidate, then verify it here\./);
