@@ -271,7 +271,10 @@ function failureResult(error) {
   const errorDetails = safeErrorDetails({
     ...error?.details,
     failureStage: failureStageFor(code),
-    failureReason: failureReasonFor(code),
+    // Preserve a bounded native-error message when an integration boundary
+    // throws without a ChangeCaseError; otherwise the UI only sees the
+    // unhelpful generic execution wrapper.
+    failureReason: failureReasonFor(code) ?? safeUnhandledFailureReason(error),
   });
   return {
     accepted: false,
@@ -288,6 +291,12 @@ function failureResult(error) {
     timings: safeTimings(error?.executionTimings),
     candidateDigest: null,
   };
+}
+
+function safeUnhandledFailureReason(error) {
+  if (error?.code || typeof error?.message !== "string") return null;
+  const message = error.message.trim().replace(/\s+/g, " ");
+  return message && message.length <= 512 ? message : null;
 }
 
 function diagnosticCode(code, details) {

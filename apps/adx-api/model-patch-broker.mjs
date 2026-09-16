@@ -2776,6 +2776,20 @@ function parseModelResponse(
     const existing = patchesByPath.get(path);
     if (existing) {
       if (JSON.stringify(existing) === JSON.stringify(normalizedPatch)) continue;
+      // Repair workers commonly split independent anchored edits to one large
+      // file. Those edits are safe to coalesce locally when every anchor is
+      // distinct; materialization still verifies each anchor against source.
+      if (existing.content === null && content === null) {
+        const existingAnchors = new Set(existing.replacements.map((replacement) => replacement.oldText));
+        if (replacements.every((replacement) => !existingAnchors.has(replacement.oldText))) {
+          patchesByPath.set(path, {
+            path,
+            content: null,
+            replacements: [...existing.replacements, ...replacements],
+          });
+          continue;
+        }
+      }
       throw patchResponseError(
         "PATCH_PATH_DUPLICATE",
         `The model-patch response contained conflicting patches for ${path}.`,
