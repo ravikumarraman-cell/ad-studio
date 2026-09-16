@@ -1,24 +1,32 @@
 import {
-  cp,
   lstat,
-  mkdir,
-  mkdtemp,
   readdir,
   readFile,
-  realpath,
-  rename,
-  rm,
-  symlink,
   stat,
-  writeFile,
 } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
-import { randomUUID, createHash } from "node:crypto";
-import { spawn } from "node:child_process";
-import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { ChangeCaseError, sha256 } from "./change-case-ledger.mjs";
+import { createBoundedValidationRunner } from "./bounded-validation-runner.mjs";
+import { createCandidateVerifierRunner } from "./candidate-verifier-runner.mjs";
+import { createCandidateWorkspaceManager } from "./candidate-workspace.mjs";
 import { validateCodingAgentAdapter } from "./coding-agent-adapters.mjs";
+import { createModelPatchMaterializer } from "./model-patch-materializer.mjs";
+import {
+  contextExcerpt,
+  contextPathScore,
+  contextSearchTerms,
+  rankContextPaths,
+  taskSearchText,
+} from "./model-patch-context.mjs";
+import {
+  isTestPath,
+  normalizeModelPatchPath,
+  patchResponseError,
+  requiredStoryOwnerRequirements,
+  safePatchPath,
+  unwrapJsonFence,
+} from "./model-patch-contract.mjs";
 
 const maxContextBytes = 160 * 1024;
 const maxFileBytes = 24 * 1024;
@@ -27,6 +35,7 @@ const maxCompactContextBytes = 48 * 1024;
 const maxCompactFileBytes = 4 * 1024;
 const maxInspectableFileBytes = 512 * 1024;
 const maxPatchBytes = 64 * 1024;
+const maxAnchoredOldTextBytes = 1_024;
 const maxPatches = 12;
 const maxVerifierResponseAttempts = 3;
 const maxPatchResponseAttempts = 4;
@@ -100,7 +109,24 @@ const validationCommands = Object.freeze({
     arguments: Object.freeze(["run", "verify:production"]),
   }),
 });
-const executionStateCache = new Map();
+const runValidation = createBoundedValidationRunner({
+  commands: validationCommands,
+  sha256,
+});
+const patchMaterializer = createModelPatchMaterializer({
+  maxAnchoredOldTextBytes,
+  patchResponseError,
+});
+const runCandidateVerifiers = createCandidateVerifierRunner({
+  maxFindings: maxSemanticFindings,
+  normalizeEvidencePaths: normalizeCoveragePaths,
+});
+const candidateWorkspace = createCandidateWorkspaceManager({
+  sha256,
+  ignoredDirectories,
+  transientDirectories: transientCandidateDirectories,
+  shouldIncludePath: shouldCopyCandidatePath,
+});
 
 export class ModelPatchBroker {
   constructor({
@@ -155,7 +181,7 @@ export class ModelPatchBroker {
         "MODEL_PATCH_ADAPTER_REQUIRED",
         "This executor accepts only a registered model-patch adapter.",
       );
-    const source = await checkedOutRoot(this.sourceRoot);
+    const source = await candidateWorkspace.checkedOutRoot(this.sourceRoot);
     const candidate = resolve(this.candidateRoot);
     if (
       candidate === resolve("/") ||
@@ -170,7 +196,7 @@ export class ModelPatchBroker {
     const writePaths = normalizeWritePaths(repository?.writePaths);
     await reportProgress(onProgress, "CONTEXT_COLLECTION");
     const contextStartedAt = Date.now();
-    const executionState = getExecutionState({
+    const executionState = candidateWorkspace.getExecutionState({
       source,
       candidate,
       writePaths,
@@ -178,7 +204,7 @@ export class ModelPatchBroker {
       linkSourceDependencies: this.linkSourceDependencies,
     });
     try {
-      const workspaceReadyPromise = prepareCandidateWorkspace({
+      const workspaceReadyPromise = candidateWorkspace.prepareCandidateWorkspace({
         source,
         candidate,
         state: executionState,
@@ -203,7 +229,7 @@ export class ModelPatchBroker {
         durationMs: elapsed(contextStartedAt),
         fileCount: contextCatalog.size,
       });
-      const sourceDigestPromise = digestTree(source);
+      const sourceDigestPromise = candidateWorkspace.digestTree(source);
       let validation = null;
       let completion = null;
       let featureSpotlight = null;
@@ -292,7 +318,7 @@ export class ModelPatchBroker {
               response.storyCoverage.flatMap((entry) => entry.testPaths),
             );
             for (const patch of response.patches) {
-              await writeMaterializedPatch(candidate, patch);
+              await patchMaterializer.writeMaterializedPatch(candidate, patch);
               touchedPaths.add(patch.path);
               contextCatalog.set(patch.path, true);
               executionState.lastTouchedPaths = new Set(touchedPaths);
@@ -583,7 +609,7 @@ export class ModelPatchBroker {
               const patchStartedAt = Date.now();
               const previousTestContent = await readCandidateFiles(candidate, result.response.storyCoverage.flatMap((entry) => entry.testPaths));
               for (const patch of result.response.patches) {
-                await writeMaterializedPatch(candidate, patch);
+                await patchMaterializer.writeMaterializedPatch(candidate, patch);
                 touchedPaths.add(patch.path);
                 contextCatalog.set(patch.path, true);
                 executionState.lastTouchedPaths = new Set(touchedPaths);
@@ -680,10 +706,10 @@ export class ModelPatchBroker {
           timings: finalizedTimings(timings, startedAt),
         });
       const promotionStartedAt = Date.now();
-      await removeTransientCandidateOutputs(candidate);
+      await candidateWorkspace.removeTransientCandidateOutputs(candidate);
       const [sourceDigest, workspaceDigest] = await Promise.all([
         sourceDigestPromise,
-        digestTree(candidate),
+        candidateWorkspace.digestTree(candidate),
       ]);
       if (workspaceDigest === sourceDigest)
         return Object.freeze({
@@ -738,62 +764,6 @@ export class ModelPatchBroker {
 
 async function reportProgress(onProgress, phase, details = {}) {
   if (typeof onProgress === "function") await onProgress(phase, details);
-}
-
-function getExecutionState({
-  source,
-  candidate,
-  writePaths,
-  readOnlyContextPaths,
-  linkSourceDependencies,
-}) {
-  const key = sha256({
-    source,
-    candidate,
-    writePaths,
-    readOnlyContextPaths,
-    linkSourceDependencies,
-  });
-  let state = executionStateCache.get(key);
-  if (!state) {
-    state = {
-      lastTouchedPaths: new Set(),
-      workspaceSeeded: false,
-      seedPromise: null,
-    };
-    executionStateCache.set(key, state);
-  }
-  return state;
-}
-
-async function prepareCandidateWorkspace({
-  source,
-  candidate,
-  state,
-  shouldLinkSourceDependencies,
-  timings,
-}) {
-  if (state.lastTouchedPaths.size) {
-    await restoreCandidateWorkspacePaths({
-      source,
-      workspace: candidate,
-      paths: state.lastTouchedPaths,
-    });
-    state.lastTouchedPaths = new Set();
-    return;
-  }
-  if (state.workspaceSeeded) return;
-  if (!state.seedPromise) {
-    state.seedPromise = copyCandidateWorkspace({
-      source,
-      workspace: candidate,
-      shouldLinkSourceDependencies,
-      timings,
-    }).then(() => {
-      state.workspaceSeeded = true;
-    });
-  }
-  await state.seedPromise;
 }
 
 function elapsed(startedAt) {
@@ -910,7 +880,7 @@ function semanticRepairOwnerPaths(contextCatalog, task, findings) {
     if (!/(?:^|\/)frontend\/src\/(?:pages?|routes?)\//i.test(path)) return false;
     const basename = path.split("/").at(-1)?.replace(/\.[^.]+$/, "") ?? "";
     return /(?:page|route|workflow|onboard|tenant|detail|dashboard|report)/i.test(basename) &&
-      !/(?:status|card|panel|widget|component|view|display)$/i.test(basename);
+      !/(?:funding.*status|status|card|panel|widget|component|view|display)$/i.test(basename);
   };
   const pathsFor = (pattern, limit = 2) => available
     .filter((path) => pattern.test(path))
@@ -1166,52 +1136,6 @@ function normalizeCandidateVerifiers(verifiers) {
   }));
 }
 
-async function copyCandidateWorkspace({ source, workspace, shouldLinkSourceDependencies, timings }) {
-  const copyStartedAt = Date.now();
-  const staleWorkspace = `${workspace}.stale-${randomUUID()}`;
-  const rotated = await rename(workspace, staleWorkspace)
-    .then(() => true)
-    .catch((error) => {
-      if (error?.code === "ENOENT") return false;
-      throw error;
-    });
-  await mkdir(workspace, { recursive: true });
-  const entries = await readdir(source, { withFileTypes: true });
-  await Promise.all(entries.map(async (entry) => {
-    const sourcePath = join(source, entry.name);
-    if (!shouldCopyCandidatePath(source, sourcePath)) return;
-    await cp(sourcePath, join(workspace, entry.name), {
-      recursive: entry.isDirectory(),
-      dereference: false,
-      verbatimSymlinks: true,
-      mode: process.platform === "darwin" ? fsConstants.COPYFILE_FICLONE : 0,
-      filter: (path) => shouldCopyCandidatePath(source, path),
-    });
-  }));
-  await pruneCandidateWorkspace(workspace, source);
-  if (shouldLinkSourceDependencies) await linkSourceDependencies(source, workspace);
-  timings.workspaceCopyMs = Number(timings.workspaceCopyMs ?? 0) + elapsed(copyStartedAt);
-  if (rotated) void rm(staleWorkspace, { recursive: true, force: true }).catch(() => {});
-}
-
-async function restoreCandidateWorkspacePaths({ source, workspace, paths }) {
-  for (const path of paths) {
-    const sourcePath = join(source, path);
-    const candidatePath = join(workspace, path);
-    const sourceStat = await stat(sourcePath).catch(() => null);
-    if (!sourceStat) {
-      await rm(candidatePath, { recursive: true, force: true });
-      continue;
-    }
-    await mkdir(dirname(candidatePath), { recursive: true });
-    await cp(sourcePath, candidatePath, {
-      recursive: sourceStat.isDirectory(),
-      dereference: false,
-      verbatimSymlinks: true,
-      force: true,
-    });
-  }
-}
 function finalizedTimings(timings, startedAt) {
   return Object.freeze({
     contextMs: Number(timings.contextMs ?? 0),
@@ -1259,7 +1183,20 @@ function normalizeTask(task, approvedCommands) {
     changeDigest: task.changeDigest,
     allowedCommands: Object.freeze(allowedCommands),
     stories: normalizeTaskStories(task.stories),
+    mandatoryOwnerPaths: normalizeMandatoryOwnerPaths(task.mandatoryOwnerPaths),
   });
+}
+
+function normalizeMandatoryOwnerPaths(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return Object.freeze({});
+  return Object.freeze(Object.fromEntries(
+    Object.entries(value).map(([storyKey, paths]) => [
+      String(storyKey).trim(),
+      Object.freeze([...new Set((Array.isArray(paths) ? paths : [])
+        .map((path) => String(path).trim())
+        .filter(Boolean))]),
+    ]).filter(([storyKey, paths]) => storyKey && paths.length),
+  ));
 }
 
 function normalizeTaskStories(value) {
@@ -1516,21 +1453,6 @@ function normalizeReadOnlyContextPaths(paths) {
   return Object.freeze(normalized);
 }
 
-async function checkedOutRoot(value) {
-  if (typeof value !== "string" || !value.trim())
-    throw new ChangeCaseError(
-      "MODEL_PATCH_SOURCE_REQUIRED",
-      "A server-configured source checkout is required for model-patch execution.",
-    );
-  const root = await realpath(value).catch(() => null);
-  if (!root)
-    throw new ChangeCaseError(
-      "MODEL_PATCH_SOURCE_REQUIRED",
-      "The server-configured source checkout does not exist.",
-    );
-  return root;
-}
-
 async function createContextCatalog(root, writePaths, readOnlyContextPaths) {
   const catalog = new Map();
   for (const path of await expandContextPaths(root, writePaths)) catalog.set(path, true);
@@ -1565,21 +1487,6 @@ async function assertRepositoryCapabilities(root, contextCatalog, task) {
       warning: `Provisional contract created for ${capability}. A developer must replace it with the authoritative endpoint, authentication, response mapping, and failure semantics before release.`,
     })
   ));
-}
-
-function taskSearchText(task) {
-  return [
-    task.objective,
-    ...task.stories.flatMap((story) => [
-      story.title,
-      story.narrative,
-      ...story.scenarios.flatMap((scenario) => [
-        scenario.given,
-        scenario.when,
-        scenario.then,
-      ]),
-    ]),
-  ].join("\n");
 }
 
 async function repositoryContainsCapability(root, contextCatalog, capability) {
@@ -1687,64 +1594,6 @@ async function collectContext(root, contextCatalog, task, priorityPaths = new Se
   return Object.freeze(files);
 }
 
-function contextExcerpt(content, task, byteLimit = maxFileBytes) {
-  const lines = content.split("\n");
-  const terms = contextSearchTerms(task);
-  // Anchors must be literal source text. One contiguous excerpt prevents the
-  // model from joining distant sections across an omission marker.
-  let matchedLine = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    if (terms.some((term) => lines[index].toLowerCase().includes(term))) {
-      matchedLine = index;
-      break;
-    }
-  }
-  const start = Math.max(0, (matchedLine < 0 ? 0 : matchedLine) - 24);
-  const selected = [];
-  let usedBytes = 0;
-  for (let index = start; index < lines.length; index += 1) {
-    const lineBytes = Buffer.byteLength(`${selected.length ? "\n" : ""}${lines[index]}`);
-    if (usedBytes + lineBytes > byteLimit) break;
-    selected.push(lines[index]);
-    usedBytes += lineBytes;
-  }
-  return selected.join("\n");
-}
-
-function rankContextPaths(allowedPaths, task) {
-  const terms = contextSearchTerms(task);
-  return [...allowedPaths.entries()].sort((left, right) => {
-    const scoreDifference = contextPathScore(right[0], terms) - contextPathScore(left[0], terms);
-    return scoreDifference || left[0].localeCompare(right[0]);
-  });
-}
-
-function contextSearchTerms(task) {
-  const text = [
-    task.objective,
-    ...task.stories.flatMap((story) => [
-      story.title,
-      story.narrative,
-      ...story.scenarios.flatMap((scenario) => [scenario.given, scenario.when, scenario.then]),
-    ]),
-  ].join(" ");
-  const ignored = new Set([
-    "about", "after", "before", "being", "every", "given", "implement", "into",
-    "must", "should", "story", "that", "their", "then", "these", "this", "when",
-    "where", "with", "without",
-  ]);
-  return [...new Set((text.toLowerCase().match(/[a-z0-9]+/g) ?? [])
-    .filter((term) => term.length >= 4 && !ignored.has(term)))];
-}
-
-function contextPathScore(path, terms) {
-  const normalizedPath = path.toLowerCase().replace(/[^a-z0-9]+/g, " ");
-  return terms.reduce(
-    (score, term) => score + (normalizedPath.includes(term) ? term.length : 0),
-    0,
-  );
-}
-
 async function expandContextPaths(root, writePaths) {
   const collected = new Set();
   for (const pattern of writePaths) {
@@ -1805,7 +1654,7 @@ function buildPatchPrompt(
       patches: [
         {
           path: "relative writable path",
-          content: "complete replacement file content, or null for anchored replacements",
+          content: "complete content for a new file only, or null for anchored replacements to an existing file",
           replacements: [{ oldText: "exact existing text", newText: "replacement text" }],
         },
       ],
@@ -1842,7 +1691,9 @@ function buildPatchPrompt(
       ] : []),
       "Modify existing files only when they are supplied with writable:true. You may create a new file under an approved writable root when necessary, especially a domain-local test file. Files marked writable:false are read-only verification context and must never be included in patches.",
       "Every supplied file is annotated existing:true. For an existing file, use minimal exact anchored replacements: set content to null and copy each oldText from one contiguous supplied excerpt so it occurs exactly once. Never return a partial snippet as complete file content.",
-      "Anchored replacements are mandatory for files marked truncated:true. Each oldText must be copied from one contiguous supplied excerpt only; an omission marker is explanatory, never source text, and must never appear in oldText. A complete replacement is permitted only for existing:true + fullContentSupplied:true when it retains all unrelated behavior and the complete supplied file; otherwise use anchors. For a new file, provide complete content and an empty replacements array.",
+      "Hard patch-format rule: for every existing supplied file, content MUST be null and replacements MUST contain the minimal exact anchors. Do not use complete-file content for an existing file, even when fullContentSupplied:true. Complete-file content is reserved exclusively for newly created files.",
+      "Default test-file policy: do not modify an existing test file unless its exact path is mandatory in requiredResponsePatchPaths or an ownerCorrection. Create one focused domain-local test file for new coverage instead. This avoids destructive rewrites and preserves unrelated regression coverage.",
+      "Anchored replacements are mandatory for every existing file, including files marked fullContentSupplied:true or truncated:true. Each oldText must be copied from one contiguous supplied excerpt only; an omission marker is explanatory, never source text, and must never appear in oldText. For a new file only, provide complete content and an empty replacements array.",
       "Emit each patch path exactly once. When multiple stories change the same file, combine all changes into one patch and reference that shared path from each applicable storyCoverage entry.",
       "Implement every supplied approved story and all of its Given/When/Then scenarios.",
       "For every provisionalExternalContracts entry, create a source-owned adapter boundary that makes the provisional state visible to developers and returns an explicit UNKNOWN result when authoritative data is unavailable. Do not invent an endpoint, credential, response field, or funded/unfunded value. Preserve the retained warning for developer follow-up.",
@@ -1924,8 +1775,68 @@ function requiredOwnerContext(task, files, acceptedStoryCoverage = []) {
   return [...inferred, ...mandatory];
 }
 
+function establishedAccountDiscoveryTestPaths(files, ownerContext) {
+  const accountDiscoveryRequired = ownerContext.some((owner) =>
+    owner.suppliedCandidatePaths.some((path) =>
+      /(?:^|\/)tenant_workflow_rules\/account_discovery\.py$/i.test(path),
+    ),
+  );
+  if (!accountDiscoveryRequired) return [];
+  return files
+    .filter((file) =>
+      isTestPath(file.path) && /\bprocess_account_discovery\s*\(/.test(file.content),
+    )
+    .map((file) => file.path)
+    .slice(0, 1);
+}
+
+function authoritativeFundingAdapterPaths(files, ownerContext) {
+  const accountDiscoveryRequired = ownerContext.some((owner) =>
+    owner.suppliedCandidatePaths.some((path) =>
+      /(?:^|\/)tenant_workflow_rules\/account_discovery\.py$/i.test(path),
+    ),
+  );
+  if (!accountDiscoveryRequired) return [];
+  return files
+    .filter((file) => /(?:^|\/)tenant_workflow_rules\/funding_validation\.py$/i.test(file.path))
+    .map((file) => file.path)
+    .slice(0, 1);
+}
+
+function establishedLambdaOwnerTestPaths(files, ownerContext) {
+  const lambdaOwners = ownerContext
+    .flatMap((owner) => owner.suppliedCandidatePaths)
+    .filter((path) => /(?:^|\/)lambda\/.+\/handler\.py$/i.test(path));
+  const pathsByOwner = new Map();
+  for (const ownerPath of lambdaOwners) {
+    // Test fixtures usually load Lambda files relative to backend/inventory,
+    // while coverage carries the repository-relative production path.
+    const fixturePath = ownerPath.replace(/^backend\/inventory\//i, "");
+    const matches = files
+      .filter((file) =>
+        isTestPath(file.path) &&
+        file.content.includes(fixturePath) &&
+        /\blambda_handler\s*\(/.test(file.content),
+      )
+      .map((file) => file.path)
+      .slice(0, 1);
+    if (matches.length) pathsByOwner.set(ownerPath, matches);
+  }
+  return pathsByOwner;
+}
+
+function suppliedFrontendRoutedOwnerPaths(files) {
+  return files
+    .filter((file) => {
+      if (!/(?:^|\/)frontend\/src\/(?:pages?|routes?)\/.+\.(?:jsx?|tsx?)$/i.test(file.path)) return false;
+      const name = basename(file.path).replace(/\.(?:jsx?|tsx?)$/i, "");
+      return !/(?:funding.*status|status|card|panel|widget|component|view|display)$/i.test(name);
+    })
+    .map((file) => file.path);
+}
+
 function rankOwnerCandidates(requirement, candidates) {
-  if (!["frontend/page owner", "report owner", "action persistence owner", "SBL owner", "tooling owner"].includes(requirement.label))
+  if (!["frontend/page owner", "authoritative API or extracted-account data owner", "report owner", "action persistence owner", "SBL owner", "tooling owner"].includes(requirement.label))
     return [...candidates];
   const score = (path) => {
     const normalized = path.toLowerCase();
@@ -1933,6 +1844,16 @@ function rankOwnerCandidates(requirement, candidates) {
       if (/\/frontend\/src\/(?:pages?|routes?)\//.test(normalized)) return 100;
       if (/(?:^|\/)(?:pages?|routes?)\//.test(normalized)) return 90;
       if (/\/components?\//.test(normalized)) return 10;
+    }
+    if (requirement.label === "authoritative API or extracted-account data owner") {
+      // The workflow persistence owner is the authoritative boundary for a
+      // funding decision: it matches the extracted AIDE ID and writes the
+      // result consumed by every downstream page, report, and tooling gate.
+      // Do not let a generic adapter/helper displace it in a repair request.
+      if (/\/tenant_workflow_rules\/account_discovery\.(?:py|m?js|ts)$/.test(normalized)) return 100;
+      if (/\/tenant_account_data_service\/handler\.(?:py|m?js|ts)$/.test(normalized)) return 95;
+      if (/\/tenant_workflow_rules\/funding_validation\.(?:py|m?js|ts)$/.test(normalized)) return 90;
+      if (/\/api\/routes?\//.test(normalized)) return 80;
     }
     if (requirement.label === "report owner") {
       if (/\/api\/routes?\/.*\/reports?\.(?:py|m?js|ts)$/.test(normalized)) return 100;
@@ -2013,12 +1934,28 @@ function ownerAcceptanceProof(label) {
 async function requestValidatedPatches({ gateway, task, context, candidate, writePaths, acceptedStoryCoverage = [], previousValidationIssue = null, timeoutMs = 900_000 }) {
   let lastError;
   let ownerCorrectionAttempts = 0;
-  let requiredResponsePatchPaths = [];
   const stagedPatches = new Map();
   // Resolve owners before asking the model.  Coverage must be checked against
   // real, supplied production paths—not guessed filename conventions after a
   // response has already been generated.
   const ownerContext = requiredOwnerContext(task, context, acceptedStoryCoverage);
+  const accountDiscoveryOwnerTestPaths = establishedAccountDiscoveryTestPaths(context, ownerContext);
+  const fundingAdapterPaths = authoritativeFundingAdapterPaths(context, ownerContext);
+  const lambdaOwnerTestPaths = establishedLambdaOwnerTestPaths(context, ownerContext);
+  const frontendRoutedOwnerPaths = suppliedFrontendRoutedOwnerPaths(context);
+  // Make the highest-confidence supplied owner for every uncovered boundary a
+  // first-request requirement. Previously these paths were only descriptive
+  // context, allowing the worker to spend its response budget on helpers and
+  // reach the owner-missing repair loop after the fact.
+  let requiredResponsePatchPaths = [...new Set([
+    ...(task.requiredResponsePatchPaths ?? []),
+    ...ownerContext
+      .filter((owner) => owner.requiredInThisResponse)
+      .flatMap((owner) => owner.suppliedCandidatePaths.slice(0, 1)),
+    ...accountDiscoveryOwnerTestPaths,
+    ...fundingAdapterPaths,
+    ...[...lambdaOwnerTestPaths.values()].flat(),
+  ])];
   for (let attempt = 1; attempt <= maxPatchResponseAttempts; attempt += 1) {
     const request = {
       system:
@@ -2046,7 +1983,7 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       task,
     });
     try {
-      const responseText = mergeStagedPatchResponse(completion.text, stagedPatches);
+      const responseText = patchMaterializer.mergeStagedPatchResponse(completion.text, stagedPatches);
       const parsed = parseModelResponse(
         responseText,
         writePaths,
@@ -2055,10 +1992,19 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         acceptedStoryCoverage,
         ownerContext,
       );
-      const materializedPatches = await materializeValidatedPatches(
+      const materializedPatches = await patchMaterializer.materializeValidatedPatches(
         candidate,
         parsed.patches,
         completion,
+      );
+      assertBehavioralOwnerTestPatches(
+        materializedPatches,
+        parsed.storyCoverage,
+        completion,
+        accountDiscoveryOwnerTestPaths,
+        lambdaOwnerTestPaths,
+        frontendRoutedOwnerPaths,
+        fundingAdapterPaths,
       );
       return Object.freeze({
         completion,
@@ -2067,7 +2013,13 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       });
     } catch (error) {
       const ownerCoverageMissing =
-        error?.details?.responseIssue === "STORY_COVERAGE_OWNER_MISSING";
+        error?.details?.responseIssue === "STORY_COVERAGE_OWNER_MISSING" ||
+        error?.details?.responseIssue === "FRONTEND_OWNER_PATCH_MISSING" ||
+        error?.details?.responseIssue === "FRONTEND_OWNER_TEST_OWNER_UNCITED" ||
+        error?.details?.responseIssue === "LAMBDA_OWNER_TEST_PATH_INVALID" ||
+        error?.details?.responseIssue === "AUTHORITATIVE_ADAPTER_PATCH_MISSING" ||
+        error?.details?.responseIssue === "ACCOUNT_DISCOVERY_OWNER_TEST_NOT_BEHAVIORAL" ||
+        error?.details?.responseIssue === "ACCOUNT_DISCOVERY_OWNER_TEST_PATH_INVALID";
       if (ownerCoverageMissing) {
         ownerCorrectionAttempts += 1;
         const missingOwners = focusedOwnerCorrection(
@@ -2120,168 +2072,165 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
   throw lastError;
 }
 
-function mergeStagedPatchResponse(text, stagedPatches) {
-  if (!stagedPatches.size) return text;
-  const response = JSON.parse(unwrapJsonFence(text));
-  if (!Array.isArray(response?.patches)) return text;
-  const merged = new Map(stagedPatches);
-  for (const patch of response.patches) {
-    const path = typeof patch?.path === "string" ? patch.path.trim() : "";
-    if (path) merged.set(path, patch);
-  }
-  return JSON.stringify({ ...response, patches: [...merged.values()] });
-}
-
-async function materializeValidatedPatches(root, patches, completion) {
-  const materialized = [];
-  for (const patch of patches) {
-    let content = await readFile(join(root, patch.path), "utf8").catch(() => null);
-    if (patch.content !== null) {
+function assertBehavioralOwnerTestPatches(
+  patches,
+  storyCoverage,
+  completion,
+  accountDiscoveryOwnerTestPaths = [],
+  lambdaOwnerTestPaths = new Map(),
+  frontendRoutedOwnerPaths = [],
+  fundingAdapterPaths = [],
+) {
+  const patchByPath = new Map(patches.map((patch) => [patch.path, patch]));
+  const sourceInspection = /\b(?:ast\.parse|inspect\.getsource|read_text\s*\(|readFileSync\s*\(|fs\.readFile\s*\(|exec\s*\()\b/;
+  for (const coverage of storyCoverage) {
+    const implementationPaths = coverage.implementationPaths ?? [];
+    const coversAdditiveReportRoute = implementationPaths.some((path) =>
+      /(?:^|\/)reports\.py$/i.test(path),
+    );
+    const lambdaOwnerPaths = implementationPaths.filter((path) =>
+      /(?:^|\/)lambda\/.+\/handler\.py$/i.test(path),
+    );
+    const accountDiscoveryOwnerPaths = implementationPaths.filter((path) =>
+      /(?:^|\/)tenant_workflow_rules\/account_discovery\.py$/i.test(path),
+    );
+    if (
+      accountDiscoveryOwnerPaths.length &&
+      fundingAdapterPaths.length &&
+      !fundingAdapterPaths.some((path) => implementationPaths.includes(path))
+    )
+      throw patchResponseError(
+        "AUTHORITATIVE_ADAPTER_PATCH_MISSING",
+        "Account-discovery coverage omitted the supplied Financial API adapter it invokes.",
+        completion,
+        `For ${coverage.storyKey}, patch and cite ${fundingAdapterPaths.join(", ")} alongside ${accountDiscoveryOwnerPaths.join(", ")}. The behavioral test must prove extracted-account AIDE IDs reach the adapter and its persisted decision; do not label a caller-supplied status as Financial API data.`,
+        { requiredResponsePatchPaths: fundingAdapterPaths },
+      );
+    const frontendPageOwners = implementationPaths.filter((path) => {
+      if (!/(?:^|\/)frontend\/src\/(?:pages?|routes?)\/.+\.(?:jsx?|tsx?)$/i.test(path)) return false;
+      const name = basename(path).replace(/\.(?:jsx?|tsx?)$/i, "");
+      return !/(?:funding.*status|status|card|panel|widget|component|view|display)$/i.test(name);
+    });
+    const frontendImplementationComponents = implementationPaths
+      .filter((path) => /(?:^|\/)frontend\/src\/components\/.+\.(?:jsx?|tsx?)$/i.test(path))
+      .map((path) => basename(path).replace(/\.(?:jsx?|tsx?)$/i, ""));
+    for (const testPath of coverage.testPaths ?? []) {
+      const patch = patchByPath.get(testPath);
+      if (!patch) continue;
+      const content = String(patch.content ?? "");
+      if (sourceInspection.test(content))
+        throw patchResponseError(
+          "TEST_NOT_BEHAVIORAL",
+          `Test patch ${testPath} inspects source instead of invoking an owner.`,
+          completion,
+          `Replace ${testPath} with a behavioral test. Import and invoke the named public page, route, Lambda handler, or workflow; mock only external boundaries; assert its observable result. Do not read source, parse ASTs, execute slices, or inspect symbols.`,
+        );
+      if (coversAdditiveReportRoute && /(?:response\.)?get_json\(\)\s*==\s*\{/.test(content))
+        throw patchResponseError(
+          "REPORT_TEST_CONTRACT_BRITTLE",
+          `Report test patch ${testPath} asserts a complete JSON object for an additive report contract.`,
+          completion,
+          `For ${coverage.storyKey}, assert the required response fields individually (including required historical applications). Do not compare the complete report JSON object, because additive fields such as followUpRequired or SBL blocking metadata must not invalidate the report contract.`,
+        );
+      if (lambdaOwnerPaths.length && /(?:^|\/)backend\//i.test(testPath) && !/\blambda_handler\s*\(/.test(content))
+        throw patchResponseError(
+          "LAMBDA_OWNER_TEST_NOT_BEHAVIORAL",
+          `Backend test patch ${testPath} does not invoke a cited Lambda owner's public lambda_handler.`,
+          completion,
+          `For ${coverage.storyKey}, invoke lambda_handler on the patched Lambda owner (${lambdaOwnerPaths.join(", ")}) with an event and assert its observable blocked, persisted, or delivered result. Do not test only a helper.`,
+        );
+      const requiredLambdaOwnerTests = [...new Set(
+        lambdaOwnerPaths.flatMap((ownerPath) => lambdaOwnerTestPaths.get(ownerPath) ?? []),
+      )];
+      if (requiredLambdaOwnerTests.length && !requiredLambdaOwnerTests.includes(testPath))
+        throw patchResponseError(
+          "LAMBDA_OWNER_TEST_PATH_INVALID",
+          `Backend test patch ${testPath} is not the established behavioral test for the cited Lambda owner.`,
+          completion,
+          `For ${coverage.storyKey}, use ${requiredLambdaOwnerTests.join(", ")} as the testPaths evidence for ${lambdaOwnerPaths.join(", ")}. The test must invoke lambda_handler and assert the owner-visible persisted, blocked, or delivered result; do not create or cite an alias helper test.`,
+          { requiredResponsePatchPaths: requiredLambdaOwnerTests },
+        );
       if (
-        content !== null &&
-        isDestructiveReplacement(content, patch.content)
+        accountDiscoveryOwnerPaths.length &&
+        accountDiscoveryOwnerTestPaths.length &&
+        !accountDiscoveryOwnerTestPaths.includes(testPath)
       )
         throw patchResponseError(
-          "PATCH_DESTRUCTIVE_REWRITE",
-          `Replacement for ${patch.path} would remove unrelated existing behavior.`,
+          "ACCOUNT_DISCOVERY_OWNER_TEST_PATH_INVALID",
+          `Backend test patch ${testPath} is not the established behavioral account-discovery owner test.`,
           completion,
-          `Preserve unrelated behavior in ${patch.path}. Use content:null with exact anchored replacements copied from the supplied content. Do not return a partial function, class, or snippet as a complete file. A complete replacement is allowed only when it retains the whole supplied file plus the minimal change.`,
+          `For ${coverage.storyKey}, use ${accountDiscoveryOwnerTestPaths.join(", ")} as the testPaths evidence for ${accountDiscoveryOwnerPaths.join(", ")}. Do not create or cite an alias test file.`,
+          { requiredResponsePatchPaths: accountDiscoveryOwnerTestPaths },
         );
-      materialized.push(patch);
-      continue;
-    }
-    if (content === null)
-      throw patchResponseError(
-        "PATCH_ANCHOR_TARGET_MISSING",
-        `Anchored replacement target ${patch.path} does not exist.`,
-        completion,
-        `Emit complete replacement content for new file ${patch.path}; anchored replacements are only valid for existing files.`,
-      );
-    for (const replacement of patch.replacements) {
-      let first = content.indexOf(replacement.oldText);
-      let last = content.lastIndexOf(replacement.oldText);
-      let replacedLength = replacement.oldText.length;
-      if (first < 0) {
-        const whitespaceMatch = whitespaceEquivalentAnchorRange(content, replacement.oldText);
-        if (whitespaceMatch) {
-          first = whitespaceMatch.start;
-          last = whitespaceMatch.start;
-          replacedLength = whitespaceMatch.end - whitespaceMatch.start;
-        }
-      }
-      if (first < 0 || first !== last)
+      if (accountDiscoveryOwnerPaths.length && /(?:^|\/)backend\//i.test(testPath) && !/\bprocess_account_discovery\s*\(/.test(content))
         throw patchResponseError(
-          "PATCH_ANCHOR_NOT_UNIQUE",
-          `Anchored replacement for ${patch.path} must match exactly once.`,
+          "ACCOUNT_DISCOVERY_OWNER_TEST_NOT_BEHAVIORAL",
+          `Backend test patch ${testPath} does not invoke process_account_discovery on the cited account-discovery owner.`,
           completion,
-          anchorCorrection(patch.path, content, replacement.oldText),
+          `For ${coverage.storyKey}, replace ${testPath} with an owner-level test that imports and invokes process_account_discovery from ${accountDiscoveryOwnerPaths.join(", ")} using extracted-account data, then asserts the tenant-table funding decision write. Do not validate a detached helper or adapter only.`,
+          { requiredResponsePatchPaths: [testPath] },
         );
-      content = `${content.slice(0, first)}${replacement.newText}${content.slice(first + replacedLength)}`;
-    }
-    materialized.push(Object.freeze({
-      path: patch.path,
-      content,
-      replacements: Object.freeze([]),
-    }));
-  }
-  return Object.freeze(materialized);
-}
-
-function isDestructiveReplacement(existingContent, replacementContent) {
-  const existingBytes = Buffer.byteLength(existingContent);
-  // Very small files are often intentionally replaced in full. Larger files
-  // must retain both their overall size and most non-empty source lines.
-  if (existingBytes < 1024) return false;
-  if (Buffer.byteLength(replacementContent) < existingBytes * 0.85) return true;
-  const sourceLines = existingContent.split("\n").map((line) => line.trim()).filter(Boolean);
-  if (sourceLines.length < 8) return false;
-  const replacementCounts = new Map();
-  for (const line of replacementContent.split("\n").map((line) => line.trim()).filter(Boolean))
-    replacementCounts.set(line, (replacementCounts.get(line) ?? 0) + 1);
-  let retained = 0;
-  for (const line of sourceLines) {
-    const available = replacementCounts.get(line) ?? 0;
-    if (!available) continue;
-    replacementCounts.set(line, available - 1);
-    retained += 1;
-  }
-  return retained / sourceLines.length < 0.75;
-}
-
-function whitespaceEquivalentAnchorRange(content, oldText) {
-  const anchorLines = oldText
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (anchorLines.length < 2) return null;
-  const contentLines = [];
-  const linePattern = /.*(?:\n|$)/g;
-  for (const match of content.matchAll(linePattern)) {
-    const text = match[0].endsWith("\n") ? match[0].slice(0, -1) : match[0];
-    if (!text.trim()) continue;
-    contentLines.push({ text: text.trim(), start: match.index, end: match.index + text.length });
-  }
-  const matches = [];
-  for (let index = 0; index <= contentLines.length - anchorLines.length; index += 1) {
-    if (anchorLines.every((line, offset) => contentLines[index + offset].text === line)) {
-      matches.push({
-        start: contentLines[index].start,
-        end: contentLines[index + anchorLines.length - 1].end,
+      const importsRoutedOwner = frontendPageOwners.some((path) => {
+        const ownerName = basename(path).replace(/\.(?:jsx?|tsx?)$/i, "");
+        return new RegExp(`(?:from\\s+['"][^'"]*${ownerName}['"]|require\\(\\s*['"][^'"]*${ownerName}['"]\\s*\\))`).test(content);
       });
+      const importedUncitedRoutedOwners = frontendRoutedOwnerPaths.filter((path) => {
+        const ownerName = basename(path).replace(/\.(?:jsx?|tsx?)$/i, "");
+        const imported = new RegExp(`(?:from\\s+['"][^'"]*${ownerName}['"]|require\\(\\s*['"][^'"]*${ownerName}['"]\\s*\\))`).test(content);
+        return imported && !implementationPaths.includes(path);
+      });
+      if (importedUncitedRoutedOwners.length)
+        throw patchResponseError(
+          "FRONTEND_OWNER_TEST_OWNER_UNCITED",
+          `Frontend test patch ${testPath} imports a routed owner that is absent from implementation evidence.`,
+          completion,
+          `For ${coverage.storyKey}, patch and cite the routed page owner imported by ${testPath}: ${importedUncitedRoutedOwners.join(", ")}. A component test cannot use a separate page as reachability evidence while citing another owner.`,
+          { requiredResponsePatchPaths: importedUncitedRoutedOwners },
+        );
+      const rendersRoutedOwner = frontendPageOwners.some((path) => {
+        const ownerName = basename(path).replace(/\.(?:jsx?|tsx?)$/i, "");
+        return new RegExp(`(?:<${ownerName}\\b|createElement\\(\\s*${ownerName}\\b)`).test(content);
+      });
+      const mocksRoutedOwner = frontendPageOwners.some((path) => {
+        const ownerName = basename(path).replace(/\.(?:jsx?|tsx?)$/i, "");
+        return new RegExp(`(?:jest|vi)\\.mock\\([^\\n]*${ownerName}`).test(content);
+      });
+      const mocksCoveredComponent = frontendImplementationComponents.some((componentName) =>
+        new RegExp(`(?:jest|vi)\\.mock\\([^\\n]*${componentName}`).test(content),
+      );
+      const suppliesApiResponse = /(?:mockResolvedValue|mockImplementation|server\.use|\b(?:http|rest)\.get\b)/.test(content);
+      const importedPageOwners = [...content.matchAll(
+        /(?:from\s+|require\(\s*)['"][^'"]*\/(?:pages?|routes?)\/([^/'"]+)['"]/g,
+      )].map((match) => match[1]);
+      const missingPatchedImportedOwner = importedPageOwners.find((ownerName) => {
+        const ownerPath = new RegExp(`(?:^|/)frontend/src/(?:pages?|routes?)/${ownerName}\\.(?:jsx?|tsx?)$`, "i");
+        return !implementationPaths.some((path) => ownerPath.test(path)) ||
+          !patches.some((candidatePatch) => ownerPath.test(candidatePatch.path));
+      });
+      if (missingPatchedImportedOwner)
+        throw patchResponseError(
+          "FRONTEND_OWNER_PATCH_MISSING",
+          `Frontend test patch ${testPath} imports routed owner ${missingPatchedImportedOwner} without patching and citing it.`,
+          completion,
+          `For ${coverage.storyKey}, patch frontend/src/pages/${missingPatchedImportedOwner}.jsx (or the exact supplied routed-owner path) and include that same path in implementationPaths. A test import alone is not production reachability evidence.`,
+          { requiredResponsePatchPaths: [`frontend/src/pages/${missingPatchedImportedOwner}.jsx`] },
+        );
+      if (frontendPageOwners.length && /(?:^|\/)frontend\//i.test(testPath) && !importsRoutedOwner)
+        throw patchResponseError(
+          "FRONTEND_OWNER_TEST_MISSING",
+          `Frontend test patch ${testPath} does not import a routed page owner.`,
+          completion,
+          `For ${coverage.storyKey}, replace ${testPath} with a test that imports the patched routed page owner and renders it with its API response. A local stand-in component or a mocked displayed component is not acceptable UI reachability evidence.`,
+        );
+      if (frontendPageOwners.length && /(?:^|\/)frontend\//i.test(testPath) && (!rendersRoutedOwner || mocksRoutedOwner || mocksCoveredComponent || !suppliesApiResponse))
+        throw patchResponseError(
+          "FRONTEND_OWNER_TEST_NOT_BEHAVIORAL",
+          `Frontend test patch ${testPath} does not prove a real routed-owner render with an API response.`,
+          completion,
+          `For ${coverage.storyKey}, ${testPath} must render the imported routed page owner, provide its API response at the client boundary, and assert visible output. Do not mock that owner or any covered displayed component.`,
+        );
     }
   }
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function anchorCorrection(path, content, oldText) {
-  const matchCount = oldText
-    ? content.split(oldText).length - 1
-    : 0;
-  const rejectedAnchor = JSON.stringify(oldText.slice(0, 500));
-  const currentExcerpt = matchCount === 0
-    ? currentAnchorExcerpt(content, oldText)
-    : null;
-  const excerptCorrection = currentExcerpt
-    ? ` Copy oldText exactly from this current candidate excerpt: ${JSON.stringify(currentExcerpt)}.`
-    : "";
-  return `For ${path}, the rejected oldText ${rejectedAnchor} matched ${matchCount} times. Do not reuse that exact oldText.${excerptCorrection} Select the intended occurrence and copy a larger contiguous block including adjacent unchanged lines until it occurs exactly once. Do not shorten, paraphrase, or combine separate excerpts.`;
-}
-
-function currentAnchorExcerpt(content, oldText) {
-  const contentLines = content.split("\n");
-  const anchorLines = [...new Set(oldText
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean))];
-  const normalizedContent = contentLines.map((line) => line.trim());
-  const candidates = [];
-  for (const anchorLine of anchorLines) {
-    for (let lineIndex = 0; lineIndex < normalizedContent.length; lineIndex += 1) {
-      if (normalizedContent[lineIndex] !== anchorLine) continue;
-      const neighborhood = new Set(
-        normalizedContent.slice(
-          Math.max(0, lineIndex - 12),
-          Math.min(normalizedContent.length, lineIndex + 13),
-        ),
-      );
-      const score = anchorLines.reduce(
-        (total, line) => total + (neighborhood.has(line) ? line.length + 1 : 0),
-        0,
-      );
-      candidates.push({ lineIndex, score, anchorLength: anchorLine.length });
-    }
-  }
-  candidates.sort(
-    (left, right) =>
-      right.score - left.score ||
-      right.anchorLength - left.anchorLength ||
-      left.lineIndex - right.lineIndex,
-  );
-  if (!candidates.length) return null;
-  const lineIndex = candidates[0].lineIndex;
-  const start = Math.max(0, lineIndex - 7);
-  const end = Math.min(contentLines.length, lineIndex + 10);
-  return contentLines.slice(start, end).join("\n");
 }
 
 async function verifyCandidateSemantics({
@@ -2416,74 +2365,6 @@ function buildCompactContextPrompt(prompt, task) {
   return JSON.stringify({ ...request, compactContext: true, files });
 }
 
-async function runCandidateVerifiers({ verifiers, timeoutMs, ...input }) {
-  const findings = [];
-  const storyKeys = new Set(input.task.stories.map((story) => story.key));
-  const contextPaths = new Set(input.context.map((file) => file.path));
-  const results = await Promise.all(verifiers.map((verifier) =>
-    runCandidateVerifier(verifier, { ...input, timeoutMs }, timeoutMs),
-  ));
-  for (const { verifier, result } of results) {
-    if (!result || typeof result.passed !== "boolean" || !Array.isArray(result.findings))
-      throw new ChangeCaseError(
-        "CANDIDATE_VERIFIER_INVALID",
-        `Candidate verifier ${verifier.id} returned an invalid result.`,
-      );
-    const normalizedFindings = result.findings.map((finding) => ({
-      storyKey: typeof finding?.storyKey === "string" ? finding.storyKey.trim() : "",
-      code: typeof finding?.code === "string" ? finding.code.trim() : "",
-      message: typeof finding?.message === "string" ? finding.message.trim() : "",
-      evidencePaths: normalizeCoveragePaths(finding?.evidencePaths),
-    }));
-    const unsupportedEvidencePath = normalizedFindings
-      .flatMap((finding) => finding.evidencePaths)
-      .find((path) => !contextPaths.has(path));
-    if (unsupportedEvidencePath)
-      throw new ChangeCaseError(
-        "CANDIDATE_VERIFIER_INVALID",
-        `Candidate verifier ${verifier.id} cited evidence path ${unsupportedEvidencePath}, which was not supplied in its context.`,
-      );
-    if (
-      normalizedFindings.length > maxSemanticFindings ||
-      normalizedFindings.some((finding) =>
-        !storyKeys.has(finding.storyKey) ||
-        !finding.code ||
-        !finding.message ||
-        !finding.evidencePaths.length
-      ) ||
-      (result.passed && normalizedFindings.length) ||
-      (!result.passed && !normalizedFindings.length)
-    )
-      throw new ChangeCaseError(
-        "CANDIDATE_VERIFIER_INVALID",
-        `Candidate verifier ${verifier.id} returned an inconsistent or unsupported finding.`,
-      );
-    for (const finding of normalizedFindings) {
-      findings.push(Object.freeze({ ...finding, verifierId: verifier.id }));
-    }
-  }
-  return Object.freeze({
-    passed: findings.length === 0,
-    findings: Object.freeze(findings),
-  });
-}
-
-function runCandidateVerifier(verifier, input, timeoutMs) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      controller.abort();
-      rejectPromise(new ChangeCaseError(
-        "CANDIDATE_VERIFIER_TIMED_OUT",
-        `Candidate verifier ${verifier.id} exceeded its execution deadline.`,
-      ));
-    }, timeoutMs);
-    Promise.resolve(verifier.verify({ ...input, signal: controller.signal }))
-      .then((result) => resolvePromise({ verifier, result }), rejectPromise)
-      .finally(() => clearTimeout(timeout));
-  });
-}
-
 const semanticVerificationResponseSchema = Object.freeze({
   name: "adx_candidate_semantic_verification",
   strict: true,
@@ -2601,26 +2482,41 @@ const modelPatchResponseSchema = Object.freeze({
         minItems: 1,
         maxItems: maxPatches,
         items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["path", "content", "replacements"],
-          properties: {
-            path: { type: "string" },
-            content: { anyOf: [{ type: "string" }, { type: "null" }] },
-            replacements: {
-              type: "array",
-              maxItems: 20,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["oldText", "newText"],
-                properties: {
-                  oldText: { type: "string", minLength: 1 },
-                  newText: { type: "string" },
+          anyOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["path", "content", "replacements"],
+              properties: {
+                path: { type: "string" },
+                content: { type: "string" },
+                replacements: { type: "array", maxItems: 0 },
+              },
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: ["path", "content", "replacements"],
+              properties: {
+                path: { type: "string" },
+                content: { type: "null" },
+                replacements: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 20,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["oldText", "newText"],
+                    properties: {
+                      oldText: { type: "string", minLength: 1, maxLength: maxAnchoredOldTextBytes },
+                      newText: { type: "string" },
+                    },
+                  },
                 },
               },
             },
-          },
+          ],
         },
       },
       featureSpotlight: {
@@ -2885,61 +2781,6 @@ function validateStoryOwnerCoverage(storyCoverage, requiredStories, completion, 
   );
 }
 
-function requiredStoryOwnerRequirements(story) {
-  const text = [
-    story.title,
-    story.narrative,
-    ...story.scenarios.flatMap((scenario) => [scenario.given, scenario.when, scenario.then]),
-  ].join(" ").toLowerCase();
-  const requirements = [
-    {
-      label: "frontend/page owner",
-      textPattern: /\b(?:view|page|screen|frontend|render|visible|visibility|display)\b/,
-      pathPattern: /(?:^|\/)frontend\/|(?:^|\/)(?:pages?|components?|routes?)(?:\/|\.)/i,
-    },
-    {
-      label: "authoritative API or extracted-account data owner",
-      textPattern: /\b(?:api|extract|extracted|financial|source data|account data)\b/,
-      pathPattern: /(?:^|\/)(?:api|routes?|services?|account[^/]*|extract[^/]*|financial[^/]*|aide_lookup[^/]*)(?:\/|\.|_|-)/i,
-    },
-    {
-      label: "action persistence owner",
-      textPattern: /\b(?:action|follow[ -]?up|persist|recorded action)\b/,
-      pathPattern: /(?:^|\/)[^/]*(?:action|follow)[^/]*(?:\/|\.|_|-)/i,
-    },
-    {
-      label: "notification delivery owner",
-      textPattern: /\b(?:notify|notification|email|recipient)\b/,
-      pathPattern: /(?:^|\/)[^/]*(?:notif|notify|email|mail|message|event|queue|graph|communication|account_field_log|tenant_action)[^/]*(?:\/|\.|_|-)/i,
-    },
-    {
-      label: "report owner",
-      textPattern: /\b(?:report|reporting|historical|history|dashboard)\b/,
-      pathPattern: /(?:^|\/)[^/]*(?:report|history|historical|dashboard)[^/]*(?:\/|\.|_|-)/i,
-    },
-    {
-      label: "SBL owner",
-      textPattern: /\bsbl\b/,
-      pathPattern: /(?:^|\/)[^/]*sbl[^/]*(?:\/|\.|_|-)/i,
-    },
-    {
-      label: "tooling owner",
-      textPattern: /\btooling\b/,
-      pathPattern: /(?:^|\/)(?:sbl(?:\/|\.|_|-)|[^/]*(?:tool|security|servicebasedlaunchpad)[^/]*(?:\/|\.|_|-))/i,
-    },
-  ];
-  return requirements.filter((requirement) => requirement.textPattern.test(text));
-}
-
-function normalizeModelPatchPath(value) {
-  if (typeof value !== "string") return "";
-  return value.trim().replaceAll("\\", "/").replace(/^(?:\.\/)+/, "");
-}
-
-function safePatchPath(value) {
-  return JSON.stringify(String(value ?? "").slice(0, 240));
-}
-
 function parseStoryCoverage(
   value,
   requiredStories,
@@ -2953,6 +2794,7 @@ function parseStoryCoverage(
       "STORY_COVERAGE_MISSING",
       "The model-patch response must include coverage for every approved story.",
       completion,
+      `Return storyCoverage as an array with exactly one entry for each approved story: ${requiredStories.map((story) => story.key).join(", ")}. Every entry must include its storyKey plus non-empty implementationPaths and testPaths that cite patches emitted in the same response.`,
     );
   const requiredKeys = new Set(requiredStories.map((story) => story.key));
   const acceptedByStory = new Map(
@@ -3010,12 +2852,24 @@ function parseStoryCoverage(
       const missingTestPaths = declaredTestPaths.filter(
         (path) => !patchedPaths.has(path) && !acceptedTestPaths.has(path),
       );
+      const emittedTestPaths = [...patchedPaths].filter((path) => isTestPath(path));
+      const testFamily = (path) => basename(path).replace(/\.(?:[a-z]+\.)?test\.[^.]+$/i, "");
+      const preferredEmittedTestPath = emittedTestPaths.find((path) =>
+        missingTestPaths.some((missingPath) => testFamily(path) === testFamily(missingPath)),
+      ) ?? (emittedTestPaths.length === 1 ? emittedTestPaths[0] : null);
+      const requiredResponsePatchPaths = [
+        ...missingImplementationPaths,
+        ...(preferredEmittedTestPath ? [preferredEmittedTestPath] : missingTestPaths),
+      ];
+      const testCorrection = preferredEmittedTestPath
+        ? `Replace the unpatched test citation with the already emitted test patch ${preferredEmittedTestPath}, and re-emit that exact path in the next response so it remains attached to the repaired story coverage.`
+        : `Emit each missing test patch exactly as named.`;
       throw patchResponseError(
         "STORY_COVERAGE_PATCHED_EVIDENCE_MISSING",
         "Every approved story must retain patched implementation and test evidence.",
         completion,
-        `Your next response must emit every missing evidence patch for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}. Use minimal anchored replacements for existing implementation files to reserve response space for the required test patch.`,
-        { requiredResponsePatchPaths: [...missingImplementationPaths, ...missingTestPaths] },
+        `Your next response must retain patched evidence for ${storyKey}. Missing implementation patches: ${missingImplementationPaths.join(", ") || "none"}. Missing test patches: ${missingTestPaths.join(", ") || "none"}. A path named in storyCoverage does not count unless that exact path is also present in patches. Exact emitted patch paths: ${[...patchedPaths].join(", ")}. ${testCorrection} Use minimal anchored replacements for existing implementation files to reserve response space for the required test patch.`,
+        { requiredResponsePatchPaths },
       );
     }
     if (
@@ -3047,10 +2901,6 @@ function normalizeCoveragePaths(value) {
   ]);
 }
 
-function isTestPath(path) {
-  return /(^|\/)(__tests__\/|tests?\/)|(^|\/)(?:test_[^/]+|[^/]+_tests?)\.py$|(^|\/)[^/]+\.(?:test|spec)\.[^/]+$/i.test(path);
-}
-
 function parseFeatureSpotlight(value, completion) {
   if (value === undefined || value === null) return null;
   const featureId =
@@ -3073,72 +2923,11 @@ function parseFeatureSpotlight(value, completion) {
   return Object.freeze({ featureId, title, summary });
 }
 
-function unwrapJsonFence(text) {
-  const trimmed = String(text ?? "").trim();
-  const match = trimmed.match(/^```json\s*\n?([\s\S]*?)\n?```$/i);
-  return match ? match[1].trim() : trimmed;
-}
-
-function patchResponseError(responseIssue, message, completion, responseCorrection = null, additionalDetails = {}) {
-  const finishReason = completion?.finishReason ?? null;
-  const safeFinishReason = ["stop", "length", "content_filter"].includes(
-    finishReason,
-  )
-    ? finishReason
-    : null;
-  const providerRequestId =
-    typeof completion?.providerRequestId === "string" &&
-    completion.providerRequestId.length <= 256
-      ? completion.providerRequestId
-      : null;
-  return new ChangeCaseError("MODEL_PATCH_RESPONSE_INVALID", message, {
-    details: {
-      responseIssue,
-      responseCorrection:
-        typeof (responseCorrection ?? defaultResponseCorrection(responseIssue)) === "string" &&
-        (responseCorrection ?? defaultResponseCorrection(responseIssue)).length <= 2048
-          ? responseCorrection ?? defaultResponseCorrection(responseIssue)
-          : null,
-      modelFinishReason: safeFinishReason,
-      providerRequestId,
-      ...additionalDetails,
-    },
-  });
-}
-
-function defaultResponseCorrection(responseIssue) {
-  if (responseIssue === "NON_JSON" || responseIssue === "SCHEMA_INVALID")
-    return "Return exactly one JSON object matching responseSchema, with a non-empty patches array, featureSpotlight, and storyCoverage. Do not include markdown or explanatory text.";
-  if (responseIssue === "SEMANTIC_VERIFICATION_SCHEMA_INVALID")
-    return "Return exactly one adx-candidate-semantic-verification-v1 JSON object. Use passed:true with findings:[], or passed:false with at least one finding containing an approved storyKey, non-empty code/message, and evidencePaths drawn only from supplied files. Do not include any other fields or prose.";
-  if (responseIssue === "SEMANTIC_VERIFICATION_NON_JSON")
-    return "Return exactly one adx-candidate-semantic-verification-v1 JSON object with no markdown or prose.";
-  if (responseIssue === "PATCH_INVALID")
-    return "Return only authorized relative writable paths. For each patch, provide either complete string content with no replacements or null content with at least one exact anchored replacement.";
-  return null;
-}
-
 function withAttempts(error, attempts) {
   if (!(error instanceof ChangeCaseError)) return error;
   return new ChangeCaseError(error.code, error.message, {
     details: { ...error.details, modelAttempts: attempts },
   });
-}
-
-async function writeMaterializedPatch(root, patch) {
-  const target = resolve(root, patch.path);
-  if (!target.startsWith(`${root}/`))
-    throw new ChangeCaseError(
-      "MODEL_PATCH_PATH_ESCAPE",
-      "A model-patch path escaped the disposable candidate.",
-    );
-  if (typeof patch.content !== "string" || patch.replacements.length)
-    throw new ChangeCaseError(
-      "MODEL_PATCH_PLAN_INVALID",
-      "Only a validated materialized patch can be written to the candidate.",
-    );
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, patch.content, "utf8");
 }
 
 async function readCandidateFiles(root, paths) {
@@ -3234,173 +3023,5 @@ function shouldCopyCandidatePath(root, path) {
   return (
     !parts.some((part) => ignoredDirectories.has(part)) &&
     !isSensitivePath(relativePath)
-  );
-}
-
-async function runValidation({ cwd, allowedCommands, timeoutMs }) {
-  const configured = validationCommands[allowedCommands?.[0]];
-  if (!configured)
-    throw new ChangeCaseError(
-      "MODEL_PATCH_COMMAND_DENIED",
-      "Validation requires an approved project command.",
-    );
-  const commands = Array.isArray(configured) ? configured : [configured];
-  const startedAt = Date.now();
-  let outputBytes = 0;
-  let outputExcerpt = "";
-  for (const command of commands) {
-    const result = await runValidationCommand({
-      cwd,
-      command,
-      timeoutMs: Math.max(1, timeoutMs - elapsed(startedAt)),
-    });
-    outputBytes = Math.min(64 * 1024, outputBytes + result.outputBytes);
-    outputExcerpt = appendOutputExcerpt(outputExcerpt, result.outputExcerpt ?? "");
-    if (result.code !== 0 || result.signal || result.timedOut)
-      return Object.freeze({ ...result, outputBytes, outputExcerpt: outputExcerpt || null });
-  }
-  return Object.freeze({
-    code: 0,
-    signal: null,
-    timedOut: false,
-    outputBytes,
-    outputDigest: sha256({ commandCount: commands.length, outputBytes }),
-    outputExcerpt: outputExcerpt || null,
-  });
-}
-
-function runValidationCommand({ cwd, command, timeoutMs }) {
-  return new Promise((resolvePromise) => {
-    const child = spawn(command.executable, command.arguments, {
-      cwd,
-      env: {
-        PATH: process.env.PATH,
-        LANG: "C",
-        npm_config_audit: "false",
-        npm_config_fund: "false",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-    });
-    let outputBytes = 0;
-    let outputExcerpt = "";
-    const capture = (chunk) => {
-      outputBytes += chunk.length;
-      outputExcerpt = appendOutputExcerpt(outputExcerpt, chunk);
-    };
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-    }, timeoutMs);
-    child.stdout.on("data", capture);
-    child.stderr.on("data", capture);
-    child.once("close", (code, signal) => {
-      clearTimeout(timeout);
-      resolvePromise(
-        Object.freeze({
-          code: code ?? 1,
-          signal,
-          timedOut,
-          outputBytes: Math.min(outputBytes, 64 * 1024),
-          outputDigest: sha256({
-            code,
-            signal,
-            outputBytes: Math.min(outputBytes, 64 * 1024),
-          }),
-            outputExcerpt: outputExcerpt || null,
-        }),
-      );
-    });
-  });
-}
-
-function appendOutputExcerpt(current, chunk) {
-  const next = `${current}${chunk.toString("utf8")}`;
-  const maxExcerptBytes = 4096;
-  if (Buffer.byteLength(next) <= maxExcerptBytes) return next;
-  return next.slice(-maxExcerptBytes);
-}
-
-async function linkSourceDependencies(source, workspace) {
-  let linked = 0;
-  async function linkFrom(relativePath) {
-    for (const entry of await readdir(join(source, relativePath || "."), {
-      withFileTypes: true,
-    })) {
-      if (!entry.isDirectory()) continue;
-      const nextRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-      if (entry.name === "node_modules") {
-        if (relativePath.split("/").filter(Boolean).length > 1) continue;
-        await mkdir(dirname(join(workspace, nextRelativePath)), { recursive: true });
-        await symlink(join(source, nextRelativePath), join(workspace, nextRelativePath), "dir");
-        linked += 1;
-        continue;
-      }
-      if (ignoredDirectories.has(entry.name)) continue;
-      await linkFrom(nextRelativePath);
-    }
-  }
-  await linkFrom("");
-  if (!linked)
-    throw new ChangeCaseError(
-      "MODEL_PATCH_DEPENDENCIES_MISSING",
-      "The execution profile requires dependencies in the server source checkout. Install them before starting a bounded run.",
-      { retryable: false, severity: "warning" },
-    );
-}
-
-async function removeTransientCandidateOutputs(workspace) {
-  await Promise.all(
-    transientCandidateDirectories.map((path) =>
-      rm(join(workspace, path), { recursive: true, force: true }),
-    ),
-  );
-}
-
-async function pruneCandidateWorkspace(workspace, source) {
-  await Promise.all(
-    Array.from(ignoredDirectories, (directory) =>
-      rm(join(workspace, directory), { recursive: true, force: true }),
-    ),
-  );
-  await pruneSensitiveFiles(workspace, source, "");
-}
-
-async function pruneSensitiveFiles(workspace, source, relativePath) {
-  for (const entry of await readdir(join(source, relativePath || "."), {
-    withFileTypes: true,
-  })) {
-    const nextRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      if (ignoredDirectories.has(entry.name)) continue;
-      await pruneSensitiveFiles(workspace, source, nextRelativePath);
-      continue;
-    }
-    if (!entry.isFile() || !isSensitivePath(nextRelativePath)) continue;
-    await rm(join(workspace, nextRelativePath), { force: true });
-  }
-}
-
-async function digestTree(root) {
-  const files = [];
-  async function collect(current) {
-    for (const entry of await readdir(current, { withFileTypes: true })) {
-      const fullPath = join(current, entry.name);
-      if (!shouldCopyCandidatePath(root, fullPath)) continue;
-      if (entry.isDirectory()) await collect(fullPath);
-      else if (entry.isFile()) {
-        const bytes = await readFile(fullPath);
-        files.push({
-          path: relative(root, fullPath),
-          bytes: bytes.length,
-          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
-        });
-      }
-    }
-  }
-  await collect(root);
-  return sha256(
-    files.sort((left, right) => left.path.localeCompare(right.path)),
   );
 }

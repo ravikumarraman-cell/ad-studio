@@ -208,6 +208,86 @@ test("model-patch broker rejects incomplete owner coverage for a three-story bat
   await rm(root, { recursive: true, force: true });
 });
 
+test("model-patch broker requires the established public Lambda owner test instead of an alias", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  const handlerPath = "backend/inventory/lambda/tenant_workflow_rules/handler.py";
+  const ownerTestPath = "backend/inventory/tests/test_funding_owner_paths.py";
+  await mkdir(join(source, "backend/inventory/lambda/tenant_workflow_rules"), { recursive: true });
+  await mkdir(join(source, "backend/inventory/tests"), { recursive: true });
+  await writeFile(join(source, handlerPath), "def lambda_handler(event, context):\n    return {'status': 'before'}\n");
+  await writeFile(join(source, ownerTestPath), [
+    "def test_reachable_workflow_owner():",
+    "    handler = load_module('workflow_owner', 'lambda/tenant_workflow_rules/handler.py')",
+    "    result = handler.lambda_handler({}, None)",
+    "    assert result['status'] is True",
+  ].join("\n"));
+  const prompts = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        prompts.push(JSON.parse(request.prompt));
+        return { text: JSON.stringify({
+          schema: "adx-model-patch-response-v1",
+          patches: [
+            {
+              path: handlerPath,
+              content: null,
+              replacements: [{
+                oldText: "    return {'status': 'before'}",
+                newText: "    return {'status': True}",
+              }],
+            },
+            {
+              path: ownerTestPath,
+              content: null,
+              replacements: [{
+                oldText: "    assert result['status'] is True",
+                newText: "    assert result['status'] is True\n    assert result == {'status': True}",
+              }],
+            },
+          ],
+          featureSpotlight: null,
+          storyCoverage: [{
+            storyKey: "STORY-1",
+            implementationPaths: [handlerPath],
+            testPaths: [ownerTestPath],
+          }],
+        }) };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Workflow funding",
+        narrative: "Run the workflow Lambda.",
+        scenarios: [{
+          given: "a tenant workflow event",
+          when: "the workflow Lambda runs",
+          then: "it returns the workflow result",
+        }],
+      }],
+      mandatoryOwnerPaths: { "STORY-1": [handlerPath] },
+    },
+    repository: { writePaths: ["backend/**"] },
+  });
+
+  assert.equal(result.promoted, true);
+  assert.ok(prompts[0].requiredResponsePatchPaths.includes(ownerTestPath), JSON.stringify(prompts[0]));
+  await rm(root, { recursive: true, force: true });
+});
+
 test("model-patch broker requires an exact supplied notification owner instead of a generic workflow helper", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -1003,7 +1083,7 @@ test("semantic UI repair selects a routed page owner, never a colocated status l
               ]
               : [
                 { path: "frontend/src/pages/TenantWorkflow.jsx", content: 'export const TenantWorkflow = "wired"\n' },
-                { path: "frontend/src/pages/TenantWorkflow.funding.test.jsx", content: 'export const testOwner = true\n' },
+                { path: "frontend/src/pages/TenantWorkflow.funding.test.jsx", content: 'import { render } from "@testing-library/react";\nimport { TenantWorkflow } from "./TenantWorkflow";\nconst fetchFunding = jest.fn().mockResolvedValue({ status: "FUNDED" });\ntest("renders the funding response", () => render(<TenantWorkflow />));\n' },
               ],
             featureSpotlight: null,
             storyCoverage: [{ storyKey: "STORY-1", implementationPaths: codingAttempt === 1
@@ -1800,8 +1880,8 @@ test("model-patch broker applies the whitespace-equivalent anchor accepted durin
           path: "src/tenant-status.js",
           content: null,
           replacements: [{
-            oldText: 'export function tenantStatus() {\n    return "before";\n}',
-            newText: 'export function tenantStatus() {\n  return "after";\n}',
+            oldText: '    return "before";',
+            newText: '  return "after";',
           }],
         },
         {
@@ -2156,6 +2236,57 @@ test("model-patch broker corrects a destructive replacement before writing the b
   await rm(root, { recursive: true, force: true });
 });
 
+test("model-patch broker corrects destructive anchored replacements before candidate validation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  const existing = `${"// preserve existing behavior\n".repeat(180)}export const tenantStatus = "before"\n`;
+  await writeFile(join(source, "src", "tenant.js"), existing);
+  await writeFile(join(source, "src", "tenant.test.js"), 'test("existing", () => {})\n');
+  let attempts = 0;
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async () => {
+        attempts += 1;
+        const replacement = attempts === 1
+          ? { oldText: existing, newText: 'export const tenantStatus = "after"\n' }
+          : { oldText: 'export const tenantStatus = "before"', newText: 'export const tenantStatus = "after"' };
+        return {
+          model: "gpt-5.6-terra",
+          responseDigest: `sha256:anchored-rewrite-${attempts}`,
+          text: JSON.stringify({
+            schema: "adx-model-patch-response-v1",
+            patches: [
+              { path: "src/tenant.js", content: null, replacements: [replacement] },
+              { path: "src/tenant.test.js", content: 'test("STORY-1 tenant status", () => {})\n', replacements: [] },
+            ],
+            featureSpotlight: null,
+            storyCoverage: [{ storyKey: "STORY-1", implementationPaths: ["src/tenant.js"], testPaths: ["src/tenant.test.js"] }],
+          }),
+        };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+
+  const result = await broker.execute({
+    adapter,
+    task: { ...task, stories: [{ key: "STORY-1", title: "Show tenant status", narrative: "As a user, I want tenant status, so that readiness is visible.", scenarios: [{ given: "a tenant", when: "it is viewed", then: "status is shown" }] }] },
+    repository,
+  });
+
+  assert.equal(result.promoted, true, JSON.stringify(result));
+  assert.equal(attempts, 2);
+  assert.match(await readFile(join(candidate, "src", "tenant.js"), "utf8"), /preserve existing behavior/);
+  assert.match(await readFile(join(candidate, "src", "tenant.js"), "utf8"), /tenantStatus = "after"/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("model-patch broker rejects later bounded batches that remove earlier story test evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -2477,6 +2608,63 @@ test("model-patch broker retries one malformed model response with deterministic
   assert.match(calls[1].prompt, /Return exactly one JSON object matching responseSchema/);
 });
 
+test("model-patch broker gives a story-key-specific correction when coverage is omitted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
+  const source = join(root, "source");
+  const candidate = join(root, "candidate");
+  await mkdir(join(source, "src"), { recursive: true });
+  await writeFile(join(source, "src", "marker.js"), 'export const marker = "before"\n');
+  await writeFile(join(source, "src", "marker.test.js"), 'test("before", () => {})\n');
+  const calls = [];
+  const broker = new ModelPatchBroker({
+    enabled: true,
+    sourceRoot: source,
+    candidateRoot: candidate,
+    gateway: {
+      status: () => ({ configured: true }),
+      complete: async (request) => {
+        calls.push(request);
+        return { text: JSON.stringify(calls.length === 1 ? {
+          schema: "adx-model-patch-response-v1",
+          patches: [{ path: "src/marker.js", content: 'export const marker = "after"\n' }],
+          featureSpotlight: null,
+        } : {
+          schema: "adx-model-patch-response-v1",
+          patches: [
+            { path: "src/marker.js", content: 'export const marker = "after"\n' },
+            { path: "src/marker.test.js", content: 'test("STORY-1", () => {})\n' },
+          ],
+          featureSpotlight: null,
+          storyCoverage: [{
+            storyKey: "STORY-1",
+            implementationPaths: ["src/marker.js"],
+            testPaths: ["src/marker.test.js"],
+          }],
+        }) };
+      },
+    },
+    validate: async () => ({ code: 0, signal: null, timedOut: false, outputBytes: 0, outputDigest: "sha256:test" }),
+  });
+  const result = await broker.execute({
+    adapter,
+    task: {
+      ...task,
+      stories: [{
+        key: "STORY-1",
+        title: "Update marker",
+        narrative: "Update the marker with a regression test.",
+        scenarios: [{ given: "a marker", when: "it is updated", then: "the test proves the update" }],
+      }],
+    },
+    repository,
+  });
+  assert.equal(result.promoted, true);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].prompt, /"previousResponseIssue":"STORY_COVERAGE_MISSING"/);
+  assert.match(calls[1].prompt, /STORY-1/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("model-patch broker tells a retry when a story has no patched test evidence", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-model-broker-test-"));
   const source = join(root, "source");
@@ -2563,7 +2751,9 @@ test("model-patch broker retains valid patches for one focused owner correction"
       status: () => ({ configured: true }),
       complete: async (request) => {
         calls.push(JSON.parse(request.prompt));
-        const corrected = calls.length === 2;
+        if (calls.length === 2)
+          return { finishReason: "stop", text: '{"schema":"adx-model-patch-response-v1","patches":[}' };
+        const corrected = calls.length === 3;
         return {
           finishReason: "stop",
           text: JSON.stringify({
@@ -2621,10 +2811,11 @@ test("model-patch broker retains valid patches for one focused owner correction"
   });
 
   assert.equal(result.promoted, true);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
+  assert.equal(calls[2].previousResponseIssue, "NON_JSON");
   assert.equal(calls[1].previousResponseIssue, "STORY_COVERAGE_OWNER_MISSING");
-  assert.deepEqual(calls[1].requiredResponsePatchPaths, ["src/frontend/pages/Funding.jsx"]);
-  assert.match(calls[1].rules.join("\n"), /Mandatory correction patch paths: src\/frontend\/pages\/Funding\.jsx/);
+  assert.deepEqual(calls[1].requiredResponsePatchPaths, ["src/frontend/pages/Funding.jsx", "src/reports/funding-report.js"]);
+  assert.match(calls[1].rules.join("\n"), /Mandatory correction patch paths: src\/frontend\/pages\/Funding\.jsx, src\/reports\/funding-report\.js/);
   assert.match(calls[1].previousResponseCorrection, /Previously accepted patches are retained transactionally/);
   assert.equal(await readFile(join(candidate, "src", "reports", "funding-report.js"), "utf8"), 'export const report = "after"\n');
   assert.equal(await readFile(join(candidate, "src", "frontend", "pages", "Funding.jsx"), "utf8"), 'export const page = "after"\n');

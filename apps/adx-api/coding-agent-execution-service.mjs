@@ -262,14 +262,24 @@ export class CodingAgentExecutionService {
 }
 
 function failureResult(error) {
+  const malformedModelJson = isMalformedModelJsonError(error);
   const code =
     typeof error?.code === "string" && error.code.trim()
       ? error.code.trim()
       : error instanceof ChangeCaseError
       ? error.code
+      : malformedModelJson
+      ? "MODEL_PATCH_RESPONSE_INVALID"
       : "CODING_AGENT_EXECUTION_FAILED";
   const errorDetails = safeErrorDetails({
     ...error?.details,
+    ...(malformedModelJson
+      ? {
+          responseIssue: "NON_JSON",
+          responseCorrection:
+            "Return exactly one JSON object matching responseSchema, with a non-empty patches array, featureSpotlight, and storyCoverage. Do not include markdown or explanatory text.",
+        }
+      : {}),
     failureStage: failureStageFor(code),
     // Preserve a bounded native-error message when an integration boundary
     // throws without a ChangeCaseError; otherwise the UI only sees the
@@ -291,6 +301,12 @@ function failureResult(error) {
     timings: safeTimings(error?.executionTimings),
     candidateDigest: null,
   };
+}
+
+function isMalformedModelJsonError(error) {
+  if (!(error instanceof SyntaxError) || typeof error?.message !== "string")
+    return false;
+  return /(?:expected ['\",\]]|unexpected (?:token|end)|json)/i.test(error.message);
 }
 
 function safeUnhandledFailureReason(error) {

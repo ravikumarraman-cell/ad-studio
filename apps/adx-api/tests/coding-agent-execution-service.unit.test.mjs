@@ -97,6 +97,15 @@ test('precise patch response issues survive execution diagnostic sanitization', 
   assert.doesNotMatch(JSON.stringify(calls[2][1].result), /Do not retain this model response/)
 })
 
+test('a leaked malformed model JSON syntax error is normalized to an actionable patch diagnostic', async () => {
+  const failure = new SyntaxError("Expected ',' or ']' after array element in JSON at position 2362")
+  const { service, calls } = harness(failure)
+  await service.execute({ scope, principal, changeCase, provider: 'LOCAL_TEST', expectedVersion: 4, idempotencyKey: 'execute-malformed-model-json' })
+  assert.equal(calls[2][1].result.errorCode, 'MODEL_PATCH_RESPONSE_INVALID')
+  assert.equal(calls[2][1].result.errorDetails.responseIssue, 'NON_JSON')
+  assert.match(calls[2][1].result.errorDetails.responseCorrection, /Return exactly one JSON object/)
+})
+
 test('a bounded gateway timeout keeps its precise code even across an untyped error boundary', async () => {
   const timeout = Object.assign(new Error('Do not persist raw transport errors.'), {
     code: 'MODEL_PATCH_GATEWAY_TIMEOUT',

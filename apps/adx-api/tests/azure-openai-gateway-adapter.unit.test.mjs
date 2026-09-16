@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createAzureOpenAiGatewayAdapter, createCachedTokenProvider } from '../azure-openai-gateway-adapter.mjs'
+import { createAzureOpenAiGatewayAdapter } from '../azure-openai-gateway-adapter.mjs'
+import { createCachedTokenProvider } from '../azure-ad-token-provider.mjs'
 
 function response(body, { status = 200, headers = {} } = {}) { return { ok: status >= 200 && status < 300, status, headers: new Headers(headers), json: async () => body } }
 
@@ -84,38 +85,52 @@ test('gateway forwards a strict JSON Schema response contract', async () => {
   assert.equal(captured.temperature, 0)
 })
 
-test('gateway falls back when its route explicitly rejects structured output', async () => {
+test('gateway safely downgrades JSON schema to JSON-object mode when supported', async () => {
   const requests = []
   const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'unsupported_parameter', param: 'response_format' } }, { status: 400 }) : response({ choices: [{ message: { content: '{"schema":"adx-model-patch-response-v1","patches":[]}' } }] }) } })
   const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-structured-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
   assert.equal(result.text, '{"schema":"adx-model-patch-response-v1","patches":[]}')
   assert.equal(requests.length, 2)
   assert.equal(requests[0].response_format.type, 'json_schema')
-  assert.equal(requests[1].response_format, undefined)
+  assert.deepEqual(requests[1].response_format, { type: 'json_object' })
 })
 
-test('gateway falls back when structured-output schema validation is rejected', async () => {
+test('gateway recognizes a structured-output rejection reported only in the gateway message', async () => {
   const requests = []
-  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'invalid_json_schema', param: 'response_format.json_schema.schema' } }, { status: 400 }) : response({ choices: [{ message: { content: 'ready' } }] }) } })
-  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-schema-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
-  assert.equal(result.text, 'ready')
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => {
+    requests.push(JSON.parse(init.body))
+    return requests.length === 1
+      ? response({ error: { message: 'Structured output response_format is not supported by this route.' } }, { status: 400 })
+      : response({ choices: [{ message: { content: '{"ok":true}' } }] })
+  } })
+  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-message-structured-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+  assert.equal(result.text, '{"ok":true}')
   assert.equal(requests.length, 2)
-  assert.equal(requests[1].response_format, undefined)
+  assert.deepEqual(requests[1].response_format, { type: 'json_object' })
 })
 
-test('gateway still retries a compatibility 400 even when the gateway omits structured error details', async () => {
+test('gateway safely downgrades a rejected JSON schema to JSON-object mode', async () => {
+  const requests = []
+  const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => { requests.push(JSON.parse(init.body)); return requests.length === 1 ? response({ error: { code: 'invalid_json_schema', param: 'response_format.json_schema.schema' } }, { status: 400 }) : response({ choices: [{ message: { content: '{"ok":true}' } }] }) } })
+  const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-schema-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
+  assert.equal(result.text, '{"ok":true}')
+  assert.equal(requests.length, 2)
+  assert.deepEqual(requests[1].response_format, { type: 'json_object' })
+})
+
+test('gateway retries JSON-object mode for an unstructured 400 when JSON output is required', async () => {
   const requests = []
   const adapter = createAzureOpenAiGatewayAdapter({ ...configuration, fetchImpl: async (_url, init) => {
     requests.push(JSON.parse(init.body))
     return requests.length === 1
       ? response({ error: { message: 'bad request' } }, { status: 400 })
-      : response({ choices: [{ message: { content: 'ready' } }] })
+      : response({ choices: [{ message: { content: '{"ok":true}' } }] })
   } })
   const result = await adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-generic-400-fallback', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } })
-  assert.equal(result.text, 'ready')
+  assert.equal(result.text, '{"ok":true}')
   assert.equal(requests.length, 2)
   assert.equal(requests[0].response_format.type, 'json_schema')
-  assert.equal(requests[1].response_format, undefined)
+  assert.deepEqual(requests[1].response_format, { type: 'json_object' })
 })
 
 test('gateway never infers a legacy token field from an unstructured 400', async () => {
@@ -126,7 +141,9 @@ test('gateway never infers a legacy token field from an unstructured 400', async
   } })
   await assert.rejects(() => adapter.complete({ system: 'Return JSON.', prompt: 'Return an object.', correlationId: 'trace-generic-token-safety', responseSchema: { name: 'result', strict: true, schema: { type: 'object', additionalProperties: false } } }), (error) => error.code === 'AZURE_OPENAI_GATEWAY_REQUEST_FAILED')
   assert.equal(requests.length, 2)
-  assert.equal(requests[1].response_format, undefined)
+  assert.equal(requests[0].response_format.type, 'json_schema')
+  assert.equal(requests[0].max_completion_tokens, 2_000)
+  assert.deepEqual(requests[1].response_format, { type: 'json_object' })
   assert.equal(requests[1].max_completion_tokens, 2_000)
   assert.equal(requests.some((request) => Object.hasOwn(request, 'max_tokens')), false)
 })
@@ -166,7 +183,7 @@ test('gateway isolates a temperature compatibility retry from a rejected connect
   assert.equal(requests[1].body.temperature, undefined)
 })
 
-test('gateway composes explicit compatibility retries without restoring rejected fields', async () => {
+test('gateway preserves structured output while applying compatible field retries', async () => {
   const requests = []
   const responses = [
     response({ error: { code: 'unsupported_value', param: 'temperature' } }, { status: 400 }),
@@ -179,15 +196,13 @@ test('gateway composes explicit compatibility retries without restoring rejected
   assert.equal(result.text, 'ready')
   assert.equal(requests.length, 4)
   assert.equal(requests[1].temperature, undefined)
-  assert.equal(requests[2].temperature, undefined)
-  assert.equal(requests[2].response_format, undefined)
-  assert.equal(requests[3].max_completion_tokens, undefined)
+  assert.equal(requests[1].response_format.type, 'json_schema')
+  assert.equal(requests[2].response_format.type, 'json_object')
   assert.equal(requests[3].max_tokens, 2_000)
-  assert.equal(requests[3].temperature, undefined)
-  assert.equal(requests[3].response_format, undefined)
+  assert.equal(requests[3].response_format.type, 'json_object')
 })
 
-test('gateway composes every supported compatibility-rejection order exactly once', async () => {
+test('gateway never drops structured output in compatibility-rejection orders', async () => {
   const adjustments = [
     { error: { code: 'unsupported_value', param: 'temperature' }, omitted: 'temperature' },
     { error: { code: 'unsupported_parameter', param: 'response_format' }, omitted: 'response_format' },
@@ -204,7 +219,10 @@ test('gateway composes every supported compatibility-rejection order exactly onc
     assert.equal(result.text, 'ready')
     assert.equal(requests.length, 4)
     for (let requestIndex = 1; requestIndex < requests.length; requestIndex += 1) {
-      for (const adjustmentIndex of order.slice(0, requestIndex)) assert.equal(requests[requestIndex][adjustments[adjustmentIndex].omitted], undefined)
+      for (const adjustmentIndex of order.slice(0, requestIndex)) {
+        if (adjustments[adjustmentIndex].omitted !== 'response_format') assert.equal(requests[requestIndex][adjustments[adjustmentIndex].omitted], undefined)
+      }
+      assert.equal(requests[requestIndex].response_format.type, requestIndex > order.indexOf(1) ? 'json_object' : 'json_schema')
     }
     assert.equal(requests[3].max_tokens, 2_000)
   }
