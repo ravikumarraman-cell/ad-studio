@@ -200,10 +200,10 @@ export class ModelPatchBroker {
         "The execution candidate must be a separate server-configured checkout path.",
       );
     let normalizedTask = normalizeTask(task, this.allowedValidationCommands);
-    // Demo-only runs show generation and candidate retention without treating
-    // owner-test evidence as a production acceptance assertion. Structural
-    // safety checks (JSON, paths, anchors, and rewrite preservation) remain.
-    if (normalizedTask.skipExecutableValidation)
+    // Only the fully relaxed demo profile (intensity 0) omits owner-test
+    // evidence. Any semantic profile must enforce it before review; otherwise
+    // a source-inspection test can survive generation and fail later.
+    if (normalizedTask.skipExecutableValidation && verificationDisabledByRequest)
       normalizedTask = Object.freeze({ ...normalizedTask, relaxOwnerTestEvidence: true });
     const writePaths = normalizeWritePaths(repository?.writePaths);
     await reportProgress(onProgress, "CONTEXT_COLLECTION");
@@ -258,7 +258,9 @@ export class ModelPatchBroker {
         validationAttempt <= maxCandidateValidationAttempts;
         validationAttempt += 1
       ) {
-        const implementationBatches = storyBatchTasks({
+        const implementationBatches = normalizedTask.demoFast
+          ? [Object.freeze({ ...normalizedTask, stories: requestedStories })]
+          : storyBatchTasks({
           ...normalizedTask,
           stories: requestedStories,
         });
@@ -1369,6 +1371,7 @@ function normalizeTask(task, approvedCommands) {
     allowedCommands: Object.freeze(allowedCommands),
     skipExecutableValidation: task.skipExecutableValidation === true,
     relaxOwnerTestEvidence: false,
+    demoFast: task.demoFast === true,
     stories: normalizeTaskStories(task.stories),
     mandatoryOwnerPaths: normalizeMandatoryOwnerPaths(task.mandatoryOwnerPaths),
   });
@@ -2347,6 +2350,7 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         parsed.patches,
         completion,
       );
+      if (task.demoFast) assertDemoFastVisibleUi(materializedPatches, parsed.storyCoverage, task.stories, completion);
       if (enforceOwnerTestEvidence)
         assertBehavioralOwnerTestPatches(
           materializedPatches,
@@ -2882,6 +2886,25 @@ function assertsInactiveActionWrite(content) {
   // that expects a write must satisfy it explicitly; otherwise it is proving
   // a path production code will correctly refuse to execute.
   return !/\bis_active\s*=\s*True\b|["']tenant_status["']\s*:\s*["']Active["']/i.test(content);
+}
+
+function assertDemoFastVisibleUi(patches, storyCoverage, stories, completion) {
+  const patchesByPath = new Map(patches.map((patch) => [patch.path, String(patch.content ?? "")]));
+  for (const story of stories) {
+    const text = `${story.title} ${story.narrative} ${(story.scenarios ?? []).map((scenario) => `${scenario.given} ${scenario.when} ${scenario.then}`).join(" ")}`;
+    if (!/\b(?:ui|user interface|page|screen|visible|visibility|display|render|frontend)\b/i.test(text)) continue;
+    const coverage = storyCoverage.find((entry) => entry.storyKey === story.key);
+    const paths = (coverage?.implementationPaths ?? []).filter((path) => /(?:^|\/)frontend\//i.test(path));
+    const content = paths.map((path) => patchesByPath.get(path) ?? "").join("\n");
+    const emptyMarkerOnly = /<div\s+[^>]*data-adx-feature=[^>]*\/?>/i.test(content) && !/>\s*[^<{][\s\S]{0,160}<\//.test(content);
+    if (!content || emptyMarkerOnly || !/\b(?:funding|aide|status|funded|unfunded)\b/i.test(content))
+      throw patchResponseError(
+        "DEMO_FAST_VISIBLE_UI_MISSING",
+        `Demo Fast requires a visible frontend implementation for ${story.key}.`,
+        completion,
+        `For ${story.key}, patch a frontend page or component with visible rendered UI text or a rendered status component. An empty data-adx-feature marker is not sufficient in Demo Fast.`,
+      );
+  }
 }
 
 function isBehavioralLambdaOwnerTest(content) {

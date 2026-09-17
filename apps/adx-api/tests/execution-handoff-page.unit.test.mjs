@@ -67,8 +67,8 @@ test("execution handoff requests a bounded implementation run instead of attesti
   assert.match(page, /Semantic verification intensity/);
   assert.match(page, /verification-intensity/);
   assert.match(page, /verificationIntensity: Number\(verificationIntensity\?\.value \?\? 100\)/);
-  assert.match(page, /Demo only: relax test evidence and skip executable tests/);
-  assert.match(page, /owner-level test-evidence checks/);
+  assert.match(page, /Demo only: skip executable tests/);
+  assert.match(page, /At semantic intensity 0, owner-level test evidence is also relaxed/);
   assert.match(page, /skipExecutableValidation: Boolean\(demoSkipExecutableValidation\?\.checked\)/);
   assert.match(page, /:not\(\.verification-control\)\{display:none\}/);
   assert.match(accessiblePageFoundation, /input\[type="checkbox"\],input\[type="radio"\]\{width:auto!important/);

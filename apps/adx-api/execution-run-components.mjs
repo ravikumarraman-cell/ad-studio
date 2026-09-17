@@ -22,6 +22,7 @@ const confirmation = document.getElementById('confirmation');
 let verificationIntensity = document.getElementById('verification-intensity');
 let verificationIntensityValue = document.getElementById('verification-intensity-value');
 let demoSkipExecutableValidation = document.getElementById('demo-skip-executable-validation');
+let demoFast = document.getElementById('demo-fast');
 const providers = [...document.querySelectorAll('input[name="provider"]')];
 const submissionAvailable = ${JSON.stringify(Boolean(submissionAvailable))};
 
@@ -37,9 +38,17 @@ if (form && confirmation && !verificationIntensity) {
 if (form && confirmation && !demoSkipExecutableValidation) {
   const control = document.createElement('label');
   control.className = 'select-label demo-validation-control';
-  control.innerHTML = '<span><input id="demo-skip-executable-validation" type="checkbox"> Demo only: relax test evidence and skip executable tests</span><small>Clearly marked bypass for showing the flow. This also relaxes owner-level test-evidence checks; structural patch safety remains enforced. Semantic verification remains controlled by the slider above; this is not a production-safe validation result.</small>';
+  control.innerHTML = '<span><input id="demo-skip-executable-validation" type="checkbox"> Demo only: skip executable tests</span><small>Clearly marked bypass for showing the flow. At semantic intensity 0, owner-level test evidence is also relaxed; at any higher intensity it remains enforced. Structural patch safety always remains enforced.</small>';
   confirmation.closest('label')?.before(control);
   demoSkipExecutableValidation = control.querySelector('#demo-skip-executable-validation');
+}
+
+if (form && confirmation && !demoFast) {
+  const control = document.createElement('label');
+  control.className = 'select-label demo-validation-control';
+  control.innerHTML = '<span><input id="demo-fast" type="checkbox"> Demo Fast: one generation pass with visible UI required</span><small>Skips executable and semantic verification, relaxes owner-test evidence, and rejects empty UI markers. Not production acceptance.</small>';
+  confirmation.closest('label')?.before(control);
+  demoFast = control.querySelector('#demo-fast');
 }
 
 function syncRunningState(running) {
@@ -50,6 +59,7 @@ function syncRunningState(running) {
   button.disabled = running;
   if (verificationIntensity) verificationIntensity.disabled = running;
   if (demoSkipExecutableValidation) demoSkipExecutableValidation.disabled = running;
+  if (demoFast) demoFast.disabled = running;
 }
 
 if (form && button && status) {
@@ -69,6 +79,11 @@ if (form && button && status) {
   confirmation?.addEventListener('change', syncControls);
   verificationIntensity?.addEventListener('input', () => {
     if (verificationIntensityValue) verificationIntensityValue.value = verificationIntensity.value;
+  });
+  demoFast?.addEventListener('change', () => {
+    if (!demoFast.checked) return;
+    if (demoSkipExecutableValidation) demoSkipExecutableValidation.checked = true;
+    if (verificationIntensity) { verificationIntensity.value = '0'; if (verificationIntensityValue) verificationIntensityValue.value = '0'; }
   });
   providers.forEach((input) => input.addEventListener('change', syncControls));
   window.syncDispatchControls = syncControls;
@@ -96,6 +111,7 @@ if (form && button && status) {
           templateId: document.getElementById('coding-spec-template')?.value,
           verificationIntensity: Number(verificationIntensity?.value ?? 100),
           skipExecutableValidation: Boolean(demoSkipExecutableValidation?.checked),
+          demoFast: Boolean(demoFast?.checked),
           expectedVersion: ${JSON.stringify(changeCaseVersion)},
         }),
       });

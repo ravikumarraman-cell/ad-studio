@@ -432,6 +432,7 @@ test("demo-only runs relax Lambda owner-test evidence while retaining the owner 
     task: {
       ...task,
       skipExecutableValidation: true,
+      verificationIntensity: 0,
       stories: [{
         key: "STORY-6",
         title: "Block the SBL operation",

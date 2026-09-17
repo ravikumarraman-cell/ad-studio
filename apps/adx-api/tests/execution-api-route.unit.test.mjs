@@ -93,7 +93,7 @@ test("execution dispatch forwards a bounded verification intensity into the gove
   const { input, calls } = harness({
     executionTask: (...args) => {
       taskCalls.push(args);
-      return { objective: "Patch", verificationIntensity: args.at(-2), skipExecutableValidation: args.at(-1) };
+      return { objective: "Patch", verificationIntensity: args.at(-3), skipExecutableValidation: args.at(-2), demoFast: args.at(-1) };
     },
   });
   await handleExecutionApiRoute({
@@ -102,8 +102,9 @@ test("execution dispatch forwards a bounded verification intensity into the gove
     url: new URL(`http://adx.test/v1/workspaces/${workspaceId}/change-cases/${changeCaseId}/execution/dispatch`),
   });
 
-  assert.equal(taskCalls[0].at(-2), 25);
-  assert.equal(taskCalls[0].at(-1), true);
+  assert.equal(taskCalls[0].at(-3), 25);
+  assert.equal(taskCalls[0].at(-2), true);
+  assert.equal(taskCalls[0].at(-1), undefined);
   assert.equal(calls[0][1].task.verificationIntensity, 25);
   assert.equal(calls[0][1].task.skipExecutableValidation, true);
 });
