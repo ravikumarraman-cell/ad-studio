@@ -102,8 +102,12 @@ export class LocalPreviewManager {
         preview.candidateDigest === candidateDigest &&
         preview.changeCaseId === changeCaseId,
     );
-    if (existing)
+    if (existing && existing.previewRevision === profile.previewRevision)
       return { accepted: true, deduplicated: true, preview: existing };
+    // A local preview container can survive an ADX restart. Rebuild it when
+    // the server-owned preview image contract changes, rather than silently
+    // reusing an older container with stale proxy or fixture behavior.
+    if (existing) await this.stop(existing.id);
 
     const id = randomUUID();
     const image = `adx-preview/${profile.id}:${candidateDigest.slice(7, 19)}`;
@@ -185,6 +189,7 @@ export class LocalPreviewManager {
         changeCaseId,
         candidateDigest,
         sourceDigest: actualDigest,
+        previewRevision: profile.previewRevision ?? null,
         hostPort: port,
         url,
         containerName,

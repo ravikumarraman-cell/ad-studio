@@ -87,6 +87,25 @@ test('local preview manager restores a running preview after the API restarts so
   }
 })
 
+test('local preview manager replaces an active preview when the server-owned build revision changes', async () => {
+  const commands = []
+  const profile = (revision) => ({ id: 'example', label: 'After implementation', dockerfile: import.meta.filename, context: '/candidate', hostName: 'localhost', hostPort: 5173, containerPort: 80, readinessPath: '/', previewRevision: revision })
+  const manager = new LocalPreviewManager({
+    profiles: new Map([['example', profile('revision-1')]]),
+    digestCandidate: async () => 'sha256:verified',
+    runCommand: async (command) => { commands.push(command) },
+    waitForReady: async () => {},
+  })
+  const first = await manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
+  manager.profiles.set('example', profile('revision-2'))
+
+  const second = await manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
+
+  assert.equal(second.deduplicated, false)
+  assert.notEqual(second.preview.id, first.preview.id)
+  assert.ok(commands.some((command) => command.join(' ') === `docker rm --force ${first.preview.containerName}`))
+})
+
 test('local preview manager rejects a source that differs from the verified candidate', async () => {
   const manager = new LocalPreviewManager({ profiles: new Map([['example', { id: 'example', label: 'Example', dockerfile: import.meta.filename, context: '/candidate', containerPort: 8080, readinessPath: '/' }]]), digestCandidate: async () => 'sha256:other' })
   await assert.rejects(() => manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' }), { code: 'LOCAL_PREVIEW_CANDIDATE_MISMATCH' })

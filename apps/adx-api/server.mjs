@@ -272,6 +272,10 @@ const previewProfiles = createApplicationPreviewProfiles({
   // Tenant Compass SSO is registered for this local origin. Before and after
   // previews must therefore be run sequentially on the same trusted port.
   hostPort: modelPatchProfile.id === "cloud-asset-inventory" ? 5173 : null,
+  previewRevision:
+    modelPatchProfile.id === "cloud-asset-inventory"
+      ? "same-origin-funding-fixtures-v2"
+      : null,
   buildArgs:
     modelPatchProfile.id === "cloud-asset-inventory"
       ? {

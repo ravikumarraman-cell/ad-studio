@@ -11,6 +11,7 @@ export function createApplicationPreviewProfiles({
   buildArgs = {},
   hostName = "127.0.0.1",
   hostPort = null,
+  previewRevision = null,
 }) {
   if (
     typeof sourceRoot !== "string" ||
@@ -48,6 +49,7 @@ export function createApplicationPreviewProfiles({
       containerPort,
       hostName,
       hostPort,
+      previewRevision,
       readinessPath: "/",
     });
   return new Map([
