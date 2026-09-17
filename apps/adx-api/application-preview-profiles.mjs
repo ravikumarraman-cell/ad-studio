@@ -32,7 +32,11 @@ export function createApplicationPreviewProfiles({
       repositoryId: resolvedRepositoryId,
       comparisonRole,
       candidateBound,
-      dockerfile: resolve(dockerfileRoot || root, applicationPath, dockerfile),
+      // ADX may own a preview-only Dockerfile while always building the
+      // application from the selected source or retained candidate context.
+      dockerfile: dockerfileRoot
+        ? resolve(dockerfileRoot, dockerfile)
+        : resolve(root, applicationPath, dockerfile),
       context: resolve(root, applicationPath),
       digestRoot: root,
       npmRegistry:

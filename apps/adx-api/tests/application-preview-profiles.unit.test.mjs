@@ -43,7 +43,6 @@ test("nested application profiles keep whole-candidate verification with a serve
   const profiles = createApplicationPreviewProfiles({
     sourceRoot: "/projects/cloud-asset-inventory",
     candidateRoot: "/candidates/cloud-asset-inventory",
-    dockerfileRoot: "/projects/cloud-asset-inventory",
     contextPath: "frontend",
     containerPort: 80,
     hostName: "localhost",
@@ -58,7 +57,7 @@ test("nested application profiles keep whole-candidate verification with a serve
 
   assert.equal(after.context, "/candidates/cloud-asset-inventory/frontend");
   assert.equal(after.digestRoot, "/candidates/cloud-asset-inventory");
-  assert.equal(after.dockerfile, "/projects/cloud-asset-inventory/frontend/Dockerfile");
+  assert.equal(after.dockerfile, "/candidates/cloud-asset-inventory/frontend/Dockerfile");
   assert.equal(after.containerPort, 80);
   assert.equal(after.hostName, "localhost");
   assert.equal(after.hostPort, 5173);
@@ -79,6 +78,25 @@ test("Health-X preview profiles permit a canonical nested Dockerfile override", 
   assert.equal(
     profiles.get("health-x-before").dockerfile,
     "/projects/ad-studio/apps/health-x/Dockerfile",
+  );
+});
+
+test("preview-only Dockerfiles remain server-owned while their context stays candidate-bound", () => {
+  const profiles = createApplicationPreviewProfiles({
+    sourceRoot: "/projects/cloud-asset-inventory",
+    candidateRoot: "/candidates/cloud-asset-inventory",
+    contextPath: "frontend",
+    dockerfileRoot: "/projects/ad-studio/apps/adx-api/preview-assets",
+    dockerfilePath: "cloud-asset-inventory-preview.Dockerfile",
+  });
+
+  assert.equal(
+    profiles.get("health-x-after").dockerfile,
+    "/projects/ad-studio/apps/adx-api/preview-assets/cloud-asset-inventory-preview.Dockerfile",
+  );
+  assert.equal(
+    profiles.get("health-x-after").context,
+    "/candidates/cloud-asset-inventory/frontend",
   );
 });
 

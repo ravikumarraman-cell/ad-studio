@@ -49,7 +49,7 @@ test('candidate browser shows an empty generated change tree when candidate equa
   }
 })
 
-test('candidate browser renders only generated changes as a navigable folder tree', async () => {
+test('candidate browser renders every generated change as a navigable folder tree', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'adx-candidate-browser-'))
   const source = join(parent, 'source')
   const candidate = join(parent, 'candidate')

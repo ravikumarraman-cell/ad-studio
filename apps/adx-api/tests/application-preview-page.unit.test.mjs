@@ -100,11 +100,13 @@ test("preview page defaults to the verified candidate profile", () => {
         {
           id: "health-x-before",
           label: "Before implementation",
+          comparisonRole: "BEFORE",
           candidateBound: false,
         },
         {
           id: "health-x-after",
           label: "After implementation (verified candidate)",
+          comparisonRole: "AFTER",
           candidateBound: true,
         },
       ],
@@ -123,4 +125,5 @@ test("preview page defaults to the verified candidate profile", () => {
     page,
     /<option value="health-x-before" selected>/,
   );
+  assert.match(page, /start Before and After one at a time/);
 });

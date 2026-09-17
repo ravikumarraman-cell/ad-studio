@@ -1,0 +1,8 @@
+# Dockerfile-specific ignore rules for the ADX-owned preview build. The
+# candidate workspace links node_modules to the source checkout; dependencies
+# are installed inside the build stage and must not be copied over them.
+node_modules
+dist
+coverage
+.git
+.env.local

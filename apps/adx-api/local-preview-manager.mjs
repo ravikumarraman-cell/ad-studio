@@ -1,7 +1,9 @@
 import { createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { access, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import { ChangeCaseError } from "./change-case-ledger.mjs";
 import { validateReadableFilePath } from "./preview-checkout-config.mjs";
 
@@ -13,6 +15,7 @@ export class LocalPreviewManager {
     digestCandidate,
     runCommand = runCommandVector,
     waitForReady = waitForPreview,
+    statePath = null,
   } = {}) {
     if (!(profiles instanceof Map) || typeof digestCandidate !== "function")
       throw new Error("LOCAL_PREVIEW_CONFIGURATION_REQUIRED");
@@ -20,7 +23,10 @@ export class LocalPreviewManager {
     this.digestCandidate = digestCandidate;
     this.runCommand = runCommand;
     this.waitForReady = waitForReady;
-    this.previews = new Map();
+    this.statePath = typeof statePath === "string" && statePath.trim()
+      ? statePath
+      : null;
+    this.previews = readPreviewState(this.statePath);
   }
 
   configured() {
@@ -104,6 +110,15 @@ export class LocalPreviewManager {
     const containerName = `adx-preview-${id}`;
     const port = profile.hostPort ?? (await availablePort());
     const hostName = profile.hostName ?? "127.0.0.1";
+    const portConflict = this.list().find(
+      (preview) =>
+        preview.changeCaseId === changeCaseId && preview.hostPort === port,
+    );
+    if (portConflict)
+      throw new ChangeCaseError(
+        "LOCAL_PREVIEW_PORT_IN_USE",
+        `Stop ${portConflict.label} before starting another preview on port ${port}.`,
+      );
     const registryArgument = profile.npmRegistry
       ? ["--build-arg", `NPM_REGISTRY=${profile.npmRegistry}`]
       : [];
@@ -170,12 +185,14 @@ export class LocalPreviewManager {
         changeCaseId,
         candidateDigest,
         sourceDigest: actualDigest,
+        hostPort: port,
         url,
         containerName,
         status: "READY",
         startedAt: new Date().toISOString(),
       });
       this.previews.set(id, preview);
+      writePreviewState(this.statePath, this.previews);
       return { accepted: true, deduplicated: false, preview };
     } catch (error) {
       await this.runCommand(["docker", "rm", "--force", containerName], {
@@ -196,8 +213,49 @@ export class LocalPreviewManager {
       timeoutMs: 30_000,
     });
     this.previews.delete(id);
+    writePreviewState(this.statePath, this.previews);
     return { accepted: true, previewId: id, status: "STOPPED" };
   }
+}
+
+function readPreviewState(statePath) {
+  if (!statePath || !existsSync(statePath)) return new Map();
+  try {
+    const previews = JSON.parse(readFileSync(statePath, "utf8"));
+    if (!Array.isArray(previews)) return new Map();
+    return new Map(
+      previews
+        .filter(isStoredPreview)
+        .map((preview) => [preview.id, Object.freeze({ ...preview })]),
+    );
+  } catch {
+    // A local convenience registry must never prevent ADX from starting.
+    return new Map();
+  }
+}
+
+function writePreviewState(statePath, previews) {
+  if (!statePath) return;
+  mkdirSync(dirname(statePath), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    statePath,
+    `${JSON.stringify([...previews.values()])}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+}
+
+function isStoredPreview(preview) {
+  return preview &&
+    typeof preview.id === "string" &&
+    typeof preview.profileId === "string" &&
+    typeof preview.label === "string" &&
+    typeof preview.changeCaseId === "string" &&
+    typeof preview.candidateDigest === "string" &&
+    typeof preview.sourceDigest === "string" &&
+    typeof preview.containerName === "string" &&
+    typeof preview.url === "string" &&
+    Number.isInteger(preview.hostPort) &&
+    preview.status === "READY";
 }
 
 function previewBuildError(error) {

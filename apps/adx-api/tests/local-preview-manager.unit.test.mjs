@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ChangeCaseError } from '../change-case-ledger.mjs'
 import { LocalPreviewManager } from '../local-preview-manager.mjs'
 
@@ -34,7 +37,54 @@ test('local preview manager uses a server-owned fixed callback origin', async ()
   const result = await manager.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
 
   assert.equal(result.preview.url, 'http://localhost:5173/')
+  assert.equal(result.preview.hostPort, 5173)
   assert.ok(commands[1].includes('127.0.0.1:5173:80'))
+})
+
+test('local preview manager requires a fixed-port preview to stop before another comparison side starts', async () => {
+  const profile = (id, label) => ({ id, label, dockerfile: import.meta.filename, context: '/candidate', hostName: 'localhost', hostPort: 5173, containerPort: 80, readinessPath: '/' })
+  const manager = new LocalPreviewManager({
+    profiles: new Map([['before', profile('before', 'Before implementation')], ['after', profile('after', 'After implementation')]]),
+    digestCandidate: async () => 'sha256:verified',
+    runCommand: async () => {},
+    waitForReady: async () => {},
+  })
+
+  await manager.start({ profileId: 'before', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
+  await assert.rejects(
+    () => manager.start({ profileId: 'after', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' }),
+    { code: 'LOCAL_PREVIEW_PORT_IN_USE' },
+  )
+})
+
+test('local preview manager restores a running preview after the API restarts so it can be stopped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'adx-preview-state-'))
+  const statePath = join(directory, 'previews.json')
+  const profile = { id: 'example', label: 'After implementation', dockerfile: import.meta.filename, context: '/candidate', hostName: 'localhost', hostPort: 5173, containerPort: 80, readinessPath: '/' }
+  try {
+    const first = new LocalPreviewManager({
+      profiles: new Map([['example', profile]]),
+      digestCandidate: async () => 'sha256:verified',
+      runCommand: async () => {},
+      waitForReady: async () => {},
+      statePath,
+    })
+    const started = await first.start({ profileId: 'example', candidateDigest: 'sha256:verified', changeCaseId: 'change-case' })
+    const commands = []
+    const restarted = new LocalPreviewManager({
+      profiles: new Map([['example', profile]]),
+      digestCandidate: async () => 'sha256:verified',
+      runCommand: async (command) => { commands.push(command) },
+      statePath,
+    })
+
+    assert.deepEqual(restarted.list().map((preview) => preview.id), [started.preview.id])
+    await restarted.stop(started.preview.id)
+    assert.deepEqual(restarted.list(), [])
+    assert.deepEqual(commands, [['docker', 'rm', '--force', started.preview.containerName]])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('local preview manager rejects a source that differs from the verified candidate', async () => {

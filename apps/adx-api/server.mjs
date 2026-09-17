@@ -6,7 +6,8 @@ import {
   randomUUID,
 } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   authorize,
@@ -247,20 +248,29 @@ const modelPatchBroker = new ModelPatchBroker({
   gateway: uhgAzureOpenAiExecutionGateway,
 });
 const candidateRoot = modelPatchBroker.candidateRoot;
+const cloudAssetInventoryPreviewDockerfiles = resolve(
+  repositoryRoot,
+  "apps/adx-api/preview-assets",
+);
 const previewProfiles = createApplicationPreviewProfiles({
   sourceRoot: modelPatchProfile.sourceRoot,
   candidateRoot,
   repositoryId: process.env.ADX_APPLICATION_PREVIEW_REPOSITORY_ID,
-  dockerfilePath: process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE,
+  dockerfilePath:
+    modelPatchProfile.id === "cloud-asset-inventory"
+      ? "cloud-asset-inventory-preview.Dockerfile"
+      : process.env.ADX_HEALTH_X_PREVIEW_DOCKERFILE || "Dockerfile",
   dockerfileRoot:
     modelPatchProfile.id === "cloud-asset-inventory"
-      ? modelPatchProfile.sourceRoot
+      ? cloudAssetInventoryPreviewDockerfiles
       : null,
   contextPath:
     modelPatchProfile.id === "cloud-asset-inventory" ? "frontend" : "",
   containerPort: modelPatchProfile.id === "cloud-asset-inventory" ? 80 : 3000,
   hostName:
     modelPatchProfile.id === "cloud-asset-inventory" ? "localhost" : "127.0.0.1",
+  // Tenant Compass SSO is registered for this local origin. Before and after
+  // previews must therefore be run sequentially on the same trusted port.
   hostPort: modelPatchProfile.id === "cloud-asset-inventory" ? 5173 : null,
   buildArgs:
     modelPatchProfile.id === "cloud-asset-inventory"
@@ -268,6 +278,13 @@ const previewProfiles = createApplicationPreviewProfiles({
           NODE_IMAGE: "node:22-alpine",
           NGINX_IMAGE: "nginx:alpine",
           environment: "stage",
+          // Keep the browser same-origin during the local preview. The ADX
+          // preview image owns the narrowly scoped proxy to the configured
+          // API, avoiding a browser-to-staging CORS preflight.
+          VITE_BASE_URL: "/preview-api/",
+          PREVIEW_API_ORIGIN:
+            process.env.ADX_CLOUD_ASSET_INVENTORY_PREVIEW_API_ORIGIN ||
+            "https://api-tenant-compass-stg.optum.com",
         }
       : {},
 });
@@ -275,6 +292,12 @@ await validatePreviewRuntimeConfiguration(previewProfiles);
 const localPreviewManager = new LocalPreviewManager({
   profiles: previewProfiles,
   digestCandidate: digestCandidateTree,
+  // Docker containers can outlive an API restart. Retain only local metadata
+  // so the Manual Acceptance Preview page can still expose its Stop control.
+  statePath: process.env.ADX_LOCAL_PREVIEW_STATE_PATH ?? join(
+    tmpdir(),
+    `adx-local-previews-${sha256(candidateRoot).slice(7, 19)}.json`,
+  ),
 });
 const configuredModelCoding = createUhgModelCodingExecution({
   executions,
