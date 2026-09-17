@@ -39,6 +39,25 @@ test('local preview manager uses a server-owned fixed callback origin', async ()
   assert.equal(result.preview.url, 'http://localhost:5173/')
   assert.equal(result.preview.hostPort, 5173)
   assert.ok(commands[1].includes('127.0.0.1:5173:80'))
+  assert.ok(commands[1].includes('com.adx.preview.change-case=change-case'))
+})
+
+test('local preview manager recovers a labelled fixed-port container when preview metadata is missing', async () => {
+  const commands = []
+  const manager = new LocalPreviewManager({
+    profiles: new Map(),
+    digestCandidate: async () => 'sha256:verified',
+    runCommand: async (command) => {
+      commands.push(command)
+      return command[1] === 'ps' ? 'adx-preview-orphan\t127.0.0.1:5173->80/tcp' : ''
+    },
+  })
+
+  const result = await manager.stopByHostPort(5173)
+
+  assert.equal(result.status, 'STOPPED')
+  assert.deepEqual(result.previewIds, ['adx-preview-orphan'])
+  assert.deepEqual(commands.at(-1), ['docker', 'rm', '--force', 'adx-preview-orphan'])
 })
 
 test('local preview manager requires a fixed-port preview to stop before another comparison side starts', async () => {

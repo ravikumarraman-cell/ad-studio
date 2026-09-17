@@ -65,7 +65,7 @@ export function renderVerificationReviewPage(changeCase, evidence, { canRun, can
     main{max-width:1440px;padding:28px clamp(20px,4vw,72px) 72px}
     .topbar{margin:0 auto;max-width:1280px;padding:0 0 18px;border-bottom:1px solid rgb(168 190 185 / 65%)}
     .hero{grid-template-columns:minmax(0,1fr) minmax(280px,360px);gap:clamp(30px,6vw,92px);align-items:center;max-width:1280px;margin:0 auto;padding:clamp(34px,5vw,68px) 0 clamp(30px,4vw,48px)}
-    .hero h1{max-width:980px;font-size:clamp(2.8rem,4.3vw,5rem);line-height:.96;letter-spacing:-.045em;text-wrap:balance}
+    .hero h1{max-width:820px;font-size:clamp(2.55rem,3.65vw,4.1rem);line-height:1;letter-spacing:-.04em;text-wrap:balance}
     .hero-copy{max-width:720px;margin-top:20px;font-size:1.08rem;line-height:1.55}
     .gate-status{justify-self:stretch;min-height:164px;align-content:space-between;padding:22px 24px;border:1px solid rgb(151 183 176 / 80%);border-left:0;background:linear-gradient(145deg,rgb(255 255 255 / 92%),rgb(240 249 246 / 88%));box-shadow:0 20px 48px rgb(20 67 62 / 10%)}
     .gate-status:before{content:"";display:block;width:44px;height:5px;border-radius:999px;background:linear-gradient(90deg,#0a6b8f,#0c7c62)}

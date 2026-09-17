@@ -26,6 +26,8 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     --adx-radius-lg:24px;
     --adx-display:Georgia,"Times New Roman",serif;
     --adx-body:"Avenir Next","Segoe UI",sans-serif;
+    --adx-page-width:1240px;
+    --adx-page-gutter:clamp(18px,4vw,64px);
     color:var(--adx-ink);
     background:
       radial-gradient(circle at top left, rgba(10,107,143,.08), transparent 24%),
@@ -44,9 +46,10 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
       linear-gradient(180deg,#f5f8f6 0%,#eef4f1 44%,#edf4ef 100%);
   }
   main{
-    max-width:1260px;
+    width:min(100%,var(--adx-page-width));
+    max-width:var(--adx-page-width);
     margin:0 auto;
-    padding:28px clamp(18px,4vw,64px) 64px;
+    padding:32px var(--adx-page-gutter) 72px;
     min-width:0;
   }
   main > header:not(.topbar):not(.hero):not(.section-head):not(.console-header):not(.case-head):not(.evidence-head),
@@ -147,10 +150,11 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
   h1{
     margin:0;
     font-family:var(--adx-display);
-    font-size:clamp(2.3rem,5vw,4.4rem);
+    font-size:clamp(2.25rem,4vw,4rem);
     font-weight:500;
-    line-height:.98;
+    line-height:1;
     letter-spacing:-.03em;
+    text-wrap:balance;
   }
   h2,h3{
     margin:0;
@@ -180,6 +184,12 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
   button:disabled{cursor:not-allowed;opacity:.62}
   .button,
   button{
+    min-height:44px;
+    padding:10px 16px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
     border:1px solid transparent;
     background:linear-gradient(135deg,var(--adx-brand-deep),var(--adx-mint));
     color:#f9fffd;
@@ -284,6 +294,18 @@ export const adxPageThemeCss = `<style id="adx-page-theme">
     white-space:nowrap;
     color:var(--adx-ink);
     font-weight:700;
+  }
+  /* Shared visual rhythm for every gate: one clear action, readable evidence,
+     and enough separation without turning the page into a wall of cards. */
+  .hero-copy{max-width:68ch;text-wrap:pretty}
+  .panel,.card,.notice,.request-panel,.run-console,.action-panel,.decision-panel,.workspace-card{isolation:isolate}
+  .panel > :first-child,.card > :first-child,.notice > :first-child,.request-panel > :first-child,.action-panel > :first-child,.decision-panel > :first-child{margin-top:0}
+  .panel > :last-child,.card > :last-child,.notice > :last-child,.request-panel > :last-child,.action-panel > :last-child,.decision-panel > :last-child{margin-bottom:0}
+  .status,.live-status{min-height:1.5em;line-height:1.45}
+  details > summary{cursor:pointer}
+  @media (max-width:820px){
+    main{padding-top:24px;padding-bottom:52px}
+    h1{font-size:clamp(2.1rem,8vw,3.5rem)}
   }
   @media (max-width:600px){
     .workspace-return-link,

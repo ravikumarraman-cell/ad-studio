@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { ChangeCaseError, sha256 } from './change-case-ledger.mjs'
 import { digestCandidateTree } from './verification-evidence.mjs'
 
-const ignoredDirectories = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', 'test-results', '.output', '.vinxi'])
+const ignoredDirectories = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage', 'test-results', '.output', '.vinxi', 'venv', '.venv', '.venv-smoke', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache'])
 
 /**
  * Produces the only source-export input a delivery adapter may use. The source
@@ -74,7 +74,15 @@ async function tree(root, projectPath) {
 
 function ignored(name) { return ignoredDirectories.has(name) || name === '.DS_Store' || name === '.git' || name === '.npmrc' || name.startsWith('.env') || name.endsWith('.pem') || name.endsWith('.key') || name.endsWith('.tsbuildinfo') }
 function normalizeProjectPath(value) { if (value === undefined || value === null || value === '') return null; const path = typeof value === 'string' ? value.trim() : ''; if (!path || path.startsWith('/') || path.includes('\\') || path.split('/').some((part) => !part || part === '.' || part === '..')) throw new ChangeCaseError('GIT_EXPORT_INPUT_INVALID', 'Project path must be a canonical relative directory path.'); return path }
-function normalizeRemote(value) { return value.trim().replace(/\.git$/, '').toLowerCase() }
+function normalizeRemote(value) {
+  const remote = new URL(value.trim())
+  remote.username = ''
+  remote.password = ''
+  remote.search = ''
+  remote.hash = ''
+  remote.pathname = remote.pathname.replace(/\.git$/i, '')
+  return remote.toString().replace(/\/$/, '').toLowerCase()
+}
 
 function git(cwd, argumentsList) {
   return new Promise((resolvePromise, reject) => {

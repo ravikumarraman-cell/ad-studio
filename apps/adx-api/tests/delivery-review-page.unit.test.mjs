@@ -13,6 +13,7 @@ test('delivery review guides a provider setup when no preview plan exists', () =
   assert.match(page, /Prepare preview plan/)
   assert.match(page, /aria-label="Blocked: Preview plan retained\./)
   assert.doesNotMatch(page, /Approve this preview delivery/)
+  assert.match(page, /prepare\.disabled=false/)
 })
 
 test('delivery review enables a decision only after matching CI evidence and no error findings', () => {

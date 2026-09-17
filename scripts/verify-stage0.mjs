@@ -41,7 +41,7 @@ if (schema.properties?.riskTier?.enum?.join(',') !== 'R0,R1,R2,R3,R4') {
 }
 
 const workflow = JSON.parse(readFileSync(resolve(root, 'packages/domain/src/change-case-workflow.json'), 'utf8'))
-const requiredStates = ['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW', 'READY_FOR_EXECUTION', 'AWAITING_VERIFICATION', 'READY_FOR_DELIVERY', 'OUTCOME_RECORDED', 'PAUSED', 'CANCELLED']
+const requiredStates = ['DRAFT', 'INTAKE', 'AWAITING_CLARIFICATION', 'RISK_REVIEW', 'AWAITING_STORY_APPROVAL', 'DESIGN_REVIEW', 'READY_FOR_EXECUTION', 'AWAITING_VERIFICATION', 'AWAITING_DELIVERY_REVIEW', 'READY_FOR_DELIVERY', 'OUTCOME_RECORDED', 'PAUSED', 'CANCELLED']
 const requiredGateIds = ['A', 'A.5', 'B', 'C', 'D', 'E', 'F']
 if (workflow.states?.join(',') !== requiredStates.join(',') || new Set(workflow.states).size !== requiredStates.length) {
   throw new Error('STG0-WORKFLOW: canonical Change Case states must be complete and unique')

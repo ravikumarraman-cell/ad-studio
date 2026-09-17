@@ -24,7 +24,7 @@ npm install
 npm run dev
 ```
 
-Open the address printed by Vite (normally `http://localhost:5173`).
+Open the address printed by Vite (normally `http://localhost:5174`). Port 5173 is reserved for the Cloud Asset Inventory preview.
 
 No-install path: open [standalone.html](standalone.html) in a modern browser, or serve this folder with any static HTTP server. This single-file version has the same interactive workflow for demos where package installation is unavailable.
 

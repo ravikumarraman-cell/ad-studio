@@ -37,12 +37,13 @@ export async function handleApplicationPreviewRoute({
       (profile) =>
         !selectedRepository || normalizeRepositoryId(profile.repositoryId) === selectedRepository,
     )
-    .map(({ id, label, repositoryId, comparisonRole, candidateBound }) => ({
+    .map(({ id, label, repositoryId, comparisonRole, candidateBound, hostPort }) => ({
       id,
       label,
       repositoryId,
       comparisonRole,
       candidateBound,
+      hostPort,
     }));
   const previews = localPreviewManager
     .list()

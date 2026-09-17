@@ -77,7 +77,7 @@ test("execution handoff requests a bounded implementation run instead of attesti
 test("execution handoff presents the execution controls as a compact, responsive workspace", () => {
   const page = renderExecutionHandoffPage(changeCase, options);
 
-  assert.match(page, /\.hero h1\{max-width:19ch/);
+  assert.match(page, /\.hero h1\{max-width:18ch;font-size:clamp\(2\.45rem,3\.55vw,3\.8rem\)/);
   assert.match(page, /\.assurance\{position:relative;z-index:1;display:grid/);
   assert.match(page, /CONTROL ENVELOPE/);
   assert.match(page, /class="request-intro"/);

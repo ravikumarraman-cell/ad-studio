@@ -2178,6 +2178,20 @@ const server = createServer(async (request, response) => {
         request.method === "POST" &&
         operation === "application-preview-stop"
       ) {
+        if (body?.recover === true) {
+          const profile = localPreviewManager.profiles.get(body?.profileId);
+          if (!profile || !Number.isInteger(profile.hostPort))
+            throw new ChangeCaseError(
+              "LOCAL_PREVIEW_RECOVERY_UNAVAILABLE",
+              "No fixed-port preview profile is available for recovery.",
+            );
+          return write(
+            response,
+            200,
+            await localPreviewManager.stopByHostPort(profile.hostPort),
+            traceId,
+          );
+        }
         const preview = localPreviewManager
           .list()
           .find(

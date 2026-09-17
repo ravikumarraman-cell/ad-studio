@@ -45,7 +45,7 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173> and choose **Guided demo**. You can now explore the complete journey without Docker, a database, OAuth, or credentials.
+Open <http://localhost:5174> and choose **Guided demo**. You can now explore the complete journey without Docker, a database, OAuth, or credentials.
 
 > The health-authorization scenario is fictional. It is a product demonstration, not a clinical decision-support system. Do not use it for real patient, member, or protected health information.
 
@@ -168,7 +168,7 @@ npm install
 npm run dev
 ```
 
-Open the Vite address printed by the command, normally <http://localhost:5173>. Choose **Guided demo** on the opening screen.
+Open the Vite address printed by the command, normally <http://localhost:5174>. Choose **Guided demo** on the opening screen. Port 5173 is reserved for the Cloud Asset Inventory preview.
 
 The root `dev` script starts `apps/adx-studio-web`. To stop it, press `Ctrl+C` in that terminal.
 
@@ -222,7 +222,7 @@ For local database-backed development, begin with:
 
 ```dotenv
 DATABASE_URL=postgresql://adx:adx_local_only@127.0.0.1:5432/adx
-ADX_UI_ORIGIN=http://localhost:5173/
+ADX_UI_ORIGIN=http://localhost:5174/
 ```
 
 Add the authenticated-mode values described in the next section before attempting login. Keep `.env.local` private and never commit provider tokens or signing keys.
@@ -262,7 +262,7 @@ In a second terminal, from the repository root:
 npm run dev
 ```
 
-Open <http://localhost:5173> and select **Real mode**. The Vite client proxies `/v1`, `/auth`, and `/control-plane` to the API at port `3100`.
+Open <http://localhost:5174> and select **Real mode**. The Vite client proxies `/v1`, `/auth`, and `/control-plane` to the API at port `3100`.
 
 ### Configure authenticated Real mode
 
@@ -283,12 +283,12 @@ ADX_OIDC_ISSUER=https://accounts.google.com
 ADX_OIDC_AUDIENCE=YOUR_GOOGLE_OAUTH_CLIENT_ID
 ADX_OIDC_CLIENT_SECRET=YOUR_GOOGLE_OAUTH_CLIENT_SECRET
 ADX_OIDC_REDIRECT_URI=http://127.0.0.1:3100/auth/callback
-ADX_UI_ORIGIN=http://localhost:5173/
+ADX_UI_ORIGIN=http://localhost:5174/
 ```
 
 `ADX_OIDC_AUDIENCE` is the OAuth client ID in this local Google adapter. The API uses Google's published JWKS endpoint by default; set `ADX_OIDC_JWKS_URI` only when using a different compatible identity setup.
 
-The provider callback remains at `127.0.0.1:3100`. ADX then makes a one-time, token-free handoff through the UI proxy at `localhost:5173`, which issues the Google session cookie to the same browser origin as the workspace. This keeps Google and Optum SSO independent when both are configured.
+The provider callback remains at `127.0.0.1:3100`. ADX then makes a one-time, token-free handoff through the UI proxy at `localhost:5174`, which issues the Google session cookie to the same browser origin as the workspace. This keeps Google and Optum SSO independent when both are configured.
 
 If a local configuration already sets `ADX_OIDC_JWKS_URI`, it must use Google’s signing-key endpoint rather than an issuer-relative URL:
 
@@ -298,7 +298,7 @@ ADX_OIDC_JWKS_URI=https://www.googleapis.com/oauth2/v3/certs
 
 #### Microsoft Entra ID SSO
 
-Cloud Asset Inventory uses MSAL in the browser. ADX now uses that same pattern: register ADX as a **Single-page application**, add `http://localhost:5173` as its local redirect URI, and configure the public application ID and tenant authority. The existing Entra browser session is reused, so users normally do not need to sign in again.
+Cloud Asset Inventory uses MSAL in the browser. ADX now uses that same pattern: register ADX as a **Single-page application**, add `http://localhost:5174` as its local redirect URI, and configure the public application ID and tenant authority. The existing Entra browser session is reused, so users normally do not need to sign in again.
 
 ```dotenv
 ADX_ENTRA_TENANT_ID=YOUR_TENANT_ID
@@ -470,7 +470,7 @@ Check all of the following:
 
 1. `ADX_OIDC_AUDIENCE`, `ADX_OIDC_CLIENT_SECRET`, and `ADX_OIDC_REDIRECT_URI` are set.
 2. The Google OAuth client permits `http://127.0.0.1:3100/auth/callback` exactly.
-3. `ADX_UI_ORIGIN` is `http://localhost:5173/` including the trailing slash.
+3. `ADX_UI_ORIGIN` is `http://localhost:5174/` including the trailing slash.
 4. You restarted the API after editing `.env.local`.
 5. Your Google principal received local membership through `npm run provision:local-user -- ...`.
 

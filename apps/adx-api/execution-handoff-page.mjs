@@ -146,11 +146,11 @@ export function renderExecutionHandoffPage(changeCase, options) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Implementation - ${escapeHtml(changeCase.title)}</title>${adxPageThemeCss}<style>
     main{padding-top:clamp(88px,7vw,116px);padding-bottom:48px}
     .topbar{padding-bottom:12px}
-    .hero{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,360px);gap:clamp(26px,4vw,56px);align-items:stretch;margin:12px 0 28px;padding:clamp(24px,3.2vw,44px);border:1px solid rgba(191,208,220,.92);border-radius:28px;background:linear-gradient(122deg,rgba(255,255,255,.94),rgba(246,251,249,.82));box-shadow:var(--adx-shadow);overflow:hidden}
+    .hero{position:relative;display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,340px);gap:clamp(24px,3.5vw,48px);align-items:stretch;margin:12px 0 28px;padding:clamp(24px,3.2vw,44px);border:1px solid rgba(191,208,220,.92);border-radius:28px;background:linear-gradient(122deg,rgba(255,255,255,.94),rgba(246,251,249,.82));box-shadow:var(--adx-shadow);overflow:hidden}
     .hero::after{content:"";position:absolute;inset:auto -8% -55% 42%;height:260px;border-radius:50%;background:radial-gradient(ellipse,rgba(12,124,98,.12),transparent 68%);pointer-events:none}
     .hero > div,.assurance{min-width:0}
     .hero > div{position:relative;z-index:1}
-    .hero h1{max-width:19ch;font-size:clamp(2.7rem,4.3vw,4.5rem);line-height:.97}
+    .hero h1{max-width:18ch;font-size:clamp(2.45rem,3.55vw,3.8rem);line-height:1}
     .hero-copy{max-width:62ch;margin:20px 0 0;font-size:1rem;line-height:1.6}
     .hero-pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
     .hero-pills .pill{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;background:rgba(10,107,143,.07);border:1px solid rgba(10,107,143,.16);color:var(--adx-brand-deep);font:800 .72rem/1.2 var(--adx-body);letter-spacing:.045em;white-space:nowrap}

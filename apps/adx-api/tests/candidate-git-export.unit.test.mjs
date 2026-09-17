@@ -31,6 +31,9 @@ test('tolerates a dirty source checkout while still exporting the verified candi
   await mkdir(source); await mkdir(candidate)
   await writeFile(join(source, 'tracked.txt'), 'before')
   await writeFile(join(source, 'shared.txt'), 'shared')
+  await mkdir(join(source, 'venv')); await writeFile(join(source, 'venv', 'python'), 'source-runtime')
+  await mkdir(join(candidate, '.venv-smoke')); await writeFile(join(candidate, '.venv-smoke', 'python'), 'candidate-runtime')
+  await mkdir(join(candidate, '__pycache__')); await writeFile(join(candidate, '__pycache__', 'module.pyc'), 'cache')
   await writeFile(join(candidate, 'tracked.txt'), 'after')
   await writeFile(join(candidate, 'shared.txt'), 'shared')
   const commands = []
@@ -44,7 +47,29 @@ test('tolerates a dirty source checkout while still exporting the verified candi
       runGit: git,
     })
     assert.deepEqual(exported.changes.map((item) => [item.path, item.operation]), [['tracked.txt', 'MODIFY']])
+    assert.equal(exported.changes.some((item) => item.path.includes('venv') || item.path.includes('__pycache__')), false)
     assert.equal(commands.some((argumentsList) => argumentsList[0] === 'status'), false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('matches a credentialed checkout remote to its credential-free registered repository', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'adx-git-export-'))
+  const source = join(root, 'source'); const candidate = join(root, 'candidate')
+  await mkdir(source); await mkdir(candidate)
+  await writeFile(join(source, 'funding.txt'), 'before')
+  await writeFile(join(candidate, 'funding.txt'), 'after')
+  const git = async (_cwd, argumentsList) => argumentsList[0] === 'rev-parse'
+    ? 'abc123\n'
+    : 'https://local-user:local-secret@github.com/example/repository.git\n'
+  try {
+    const exported = await createCandidateGitExport({
+      sourceRoot: source,
+      candidateRoot: candidate,
+      candidateDigest: await digest(candidate),
+      canonicalRemote: 'https://github.com/example/repository.git',
+      runGit: git,
+    })
+    assert.equal(exported.repository, 'https://github.com/example/repository')
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

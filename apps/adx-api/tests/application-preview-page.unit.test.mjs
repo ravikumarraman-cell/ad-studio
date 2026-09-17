@@ -10,7 +10,7 @@ test("preview page offers only retained passing candidates and links an active l
       projectionVersion: 9,
     },
     {
-      profiles: [{ id: "health-x", label: "Health-X" }],
+      profiles: [{ id: "health-x", label: "Health-X", hostPort: 5173 }],
       evidence: [
         { status: "PASS", candidateDigest: "sha256:verified" },
         { status: "FAIL", candidateDigest: "sha256:failed" },
@@ -34,6 +34,10 @@ test("preview page offers only retained passing candidates and links an active l
   assert.match(page, /sha256:verified/);
   assert.doesNotMatch(page, /sha256:failed/);
   assert.match(page, /application-preview-start/);
+  assert.match(page, /Stop preview/);
+  assert.match(page, /data-preview-id="preview-1"/);
+  assert.match(page, /Stop preview on port 5173/);
+  assert.match(page, /recover:true/);
   assert.match(page, /\.status\.loading::before/);
 });
 
@@ -82,6 +86,8 @@ test("preview page provides a side-by-side before and independently verified aft
   assert.match(page, /title="After implementation"/);
   assert.match(page, /FEATURE SPOTLIGHT/);
   assert.match(page, /Referral status/);
+  assert.match(page, /class="stop" data-preview-id="before" disabled/);
+  assert.match(page, /Preview management requires a workspace contributor role\./);
   assert.match(
     page,
     /http:\/\/127\.0\.0\.1:3457\/\?adx-feature=referral-status/,

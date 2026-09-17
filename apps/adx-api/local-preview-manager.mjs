@@ -144,6 +144,8 @@ export class LocalPreviewManager {
           `com.adx.preview.profile=${profile.id}`,
           "--label",
           `com.adx.preview.candidate=${candidateDigest}`,
+          "--label",
+          `com.adx.preview.change-case=${changeCaseId}`,
           ...registryArgument,
           ...profileBuildArguments,
           ...npmrcSecretArgument,
@@ -173,6 +175,8 @@ export class LocalPreviewManager {
           `com.adx.preview.profile=${profile.id}`,
           "--label",
           `com.adx.preview.candidate=${candidateDigest}`,
+          "--label",
+          `com.adx.preview.change-case=${changeCaseId}`,
           "--publish",
           `127.0.0.1:${port}:${profile.containerPort}`,
           image,
@@ -220,6 +224,34 @@ export class LocalPreviewManager {
     this.previews.delete(id);
     writePreviewState(this.statePath, this.previews);
     return { accepted: true, previewId: id, status: "STOPPED" };
+  }
+
+  async stopByHostPort(hostPort) {
+    if (!Number.isInteger(hostPort) || hostPort < 1 || hostPort > 65_535)
+      throw new ChangeCaseError(
+        "LOCAL_PREVIEW_PORT_INVALID",
+        "The registered local preview port is invalid.",
+      );
+    const tracked = this.list().filter((preview) => preview.hostPort === hostPort);
+    if (tracked.length) {
+      for (const preview of tracked) await this.stop(preview.id);
+      return { accepted: true, status: "STOPPED", previewIds: tracked.map((preview) => preview.id) };
+    }
+    // Recovery for a container that outlived its local metadata (for example,
+    // after an API restart or a cleared temporary directory). Limit discovery
+    // to ADX-labelled containers published on this exact registered port.
+    const output = await this.runCommand(
+      ["docker", "ps", "--filter", `label=${previewLabel}=true`, "--format", "{{.Names}}\t{{.Ports}}"],
+      { timeoutMs: 30_000 },
+    );
+    const containerNames = String(output)
+      .split("\n")
+      .map((line) => line.trim().split("\t"))
+      .filter(([name, ports]) => name && ports?.includes(`:${hostPort}->`))
+      .map(([name]) => name);
+    for (const containerName of containerNames)
+      await this.runCommand(["docker", "rm", "--force", containerName], { timeoutMs: 30_000 });
+    return { accepted: true, status: containerNames.length ? "STOPPED" : "NOT_FOUND", previewIds: containerNames };
   }
 }
 
