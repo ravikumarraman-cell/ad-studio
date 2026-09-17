@@ -66,6 +66,42 @@ test("materializer returns a focused anchor repair for a destructive full-file r
   await rm(root, { recursive: true, force: true });
 });
 
+test("materializer normalizes a standalone new test emitted as an anchored patch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-materializer-test-"));
+  const path = "backend/inventory/lambda/sbl/sbl_account_inactive_daily/test_funding_tooling_operation_guard.py";
+  const materializer = createModelPatchMaterializer({ maxAnchoredOldTextBytes: 1024, patchResponseError });
+
+  const [patch] = await materializer.materializeValidatedPatches(root, [{
+    path,
+    content: null,
+    replacements: [{ oldText: "def test_guard():", newText: "def test_guard():\n    assert True" }],
+  }], { finishReason: "stop" });
+  assert.equal(patch.content, "def test_guard():\n    assert True\n");
+  assert.deepEqual(patch.replacements, []);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("materializer still rejects an anchored patch for a new implementation file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "adx-materializer-test-"));
+  const path = "backend/inventory/lambda/sbl/sbl_account_inactive_daily/handler.py";
+  const materializer = createModelPatchMaterializer({ maxAnchoredOldTextBytes: 1024, patchResponseError });
+
+  await assert.rejects(
+    materializer.materializeValidatedPatches(root, [{
+      path,
+      content: null,
+      replacements: [{ oldText: "def handler():", newText: "def handler():\n    return {}" }],
+    }], { finishReason: "stop" }),
+    (error) => {
+      assert.equal(error.details.responseIssue, "PATCH_ANCHOR_TARGET_MISSING");
+      assert.deepEqual(error.details.requiredResponsePatchPaths, [path]);
+      assert.deepEqual(error.details.newFilePatchRepair, { path });
+      return true;
+    },
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
 test("materializer permits a whole replacement only for a single-purpose test file", async () => {
   const root = await mkdtemp(join(tmpdir(), "adx-materializer-test-"));
   const path = "backend/inventory/tests/test_funding_owner.py";

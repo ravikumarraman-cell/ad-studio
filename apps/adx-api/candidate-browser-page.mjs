@@ -21,14 +21,19 @@ export async function renderCandidateBrowserPage({ candidateRoot, sourceRoot, ba
   if (!files.length) return unavailablePage('The server-configured generated candidate contains no browsable files.')
   const selectedPath = normalizePath(requestedPath)
   const selected = selectedPath ? await readCandidateFile(root, selectedPath) : null
-  const fileLinks = files.map((path) => `<li><a href="${escapeHtml(candidateUrl(baseUrl, path))}"><code>${escapeHtml(path)}</code></a></li>`).join('')
+  const source = await realpath(sourceRoot).catch(() => null)
+  const generatedFiles = await changedCandidateFiles({ candidateRoot: root, sourceRoot: source, files })
+  const generatedFileTree = renderFileTree(generatedFiles, baseUrl)
+  const fileSummary = generatedFiles.length
+    ? `${generatedFiles.length} changed file${generatedFiles.length === 1 ? '' : 's'} · ${generatedFiles.filter(({ kind }) => kind === 'new').length} new · ${generatedFiles.filter(({ kind }) => kind === 'modified').length} modified`
+    : source ? 'No files differ from the source baseline.' : 'Source baseline unavailable; changed-file filtering is unavailable.'
   const preview = selected ? `<section class="preview"><p class="eyebrow">READ-ONLY FILE</p><h2><code>${escapeHtml(selected.path)}</code></h2><pre>${escapeHtml(selected.content)}</pre>${selected.truncated ? '<p class="muted">Preview truncated at 64 KiB.</p>' : ''}</section>` : `<section class="preview"><p class="muted">Select a file to inspect its retained candidate content.</p></section>`
   const comparisonWorkspace = await createComparisonWorkspace(sourceRoot, root)
   const newWindowLink = comparisonWorkspace
     ? `<a class="editor-action" href="${escapeHtml(vsCodeNewWindowFolderUrl(comparisonWorkspace))}">Compare source and candidate in separate VS Code window</a>`
     : ''
   const nextStep = `${newWindowLink}${verificationUrl ? `<a class="verification-action" href="${escapeHtml(verificationUrl)}">Next: run independent verification</a>` : ''}`
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Generated Candidate</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:1180px;margin:auto;padding:34px 20px 56px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:8px;padding:22px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{margin:0 0 6px;color:#52657f;font-size:.75rem;font-weight:750;letter-spacing:.12em}h1,h2{margin:.2rem 0}h1{font-size:2rem}h2{font-size:1.1rem}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}.step{padding:11px;border:1px solid #dce3ee;background:#f8fafc;color:#52657f;font-size:.88rem}.step.active{border-color:#11519b;border-left:4px solid #11519b;background:#eef5fd;color:#172033;font-weight:700}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.editor-action,.verification-action{display:inline-block;padding:10px 13px;border-radius:6px;color:#fff;font-weight:700;text-decoration:none}.editor-action{background:#11519b}.verification-action{background:#0e684a}.next-help{margin:12px 0 0;color:#52657f}.layout{display:grid;grid-template-columns:minmax(240px,340px) minmax(0,1fr);gap:16px}.files{max-height:65vh;overflow:auto}.files ul{margin:0;padding-left:18px}.files li{margin:5px 0}.files a{color:#11519b;font-weight:650;text-decoration:none}.preview{min-width:0;margin:0}pre{margin:14px 0 0;padding:14px;overflow:auto;background:#10243a;color:#eaf2fb;border-radius:6px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}.muted{color:#52657f}code{overflow-wrap:anywhere}@media(max-width:760px){main{padding:24px 14px}.steps{grid-template-columns:1fr}.layout{grid-template-columns:1fr}.files{max-height:32vh}}</style></head><body><main><header><p class="eyebrow">RETAINED IMPLEMENTATION CANDIDATE</p><h1>Review generated code</h1><div class="steps" aria-label="Delivery workflow"><div class="step active">1. Review or edit candidate</div><div class="step">2. Run independent verification</div><div class="step">3. Prepare preview plan and draft PR</div></div><p class="muted">Inspect the generated files below. Use VS Code to make any needed correction, save it, then run fresh verification for the exact saved contents.</p><div class="actions"><a class="editor-action" href="${escapeHtml(vsCodeNewWindowFolderUrl(root))}">Open in separate VS Code window</a>${nextStep}</div><p class="next-help">${verificationUrl ? 'When your review is complete, continue to independent verification. Delivery actions remain blocked until that verification passes.' : 'Independent verification is not available from this candidate view.'}</p></header><div class="layout"><section class="files"><p class="eyebrow">FILES</p><ul>${fileLinks}</ul></section>${preview}</div></main></body></html>`
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADX Generated Candidate</title><style>:root{color:#172033;background:#f6f8fb;font:16px/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}body{margin:0}main{max-width:1180px;margin:auto;padding:34px 20px 56px}header,section{background:#fff;border:1px solid #dce3ee;border-radius:8px;padding:22px;margin:16px 0;box-shadow:0 2px 9px #14213d0a}.eyebrow{margin:0 0 6px;color:#52657f;font-size:.75rem;font-weight:750;letter-spacing:.12em}h1,h2{margin:.2rem 0}h1{font-size:2rem}h2{font-size:1.1rem}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:18px}.step{padding:11px;border:1px solid #dce3ee;background:#f8fafc;color:#52657f;font-size:.88rem}.step.active{border-color:#11519b;border-left:4px solid #11519b;background:#eef5fd;color:#172033;font-weight:700}.actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:16px}.editor-action,.verification-action{display:inline-block;padding:10px 13px;border-radius:6px;color:#fff;font-weight:700;text-decoration:none}.editor-action{background:#11519b}.verification-action{background:#0e684a}.next-help{margin:12px 0 0;color:#52657f}.layout{display:grid;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:16px}.files{max-height:65vh;overflow:auto}.files ul{margin:0;padding-left:17px;list-style:none}.files li{margin:5px 0}.files a{color:#11519b;font-weight:650;text-decoration:none}.file-tree{padding:4px 0}.file-tree details{margin:4px 0}.file-tree summary{cursor:pointer;color:#38506a;font-weight:700}.file-tree summary::marker{color:#11519b}.file-leaf{display:flex;align-items:center;gap:7px;min-width:0}.file-leaf a{overflow-wrap:anywhere}.file-kind{flex:0 0 auto;border-radius:999px;padding:2px 6px;background:#eaf2fb;color:#11519b;font-size:.62rem;font-weight:800;letter-spacing:.05em}.file-kind.new{background:#e6f5ee;color:#0e684a}.file-summary{margin:0 0 14px;color:#52657f;font-size:.84rem}.empty-tree{margin:0;color:#52657f;font-size:.9rem}.preview{min-width:0;margin:0}pre{margin:14px 0 0;padding:14px;overflow:auto;background:#10243a;color:#eaf2fb;border-radius:6px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre}.muted{color:#52657f}code{overflow-wrap:anywhere}@media(max-width:760px){main{padding:24px 14px}.steps{grid-template-columns:1fr}.layout{grid-template-columns:1fr}.files{max-height:32vh}}</style></head><body><main><header><p class="eyebrow">RETAINED IMPLEMENTATION CANDIDATE</p><h1>Review generated code</h1><div class="steps" aria-label="Delivery workflow"><div class="step active">1. Review or edit candidate</div><div class="step">2. Run independent verification</div><div class="step">3. Prepare preview plan and draft PR</div></div><p class="muted">Review the generated change set below. It contains only files that differ from the source baseline, including any saved edits to this retained candidate.</p><div class="actions"><a class="editor-action" href="${escapeHtml(vsCodeNewWindowFolderUrl(root))}">Open in separate VS Code window</a>${nextStep}</div><p class="next-help">${verificationUrl ? 'When your review is complete, continue to independent verification. Delivery actions remain blocked until that verification passes.' : 'Independent verification is not available from this candidate view.'}</p></header><div class="layout"><section class="files"><p class="eyebrow">GENERATED CHANGE SET</p><h2>Files created or changed</h2><p class="file-summary">${escapeHtml(fileSummary)}</p>${generatedFileTree}</section>${preview}</div></main></body></html>`
 }
 
 function unavailablePage(message) { return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ADX Generated Candidate</title></head><body><main><h1>Generated candidate unavailable</h1><p>${escapeHtml(message)}</p></main></body></html>` }
@@ -46,6 +51,39 @@ async function listFiles(root) {
   }
   await visit(root)
   return files.sort()
+}
+
+async function changedCandidateFiles({ candidateRoot, sourceRoot, files }) {
+  if (!sourceRoot) return []
+  const changed = []
+  for (const path of files) {
+    const candidate = await readFile(join(candidateRoot, path)).catch(() => null)
+    const baseline = await readFile(join(sourceRoot, path)).catch(() => null)
+    if (baseline === null) changed.push({ path, kind: 'new' })
+    else if (!candidate.equals(baseline)) changed.push({ path, kind: 'modified' })
+  }
+  return changed
+}
+
+function renderFileTree(files, baseUrl) {
+  if (!files.length) return '<p class="empty-tree">No generated file changes are available to display.</p>'
+  const root = { folders: new Map(), files: [] }
+  for (const file of files) {
+    const parts = file.path.split('/')
+    const name = parts.pop()
+    let node = root
+    for (const part of parts) {
+      if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [] })
+      node = node.folders.get(part)
+    }
+    node.files.push({ ...file, name })
+  }
+  const renderNode = (node) => {
+    const folders = [...node.folders.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([name, child]) => `<li><details open><summary>${escapeHtml(name)}</summary>${renderNode(child)}</details></li>`).join('')
+    const leaves = node.files.sort((left, right) => left.name.localeCompare(right.name)).map(({ path, name, kind }) => `<li class="file-leaf"><span class="file-kind ${kind}">${kind === 'new' ? 'NEW' : 'MODIFIED'}</span><a href="${escapeHtml(candidateUrl(baseUrl, path))}"><code>${escapeHtml(name)}</code></a></li>`).join('')
+    return `<ul>${folders}${leaves}</ul>`
+  }
+  return `<nav class="file-tree" aria-label="Generated files">${renderNode(root)}</nav>`
 }
 
 async function readCandidateFile(root, path) {

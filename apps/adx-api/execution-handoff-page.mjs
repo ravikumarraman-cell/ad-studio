@@ -22,7 +22,7 @@ function executionBlockerMessage(changeCase) {
     case 'DESIGN_REVIEW':
       return 'Approve the retained design package to move the case into READY_FOR_EXECUTION.';
     case 'AWAITING_VERIFICATION':
-      return 'This case already left execution and is waiting for Gate D verification.';
+      return 'A corrective bounded implementation can replace the retained candidate before Gate D verification.';
     case 'READY_FOR_DELIVERY':
     case 'READY_FOR_RELEASE':
     case 'RELEASED':
@@ -94,7 +94,8 @@ export function renderExecutionHandoffPage(changeCase, options) {
     execution = null,
   } = options;
 
-  const ready = changeCase.state === 'READY_FOR_EXECUTION';
+  const correctiveRun = changeCase.state === 'AWAITING_VERIFICATION';
+  const ready = changeCase.state === 'READY_FOR_EXECUTION' || correctiveRun;
   const enabled = providers.filter((provider) => provider.enabled);
   const latestRun = Array.isArray(execution?.runs) ? execution.runs[0] ?? null : null;
   const latestRunStatus = String(latestRun?.status ?? '').toUpperCase();
@@ -126,7 +127,10 @@ export function renderExecutionHandoffPage(changeCase, options) {
     .map((template, index) => `<option value="${escapeHtml(template.id)}" title="${escapeHtml(template.guidance ?? '')}"${index ? '' : ' selected'}>${escapeHtml(template.label)} - ${escapeHtml(template.description)} ${escapeHtml(template.guidance ?? '')}</option>`)
     .join('');
 
-  const blockedNotice = submitBlockedReason ? `<p class="field-help error">Submission disabled: ${escapeHtml(submitBlockedReason)}</p>` : '';
+  const correctiveNotice = correctiveRun
+    ? '<p class="field-help">Corrective implementation: this run replaces the retained candidate before independent verification. Use it to complete missing reachable UI and backend behavior.</p>'
+    : '';
+  const blockedNotice = `${correctiveNotice}${submitBlockedReason ? `<p class="field-help error">Submission disabled: ${escapeHtml(submitBlockedReason)}</p>` : ''}`;
   const roleNotice = ready && !canSubmit
     ? `<section class="notice"><strong>Your current workspace role: <strong>${escapeHtml(signedInRoles[0] ?? 'unknown')}</strong></strong><p>The contributor-capable roles are <strong>contributor</strong> or <strong>workspace_admin</strong>; the <strong>${escapeHtml(signedInRoles[0] ?? 'unknown')}</strong> role remains read-and-review only.</p></section>`
     : '';

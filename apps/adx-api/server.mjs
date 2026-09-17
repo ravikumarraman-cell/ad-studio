@@ -732,7 +732,7 @@ function codingAgentProvidersForUi() {
     return [];
   return [{ ...configuredCoding.provider, enabled: true }];
 }
-function executionTask(changeCase, governance, templateId, verificationIntensity) {
+function executionTask(changeCase, governance, templateId, verificationIntensity, skipExecutableValidation = false) {
   const intent = governance?.intent;
   if (!intent?.outcome || !intent?.acceptanceCriteria)
     throw new ChangeCaseError(
@@ -785,6 +785,9 @@ function executionTask(changeCase, governance, templateId, verificationIntensity
     }),
     allowedCommands: [configuredCoding?.validationCommand ?? "node --test"],
     verificationIntensity: normalizedVerificationIntensity,
+    // Explicitly opt-in, visible demo control. This never changes the normal
+    // validation command policy for a regular execution.
+    skipExecutableValidation: skipExecutableValidation === true,
     template: template
       ? { id: template.id, version: template.version, digest: template.digest }
       : null,

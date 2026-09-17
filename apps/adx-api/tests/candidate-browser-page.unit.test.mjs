@@ -10,13 +10,15 @@ function vsCodeOpenCommands(page) {
     .map((match) => JSON.parse(decodeURIComponent(match[1].split('?')[1])))
 }
 
-test('candidate browser lists retained source while excluding sensitive files', async () => {
+test('candidate browser shows an empty generated change tree when candidate equals the source baseline', async () => {
   const root = await mkdtemp(join(tmpdir(), 'adx-candidate-browser-'))
   try {
     await writeFile(join(root, 'index.mjs'), 'export const answer = 42\n')
     await writeFile(join(root, '.env'), 'SECRET=value\n')
     const page = await renderCandidateBrowserPage({ candidateRoot: root, sourceRoot: root, baseUrl: '/generated-candidate', verificationUrl: '/evidence-review' })
-    assert.match(page, /index\.mjs/)
+    assert.match(page, /GENERATED CHANGE SET/)
+    assert.match(page, /No files differ from the source baseline/)
+    assert.doesNotMatch(page, /<code>index\.mjs<\/code>/)
     assert.match(page, /Review generated code/)
     assert.doesNotMatch(page, /SECRET=value/)
     assert.doesNotMatch(page, /\.env/)
@@ -44,6 +46,34 @@ test('candidate browser lists retained source while excluding sensitive files', 
     await unlink(folderUri.path)
   } finally {
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('candidate browser renders only generated changes as a navigable folder tree', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'adx-candidate-browser-'))
+  const source = join(parent, 'source')
+  const candidate = join(parent, 'candidate')
+  try {
+    await mkdir(join(source, 'frontend', 'src'), { recursive: true })
+    await mkdir(join(candidate, 'frontend', 'src'), { recursive: true })
+    await writeFile(join(source, 'frontend', 'src', 'unchanged.js'), 'export const unchanged = true\n')
+    await writeFile(join(source, 'frontend', 'src', 'modified.js'), 'export const state = "before"\n')
+    await writeFile(join(candidate, 'frontend', 'src', 'unchanged.js'), 'export const unchanged = true\n')
+    await writeFile(join(candidate, 'frontend', 'src', 'modified.js'), 'export const state = "after"\n')
+    await writeFile(join(candidate, 'frontend', 'src', 'created.test.js'), 'test("created", () => {})\n')
+
+    const page = await renderCandidateBrowserPage({ candidateRoot: candidate, sourceRoot: source, baseUrl: '/generated-candidate' })
+
+    assert.match(page, /2 changed files · 1 new · 1 modified/)
+    assert.match(page, /<summary>frontend<\/summary>/)
+    assert.match(page, /<summary>src<\/summary>/)
+    assert.match(page, /MODIFIED/)
+    assert.match(page, /NEW/)
+    assert.match(page, /modified\.js/)
+    assert.match(page, /created\.test\.js/)
+    assert.doesNotMatch(page, /unchanged\.js/)
+  } finally {
+    await rm(parent, { recursive: true, force: true })
   }
 })
 

@@ -27,6 +27,12 @@ export function createModelPatchMaterializer({ maxAnchoredOldTextBytes, patchRes
       const existingContent = content
       if (patch.content !== null) {
         if (content !== null && isDestructiveReplacement(content, patch.content)) {
+          const testRepair = behavioralTestFileRepair(patch.path)
+          if (testRepair) throw patchResponseError(
+            'PATCH_TEST_REWRITE_REQUIRES_NEW_FILE', `Replacement for ${patch.path} would discard unrelated test behavior.`, completion,
+            `Preserve ${patch.path}. Emit complete replacement content for new focused behavioral test ${testRepair.path}; do not rewrite the existing test file.`,
+            { requiredResponsePatchPaths: [testRepair.path], newFilePatchRepair: { ...testRepair, rejectedPath: patch.path } },
+          )
           const repair = broadAnchorRepair(patch.path, content, { oldText: content, newText: patch.content }, maxAnchoredOldTextBytes)
           throw patchResponseError(
             'PATCH_DESTRUCTIVE_REWRITE', `Replacement for ${patch.path} would remove unrelated existing behavior.`, completion,
@@ -37,10 +43,18 @@ export function createModelPatchMaterializer({ maxAnchoredOldTextBytes, patchRes
         materialized.push(patch)
         continue
       }
-      if (content === null) throw patchResponseError(
-        'PATCH_ANCHOR_TARGET_MISSING', `Anchored replacement target ${patch.path} does not exist.`, completion,
-        `Emit complete replacement content for new file ${patch.path}; anchored replacements are only valid for existing files.`,
-      )
+      if (content === null) {
+        const recoveredNewTest = standaloneNewTestPatch(patch)
+        if (recoveredNewTest) {
+          materialized.push(recoveredNewTest)
+          continue
+        }
+        throw patchResponseError(
+          'PATCH_ANCHOR_TARGET_MISSING', `Anchored replacement target ${patch.path} does not exist.`, completion,
+          `Emit complete replacement content for new file ${patch.path}; anchored replacements are only valid for existing files.`,
+          { requiredResponsePatchPaths: [patch.path], newFilePatchRepair: { path: patch.path } },
+        )
+      }
       const replacementPlan = []
       for (const replacement of patch.replacements) {
         const minimized = minimizeAnchoredReplacement(content, replacement) ??
@@ -128,6 +142,12 @@ export function createModelPatchMaterializer({ maxAnchoredOldTextBytes, patchRes
   return Object.freeze({ mergeStagedPatchResponse, materializeValidatedPatches, writeMaterializedPatch })
 }
 
+function behavioralTestFileRepair(path) {
+  if (!/(?:^|\/)(?:test[^/]*\.py|[^/]+(?:\.test|\.spec)\.[^/]+)$/i.test(path)) return null
+  if (/\.py$/i.test(path)) return { path: path.replace(/\.py$/i, '_behavior.py') }
+  return { path: path.replace(/(\.(?:test|spec))(?=\.)/i, '.behavior$1') }
+}
+
 function isDestructiveReplacement(existingContent, replacementContent) {
   const existingBytes = Buffer.byteLength(existingContent)
   if (existingBytes < 1024) return false
@@ -146,8 +166,29 @@ function isDestructiveReplacement(existingContent, replacementContent) {
   return retained / sourceLines.length < 0.75
 }
 
+function standaloneNewTestPatch(patch) {
+  if (!isTestFile(patch.path) || patch.replacements.length !== 1) return null
+  const content = String(patch.replacements[0]?.newText ?? '')
+  if (!looksLikeStandaloneTestModule(patch.path, content)) return null
+  return Object.freeze({
+    path: patch.path,
+    content: content.endsWith('\n') ? content : `${content}\n`,
+    replacements: Object.freeze([]),
+  })
+}
+
+function isTestFile(path) {
+  return /(?:^|\/)(?:test_[^/]+\.py|[^/]+_test\.py|[^/]+\.(?:test|spec)\.[^/]+)$/i.test(path)
+}
+
+function looksLikeStandaloneTestModule(path, content) {
+  if (!content.trim() || /(?:\[\.\.\.|omitted unchanged lines)/i.test(content)) return false
+  if (/\.py$/i.test(path)) return /^(?:async\s+def|def)\s+test_\w+/m.test(content)
+  return /\b(?:it|test)\s*\(/.test(content)
+}
+
 function singlePurposeTestReplacement(path, existingContent, replacement) {
-  if (!/(?:^|\/)(?:test_[^/]+\.py|[^/]+_test\.py|[^/]+\.(?:test|spec)\.[^/]+)$/i.test(path)) return null
+  if (!isTestFile(path)) return null
   const oldText = String(replacement?.oldText ?? '')
   const newText = String(replacement?.newText ?? '')
   if (!oldText || !newText || !existingContent.includes(oldText) || Buffer.byteLength(newText) > Buffer.byteLength(existingContent) * 2) return null

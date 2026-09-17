@@ -200,6 +200,11 @@ export class ModelPatchBroker {
         "The execution candidate must be a separate server-configured checkout path.",
       );
     let normalizedTask = normalizeTask(task, this.allowedValidationCommands);
+    // Demo-only runs show generation and candidate retention without treating
+    // owner-test evidence as a production acceptance assertion. Structural
+    // safety checks (JSON, paths, anchors, and rewrite preservation) remain.
+    if (normalizedTask.skipExecutableValidation)
+      normalizedTask = Object.freeze({ ...normalizedTask, relaxOwnerTestEvidence: true });
     const writePaths = normalizeWritePaths(repository?.writePaths);
     await reportProgress(onProgress, "CONTEXT_COLLECTION");
     const contextStartedAt = Date.now();
@@ -651,6 +656,36 @@ export class ModelPatchBroker {
         if (candidateBlocked) break;
         completion = combinedCompletion(completions);
 
+        if (normalizedTask.skipExecutableValidation) {
+          await reportProgress(onProgress, "VALIDATION", {
+            activity: "DEMO_EXECUTABLE_VALIDATION_SKIPPED",
+            operationIndex: validationAttempt,
+            operationCount: maxCandidateValidationAttempts,
+            commandCount: 0,
+            demoOnly: true,
+          });
+          validation = Object.freeze({
+            code: 0,
+            signal: null,
+            timedOut: false,
+            outputBytes: 0,
+            outputDigest: "sha256:demo-executable-validation-skipped",
+            outputExcerpt: "Executable validation was explicitly skipped for this demo run.",
+            validationCommand: "demo executable validation skip",
+            validationCategory: "DEMO_SKIPPED",
+          });
+          await reportProgress(onProgress, "VALIDATION_RESULT", {
+            activity: "DEMO_EXECUTABLE_VALIDATION_SKIPPED",
+            operationIndex: validationAttempt,
+            operationCount: maxCandidateValidationAttempts,
+            durationMs: 0,
+            exitCode: 0,
+            timedOut: false,
+            demoOnly: true,
+          });
+          break;
+        }
+
         const validationStartedAt = Date.now();
         await reportProgress(onProgress, "VALIDATION", {
           activity: "EXECUTABLE_VALIDATION",
@@ -1067,7 +1102,7 @@ function repairIntegrationPriorityPaths(contextCatalog, task, evidencePaths) {
       .sort((left, right) => left.localeCompare(right))
       .slice(0, 2)
     : [];
-  const lambdaOwnerDirectories = implementationOwnerPaths(contextCatalog, task)
+  const lambdaOwnerDirectories = [...implementationOwnerPaths(contextCatalog, task)]
     .filter((path) => /(?:^|\/)lambda\/.+\/handler\.py$/i.test(path))
     .map((path) => `${dirname(path)}/`);
   const lambdaOwnerTests = lambdaOwnerDirectories.length
@@ -1178,6 +1213,48 @@ async function verifyDeterministicCandidateSemantics({ source, candidate, task, 
       break;
     }
 
+    const accountDiscoveryPaths = coverage.implementationPaths.filter((path) =>
+      /(?:^|\/)tenant_workflow_rules\/account_discovery\.py$/i.test(path),
+    );
+    for (const path of accountDiscoveryPaths) {
+      const content = await readFile(join(candidate, path), "utf8").catch(() => "");
+      if (!hasTenantShapedFundingValidationCall(content)) continue;
+      findings.push(Object.freeze({
+        storyKey: story.key,
+        code: "EXTRACTED_ACCOUNT_DATA_NOT_USED_FOR_VALIDATION",
+        message: "Account discovery calls funding validation with tenant-shaped input instead of extracted account records or extracted AIDE IDs.",
+        evidencePaths: Object.freeze([path]),
+      }));
+      break;
+    }
+
+    const storyText = `${story.title ?? ""} ${story.narrative ?? ""} ${JSON.stringify(story.scenarios ?? [])}`;
+    if (/\b(?:report|reporting)\b/i.test(storyText)) {
+      const reportOwnerPaths = coverage.implementationPaths.filter((path) =>
+        /(?:^|\/)api\/routes?\/.+\/reports?\.(?:py|m?js|ts)$/i.test(path),
+      );
+      if (!reportOwnerPaths.length) {
+        findings.push(Object.freeze({
+          storyKey: story.key,
+          code: "REPORT_OWNER_COVERAGE_MISSING",
+          message: "A reporting story does not cite a patched report route or report owner in its implementation coverage.",
+          evidencePaths: Object.freeze([...coverage.implementationPaths]),
+        }));
+      } else {
+        const reportTestInvoked = await Promise.all((coverage.testPaths ?? []).map(async (path) => {
+          const content = await readFile(join(candidate, path), "utf8").catch(() => "");
+          return /\b(?:get_\w*report|reports_blueprint)\b|\/dashboard\/funding|client\.(?:get|request)\s*\(/i.test(content);
+        }));
+        if (!reportTestInvoked.some(Boolean))
+          findings.push(Object.freeze({
+            storyKey: story.key,
+            code: "REPORT_OWNER_TEST_NOT_BEHAVIORAL",
+            message: "A reporting story must invoke its public report route or handler; a UI-only status-component test is not report evidence.",
+            evidencePaths: Object.freeze([...reportOwnerPaths, ...(coverage.testPaths ?? [])]),
+          }));
+      }
+    }
+
     const sourceInspectionTests = [];
     for (const path of coverage.testPaths) {
       const content = await readFile(join(candidate, path), "utf8").catch(() => "");
@@ -1215,6 +1292,10 @@ function hasPythonFunctionWithUnboundTenantReference(content) {
     ) return true;
   }
   return false;
+}
+
+function hasTenantShapedFundingValidationCall(content) {
+  return /\bvalidate_tenant_funding\s*\(\s*(?:tenants?|tenant_records?)\b/.test(content);
 }
 
 function verifierIssueForFindings(findings) {
@@ -1286,6 +1367,8 @@ function normalizeTask(task, approvedCommands) {
     objective: task.objective.trim(),
     changeDigest: task.changeDigest,
     allowedCommands: Object.freeze(allowedCommands),
+    skipExecutableValidation: task.skipExecutableValidation === true,
+    relaxOwnerTestEvidence: false,
     stories: normalizeTaskStories(task.stories),
     mandatoryOwnerPaths: normalizeMandatoryOwnerPaths(task.mandatoryOwnerPaths),
   });
@@ -1736,6 +1819,7 @@ function buildPatchPrompt(
   previousOwnerTestRepair = null,
   previousAuthoritativeAdapterRepair = null,
   previousBroadAnchorRepair = null,
+  previousNewFilePatchRepair = null,
   previousCoveragePathRepair = null,
   previousValidationIssue = null,
   acceptedStoryCoverage = [],
@@ -1759,11 +1843,13 @@ function buildPatchPrompt(
     provisionalExternalContracts: task.provisionalExternalContracts ?? [],
     acceptedStoryCoverage,
     requiredResponsePatchPaths: task.requiredResponsePatchPaths ?? [],
+    lambdaOwnerTestContracts: task.lambdaOwnerTestContracts ?? [],
     requiredOwnerContext: ownerContext,
     ownerCorrection,
     repairDeltaStoryKeys,
     focusedRepairPaths,
     validation: task.allowedCommands,
+    demoOnly: task.relaxOwnerTestEvidence === true,
     responseSchema: {
       schema: "adx-model-patch-response-v1",
       patches: [
@@ -1794,6 +1880,7 @@ function buildPatchPrompt(
     ownerTestRepair: previousOwnerTestRepair,
     authoritativeAdapterRepair: previousAuthoritativeAdapterRepair,
     broadAnchorRepair: previousBroadAnchorRepair,
+    newFilePatchRepair: previousNewFilePatchRepair,
     coveragePathRepair: previousCoveragePathRepair,
     ownerTestRecovery: ownerTestOnlyRecovery
       ? {
@@ -1826,13 +1913,18 @@ function buildPatchPrompt(
       `Emit at most ${maxPatches} patches. Combine every change to a shared file into one patch and cite that same path from each applicable storyCoverage entry.`,
       ...(ownerCorrection.length ? [
         "This is an owner-only correction. Retain prior staged patches; patch and cite every exact ownerCorrection.suppliedCandidatePaths target. Do not substitute a new component, generic helper, or a different similarly named file.",
-        "For each ownerCorrection entry, its storyCoverage implementationPaths must contain one of its suppliedCandidatePaths exactly. Return the owner patch and an owner-level behavioral test before any optional work.",
+        task.relaxOwnerTestEvidence
+          ? "For each ownerCorrection entry, its storyCoverage implementationPaths must contain one of its suppliedCandidatePaths exactly. Demo-only evidence is relaxed, but the owner patch remains required."
+          : "For each ownerCorrection entry, its storyCoverage implementationPaths must contain one of its suppliedCandidatePaths exactly. Return the owner patch and an owner-level behavioral test before any optional work.",
       ] : []),
       ...(repairDeltaStoryKeys.length ? [
         `Repair delta required for: ${repairDeltaStoryKeys.join(", ")}. For each listed story, emit at least one new implementation or owner-level test patch that closes its verifier finding. Previously accepted paths may be cited as supporting coverage only; they cannot be the entire repair delta.`,
       ] : []),
       ...(["PATCH_REPLACEMENT_TOO_BROAD", "PATCH_DESTRUCTIVE_REWRITE"].includes(previousResponseIssue) ? [
         "This is a narrow anchor recovery. Return exactly one patch: broadAnchorRepair.path. Staged patches are retained automatically; do not re-emit them. Set content:null and emit two or more independent exact replacements. Every oldText must be copied from broadAnchorRepair.currentExcerpt, be unique before application, and be no longer than broadAnchorRepair.maxOldTextBytes. Never use a complete function, test body, component body, class, or file as oldText; use a small unchanged import, setup statement, API call, or assertion boundary around one edit.",
+      ] : []),
+      ...(["PATCH_ANCHOR_TARGET_MISSING", "PATCH_TEST_REWRITE_REQUIRES_NEW_FILE"].includes(previousResponseIssue) ? [
+        "This is a new-file format correction. Return exactly one patch: newFilePatchRepair.path. That path does not exist in the candidate, so set content to its complete file text and replacements to []. Do not use content:null or oldText/newText anchors. Retain all staged patches automatically and do not re-emit them.",
       ] : []),
       ...(previousResponseIssue === "PATCH_ANCHOR_NOT_UNIQUE" ? [
         "This is a stale or non-unique anchor correction. Do not reuse anchorRepair.rejectedOldText. Patch anchorRepair.path in this response. Copy one exact, contiguous, multi-line oldText from anchorRepair.currentExcerpt; it must occur exactly once before this response is applied. Do not make one replacement depend on text changed by another replacement in the same patch. If multiple changes touch one region, combine them into one small anchor.",
@@ -1843,6 +1935,9 @@ function buildPatchPrompt(
       ...(previousOwnerTestRepair ? [
         "This is a test-only owner recovery. Return exactly one patch: ownerTestRepair.testPath. Staged production patches are retained and will be merged automatically; do not re-emit or modify any production owner, adapter, helper, or unrelated test.",
         "The one patch must cite ownerTestRepair.testPath in the matching storyCoverage.testPaths. Implement every ownerTestRepair.requiredStatements in executable test code. Import ownerTestRepair.ownerPath, invoke ownerTestRepair.publicEntryPoint using ownerTestRepair.callerInput, and assert ownerTestRepair.observable. Mock only external boundaries; never mock the owner or call a detached helper instead.",
+        ...(previousOwnerTestRepair.publicEntryPoint === "lambda_handler" ? [
+          "For this Lambda recovery, the test must define a caller-shaped event variable, assign result = <owner>.lambda_handler(event, context), then assert a response field or a persisted/blocked/delivered observable. Do not call any workflow helper, and do not mock, patch, or spy on lambda_handler itself.",
+        ] : []),
         "Because ownerTestRepair.testPath already exists, set content:null and use one or more exact, unique, minimal anchors copied from its supplied current excerpt. Replace the detached test body, not the whole file.",
       ] : []),
       ...(previousAuthoritativeAdapterRepair ? [
@@ -1856,7 +1951,11 @@ function buildPatchPrompt(
       ...(task.requiredResponsePatchPaths?.length ? [
         `Mandatory correction patch paths: ${task.requiredResponsePatchPaths.join(", ")}. This response is invalid unless patches contains every one of these exact paths. Do not substitute a different test file, cite an unpatched path, or spend a patch slot on optional work before these paths are emitted.`,
       ] : []),
+      ...((task.lambdaOwnerTestContracts ?? []).length ? [
+        "Lambda owner test contract: for every lambdaOwnerTestContracts entry, patch that exact testPath. Import or load ownerPath, invoke lambda_handler(event, context) with a caller-shaped event, do not mock lambda_handler, and assert its observable outcome. A helper-only test is invalid.",
+      ] : []),
       "Modify existing files only when they are supplied with writable:true. You may create a new file under an approved writable root when necessary, especially a domain-local test file. Files marked writable:false are read-only verification context and must never be included in patches.",
+      `Anchor budget for every existing file: each replacements[].oldText must be at most ${maxAnchoredOldTextBytes} UTF-8 bytes. Plan the edit as small, independent anchors before writing JSON: one import, hook, API call, JSX fragment, or assertion boundary per anchor. Never replace a complete function, component body, class, or file. If a change needs more than one location, emit two or more replacements in the same path patch.`,
       "Every supplied file is annotated existing:true. For an existing file, use minimal exact anchored replacements: set content to null and copy each oldText from one contiguous supplied excerpt so it occurs exactly once. Never return a partial snippet as complete file content.",
       "Hard patch-format rule: for every existing supplied file, content MUST be null and replacements MUST contain the minimal exact anchors. Do not use complete-file content for an existing file, even when fullContentSupplied:true. Complete-file content is reserved exclusively for newly created files.",
       "Default test-file policy: do not modify an existing test file unless its exact path is mandatory in requiredResponsePatchPaths or an ownerCorrection. Create one focused domain-local test file for new coverage instead. This avoids destructive rewrites and preserves unrelated regression coverage.",
@@ -1873,12 +1972,20 @@ function buildPatchPrompt(
       ] : [
         "Treat requiredOwnerContext as a binding implementation contract. For every entry with requiredInThisResponse:true, patch one exact suppliedCandidatePaths production owner and cite it in that story's implementationPaths. Entries with ownerDiscovery:NO_SUPPLIED_PRODUCTION_OWNER are not implementation targets: do not invent a similarly named helper, route, or sender; preserve the existing owner and let a later evidence-backed verifier finding identify it. Entries with requiredInThisResponse:false and acceptedPaths are already accepted and must not be regenerated unless the verifier finding directly requires changing them. One combined owner may satisfy multiple entries when the same supplied path is listed for them.",
       ]),
-      "Satisfy every requiredOwnerContext.acceptanceProof through production code and an owner-level behavioral test. Tests that only read source text, parse an AST, inspect symbols, or invoke an isolated helper are not acceptance evidence.",
+      ...(task.relaxOwnerTestEvidence ? [
+        "Demo-only evidence policy: owner-level behavioral-test proof is intentionally not required. Preserve all production-owner, patch-format, writable-path, and minimal-anchor requirements. Mark generated test coverage as demo-only; it is not production acceptance evidence.",
+      ] : [
+        "Satisfy every requiredOwnerContext.acceptanceProof through production code and an owner-level behavioral test. Tests that only read source text, parse an AST, inspect symbols, or invoke an isolated helper are not acceptance evidence.",
+      ]),
       "For every supplied story, include exactly one storyCoverage entry. On initial implementation, implementationPaths and testPaths must refer to files in this patch response. On repair, they may also cite paths in acceptedStoryCoverage, but every repaired story must still cite at least one path newly emitted in this response.",
-      "For a persisted-to-visible, follow-up, notification, or historical-report story, prove the complete production edge in one owner-level test: invoke the upstream public workflow/route/handler with caller-shaped input, then assert the downstream persisted read-model, action-owner, notification-owner, or rendered page outcome. Passing values as test props, directly calling a helper, or pre-seeding the downstream table is not data-flow evidence.",
+      ...(task.relaxOwnerTestEvidence ? [] : [
+        "For a persisted-to-visible, follow-up, notification, or historical-report story, prove the complete production edge in one owner-level test: invoke the upstream public workflow/route/handler with caller-shaped input, then assert the downstream persisted read-model, action-owner, notification-owner, or rendered page outcome. Passing values as test props, directly calling a helper, or pre-seeding the downstream table is not data-flow evidence.",
+      ]),
+      "When account discovery validates funding from extracted accounts, pass extracted account records or their extracted AIDE IDs to the funding adapter—never the original tenant list or a caller-supplied tenant funding status. The owner-level test must assert the adapter receives the extracted AIDE ID and that its decision is persisted.",
       "For onboarding visibility, patch the actual onboarding/workflow routed page identified by requiredOwnerContext, make it load the funding read model through its production client/route boundary, and render the returned decision. A tenant-details surface, leaf status component, or page-test import alone cannot substitute for that owner.",
       "For active-unfunded follow-up and AE Operations notification, patch the workflow handler that dispatches the tenant-action owner, the tenant-action handler that invokes the action writer, and the configured notification sender/recipient boundary. Test the workflow-to-action invocation and assert persisted action plus delivery request without mocking either owning handler.",
       "For historical funding reporting, persist the extracted-account decision into the same tenant/read-model fields consumed by the report route, restrict the report to its stated lifecycle scope, and test from extraction through the public report response rather than injecting report-table funding fields.",
+      "For every reporting story, implementationPaths must include the patched report route or report owner, and testPaths must invoke that public route/handler (or its registered client endpoint) and assert the reported historical record. A funding-status component test is supplemental UI evidence, never the report test.",
       "Each testPaths entry must be distinct from implementationPaths and use a recognizable test path: a test/tests/__tests__ directory, test_*.py, *_test.py, *.test.*, or *.spec.*.",
       "Create or extend a test beside the owning implementation or in its established domain test directory. Never repurpose an unrelated test suite merely to satisfy storyCoverage.",
       "Include the exact supplied story key in a test name or assertion message so final accumulated evidence can be verified after later story requests.",
@@ -2024,7 +2131,10 @@ function suppliedFrontendRoutedOwnerPaths(files) {
     .filter((file) => {
       if (!/(?:^|\/)frontend\/src\/(?:pages?|routes?)\/.+\.(?:jsx?|tsx?)$/i.test(file.path)) return false;
       const name = basename(file.path).replace(/\.(?:jsx?|tsx?)$/i, "");
-      return !/(?:funding.*status|status|card|panel|widget|component|view|display)$/i.test(name);
+      // Some repositories colocate leaf status components under pages. They
+      // are never a routed owner merely because of their directory. Keep the
+      // owner candidate list consistent with the response-time page filter.
+      return !/(?:funding.*status|onboarding.*funding.*status|status|card|panel|widget|component|view|display)$/i.test(name);
     })
     .map((file) => file.path);
 }
@@ -2035,6 +2145,7 @@ function rankOwnerCandidates(requirement, candidates) {
   const score = (path) => {
     const normalized = path.toLowerCase();
     if (requirement.label === "frontend/page owner") {
+      if (/\/tenant(?:onboarding|workflow)\.(?:jsx?|tsx?)$/.test(normalized)) return 110;
       if (/\/frontend\/src\/(?:pages?|routes?)\//.test(normalized)) return 100;
       if (/(?:^|\/)(?:pages?|routes?)\//.test(normalized)) return 90;
       if (/\/components?\//.test(normalized)) return 10;
@@ -2085,14 +2196,31 @@ function focusedOwnerCorrection(ownerContext, issue, correction) {
   ).map((owner) => Object.freeze({
     storyKey: owner.storyKey,
     owner: owner.owner,
-    // A correction must be executable, not another choice set. The ranking
-    // already puts a reachable production page/route/handler first.
-    suppliedCandidatePaths: [owner.suppliedCandidatePaths[0]],
+    // Prefer the exact path named by the validator, but only when it was in
+    // the supplied production context for this owner. This keeps a precise
+    // repair from drifting back to a similarly named helper while preventing
+    // untrusted diagnostics from introducing a new writable target.
+    suppliedCandidatePaths: [exactOwnerPathFromCorrection(text, owner) ?? owner.suppliedCandidatePaths[0]],
     acceptanceProof: owner.acceptanceProof,
   })));
 }
 
+function exactOwnerPathFromCorrection(correction, owner) {
+  const escapedLabel = owner.owner.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = correction.match(new RegExp(`${escapeRegExp(owner.storyKey)}:${escapedLabel}\\s*=>\\s*([^;\\s]+)`, "i"));
+  const path = match?.[1]?.trim();
+  return owner.suppliedCandidatePaths.includes(path) ? path : null;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function isConcreteOwnerCandidate(requirement, file) {
+  if (requirement.label === "frontend/page owner") {
+    const name = basename(file.path).replace(/\.(?:jsx?|tsx?)$/i, "");
+    if (/(?:funding.*status|onboarding.*funding.*status|status|card|panel|widget|component|view|display)$/i.test(name)) return false;
+  }
   if (requirement.label === "SBL owner" || requirement.label === "tooling owner") {
     const path = file.path.toLowerCase();
     if (/\/sbl\/.*\/handler\.(?:py|m?js|ts)$/i.test(path)) return true;
@@ -2136,9 +2264,16 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
   // real, supplied production paths—not guessed filename conventions after a
   // response has already been generated.
   const ownerContext = requiredOwnerContext(task, context, acceptedStoryCoverage);
-  const accountDiscoveryOwnerTestPaths = establishedAccountDiscoveryTestPaths(context, ownerContext);
-  const fundingAdapterPaths = authoritativeFundingAdapterPaths(context, ownerContext);
-  const lambdaOwnerTestPaths = establishedLambdaOwnerTestPaths(context, ownerContext);
+  const enforceOwnerTestEvidence = task.relaxOwnerTestEvidence !== true;
+  const accountDiscoveryOwnerTestPaths = enforceOwnerTestEvidence
+    ? establishedAccountDiscoveryTestPaths(context, ownerContext)
+    : [];
+  const fundingAdapterPaths = enforceOwnerTestEvidence
+    ? authoritativeFundingAdapterPaths(context, ownerContext)
+    : [];
+  const lambdaOwnerTestPaths = enforceOwnerTestEvidence
+    ? establishedLambdaOwnerTestPaths(context, ownerContext)
+    : new Map();
   const lambdaOwnerTestContracts = buildLambdaOwnerTestContracts(lambdaOwnerTestPaths);
   const frontendRoutedOwnerPaths = suppliedFrontendRoutedOwnerPaths(context);
   // Make the highest-confidence supplied owner for every uncovered boundary a
@@ -2177,6 +2312,7 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         lastError?.details?.ownerTestRepair,
         lastError?.details?.authoritativeAdapterRepair,
         lastError?.details?.broadAnchorRepair,
+        lastError?.details?.newFilePatchRepair,
         lastError?.details?.coveragePathRepair,
         previousValidationIssue,
         acceptedStoryCoverage,
@@ -2211,15 +2347,17 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         parsed.patches,
         completion,
       );
-      assertBehavioralOwnerTestPatches(
-        materializedPatches,
-        parsed.storyCoverage,
-        completion,
-        accountDiscoveryOwnerTestPaths,
-        lambdaOwnerTestPaths,
-        frontendRoutedOwnerPaths,
-        fundingAdapterPaths,
-      );
+      if (enforceOwnerTestEvidence)
+        assertBehavioralOwnerTestPatches(
+          materializedPatches,
+          parsed.storyCoverage,
+          completion,
+          accountDiscoveryOwnerTestPaths,
+          lambdaOwnerTestPaths,
+          frontendRoutedOwnerPaths,
+          fundingAdapterPaths,
+          task.stories,
+        );
       return Object.freeze({
         completion,
         ...parsed,
@@ -2231,7 +2369,9 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
       const focusedRecovery = Boolean(
         error?.details?.ownerTestRepair ||
         error?.details?.authoritativeAdapterRepair ||
-        error?.details?.broadAnchorRepair,
+        error?.details?.broadAnchorRepair ||
+        error?.details?.newFilePatchRepair ||
+        error?.details?.responseIssue === "TEST_NOT_BEHAVIORAL",
       );
       if (focusedRecovery) focusedRecoveryAttempts += 1;
       if (error?.details?.requiredResponsePatchPaths?.length) {
@@ -2294,12 +2434,24 @@ async function requestValidatedPatches({ gateway, task, context, candidate, writ
         error?.details?.responseIssue === "STORY_COVERAGE_PATHS_MISSING" ||
         ownerCoverageMissing ||
         error?.details?.responseIssue === "PATCH_REPLACEMENT_TOO_BROAD" ||
-        error?.details?.responseIssue === "PATCH_DESTRUCTIVE_REWRITE"
+        error?.details?.responseIssue === "PATCH_DESTRUCTIVE_REWRITE" ||
+        error?.details?.responseIssue === "PATCH_ANCHOR_TARGET_MISSING" ||
+        error?.details?.responseIssue === "PATCH_TEST_REWRITE_REQUIRES_NEW_FILE"
       ) {
         const partial = parseModelResponse(completion.text, writePaths, completion, [], [], ownerContext);
-        for (const patch of partial.patches) stagedPatches.set(patch.path, patch);
+        const invalidNewFilePath = error?.details?.newFilePatchRepair?.path;
+        const rejectedRewritePath = error?.details?.newFilePatchRepair?.rejectedPath;
+        for (const patch of partial.patches)
+          if (patch.path !== invalidNewFilePath && patch.path !== rejectedRewritePath) stagedPatches.set(patch.path, patch);
         retainStagedStoryCoverage(stagedStoryCoverage, parsed?.storyCoverage ?? extractStoryCoverage(completion.text));
         const repairPaths = new Set(error?.details?.requiredResponsePatchPaths ?? []);
+        if (ownerCoverageMissing && repairPaths.size) {
+          // An owner-missing response is a narrow, path-explicit repair. The
+          // first request may have required several inferred boundaries; keep
+          // their valid staged patches, but do not force the model to rewrite
+          // them while it corrects the named production owners.
+          requiredResponsePatchPaths = [...repairPaths];
+        }
         if (
           error?.details?.ownerTestRepair ||
           error?.details?.authoritativeAdapterRepair ||
@@ -2407,11 +2559,18 @@ function assertBehavioralOwnerTestPatches(
   lambdaOwnerTestPaths = new Map(),
   frontendRoutedOwnerPaths = [],
   fundingAdapterPaths = [],
+  stories = [],
 ) {
   const patchByPath = new Map(patches.map((patch) => [patch.path, patch]));
   const sourceInspection = /\b(?:ast\.parse|inspect\.getsource|read_text\s*\(|readFileSync\s*\(|fs\.readFile\s*\(|exec\s*\()\b/;
   for (const coverage of storyCoverage) {
     const implementationPaths = coverage.implementationPaths ?? [];
+    const story = stories.find((candidate) => candidate.key === coverage.storyKey);
+    const storyText = [
+      story?.title,
+      story?.narrative,
+      ...(story?.scenarios ?? []).flatMap((scenario) => [scenario.given, scenario.when, scenario.then]),
+    ].join(" ");
     const coversAdditiveReportRoute = implementationPaths.some((path) =>
       /(?:^|\/)reports\.py$/i.test(path),
     );
@@ -2472,17 +2631,57 @@ function assertBehavioralOwnerTestPatches(
     const frontendImplementationComponents = implementationPaths
       .filter((path) => /(?:^|\/)frontend\/src\/components\/.+\.(?:jsx?|tsx?)$/i.test(path))
       .map((path) => basename(path).replace(/\.(?:jsx?|tsx?)$/i, ""));
+    const requiresOnboardingFundingOwner = /\bonboard(?:ing)?\b/i.test(storyText) &&
+      /\b(?:fund(?:ing|ed)?|aide)\b/i.test(storyText);
+    if (requiresOnboardingFundingOwner && !frontendPageOwners.length) {
+      const onboardingOwner = frontendRoutedOwnerPaths.find((path) =>
+        /(?:TenantWorkflow|TenantOnboarding|Onboarding)/i.test(basename(path)),
+      ) ?? frontendRoutedOwnerPaths[0];
+      if (onboardingOwner)
+        throw patchResponseError(
+          "FRONTEND_ONBOARDING_OWNER_MISSING",
+          `Onboarding funding coverage for ${coverage.storyKey} omits its routed page owner.`,
+          completion,
+          `For ${coverage.storyKey}, patch and cite ${onboardingOwner} as an implementationPath, load the funding read model through its production client boundary, and render the decision there. A backend helper, leaf status component, or page-test import is not reachable onboarding evidence.`,
+          { requiredResponsePatchPaths: [onboardingOwner] },
+        );
+    }
+    const actionOwnerPaths = implementationPaths.filter((path) =>
+      /(?:^|\/)tenant_action\/(?:account_field_log|action_writer)\.py$/i.test(path),
+    );
     for (const testPath of coverage.testPaths ?? []) {
       const patch = patchByPath.get(testPath);
       if (!patch) continue;
       const content = String(patch.content ?? "");
-      if (sourceInspection.test(content))
+      if (actionOwnerPaths.length && assertsInactiveActionWrite(content))
         throw patchResponseError(
-          "TEST_NOT_BEHAVIORAL",
-          `Test patch ${testPath} inspects source instead of invoking an owner.`,
+          "ACTION_OWNER_TEST_FIXTURE_INACTIVE",
+          `Test patch ${testPath} expects an unfunded action write without satisfying the action owner's active-tenant guard.`,
           completion,
-          `Replace ${testPath} with a behavioral test. Import and invoke the named public page, route, Lambda handler, or workflow; mock only external boundaries; assert its observable result. Do not read source, parse ASTs, execute slices, or inspect symbols.`,
+          `For ${coverage.storyKey}, make the owner-level follow-up fixture explicitly active (for example is_active=True) before asserting the action write. Keep the inactive case as a separate assertion that no action is written.`,
+          { requiredResponsePatchPaths: [testPath] },
         );
+      if (sourceInspection.test(content))
+        {
+          const repair = behavioralOwnerTestRepair({
+            storyKey: coverage.storyKey,
+            testPath,
+            implementationPaths,
+            lambdaOwnerPaths,
+            accountDiscoveryOwnerPaths,
+            frontendPageOwners,
+          });
+          throw patchResponseError(
+            "TEST_NOT_BEHAVIORAL",
+            `Test patch ${testPath} inspects source instead of invoking an owner.`,
+            completion,
+            `Replace ${testPath} with a behavioral test. Import and invoke the named public page, route, Lambda handler, or workflow; mock only external boundaries; assert its observable result. Do not read source, parse ASTs, execute slices, or inspect symbols.`,
+            {
+              requiredResponsePatchPaths: [testPath],
+              ...(repair ? { ownerTestRepair: repair } : {}),
+            },
+          );
+        }
       if (coversAdditiveReportRoute && /(?:response\.)?get_json\(\)\s*==\s*\{/.test(content))
         throw patchResponseError(
           "REPORT_TEST_CONTRACT_BRITTLE",
@@ -2638,6 +2837,28 @@ function ownerTestRepair({ storyKey, testPath, ownerPath, publicEntryPoint, call
   return Object.freeze({ storyKey, testPath, ownerPath, publicEntryPoint, callerInput, observable, requiredStatements })
 }
 
+function behavioralOwnerTestRepair({
+  storyKey,
+  testPath,
+  implementationPaths,
+  lambdaOwnerPaths,
+  accountDiscoveryOwnerPaths,
+  frontendPageOwners,
+}) {
+  if (lambdaOwnerPaths.length)
+    return ownerTestRepair({ storyKey, testPath, ownerPath: lambdaOwnerPaths[0], publicEntryPoint: "lambda_handler", callerInput: "a caller-shaped event", observable: "the owner-visible blocked, persisted, or delivered result" });
+  if (accountDiscoveryOwnerPaths.length)
+    return ownerTestRepair({ storyKey, testPath, ownerPath: accountDiscoveryOwnerPaths[0], publicEntryPoint: "process_account_discovery", callerInput: "extracted-account data", observable: "the tenant-table funding decision write" });
+  const reportOwner = implementationPaths.find((path) => /(?:^|\/)reports?\.(?:py|m?js|ts)$/i.test(path));
+  if (reportOwner)
+    return ownerTestRepair({ storyKey, testPath, ownerPath: reportOwner, publicEntryPoint: "the registered report route", callerInput: "a request at its public endpoint", observable: "the report response containing the required historical record" });
+  if (frontendPageOwners.length) {
+    const ownerPath = frontendPageOwners[0];
+    return ownerTestRepair({ storyKey, testPath, ownerPath, publicEntryPoint: basename(ownerPath).replace(/\.(?:jsx?|tsx?)$/i, ""), callerInput: "its production client/API response", observable: "visible routed-page output" });
+  }
+  return null;
+}
+
 function authoritativeAdapterRepair({ storyKey, adapterPath, testPath, ownerPath }) {
   return Object.freeze({ storyKey, adapterPath, testPath, ownerPath })
 }
@@ -2651,6 +2872,16 @@ function isBehavioralAccountDiscoveryTest(content) {
     /\b(?:assert_called(?:_once)?|call_args(?:_list)?|assert\b)\b/.test(content)
   const mocksOwner = /(?:monkeypatch\.(?:setattr|setitem)|(?:mock\.)?patch(?:\.object)?\s*\()[\s\S]{0,240}process_account_discovery/i.test(content)
   return importsOwner && invokesOwner && suppliesExtractedAccounts && assertsFundingWrite && !mocksOwner
+}
+
+function assertsInactiveActionWrite(content) {
+  const invokesActionWriter = /\bupdateTenantActionTable\s*\(/.test(content) &&
+    /\b(?:put_tenant_action_item|assert_called(?:_once)?|call_args)\b/i.test(content);
+  if (!invokesActionWriter) return false;
+  // The production owner intentionally defaults this guard to false. A test
+  // that expects a write must satisfy it explicitly; otherwise it is proving
+  // a path production code will correctly refuse to execute.
+  return !/\bis_active\s*=\s*True\b|["']tenant_status["']\s*:\s*["']Active["']/i.test(content);
 }
 
 function isBehavioralLambdaOwnerTest(content) {

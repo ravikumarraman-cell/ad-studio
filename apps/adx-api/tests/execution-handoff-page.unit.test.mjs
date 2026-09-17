@@ -67,6 +67,9 @@ test("execution handoff requests a bounded implementation run instead of attesti
   assert.match(page, /Semantic verification intensity/);
   assert.match(page, /verification-intensity/);
   assert.match(page, /verificationIntensity: Number\(verificationIntensity\?\.value \?\? 100\)/);
+  assert.match(page, /Demo only: relax test evidence and skip executable tests/);
+  assert.match(page, /owner-level test-evidence checks/);
+  assert.match(page, /skipExecutableValidation: Boolean\(demoSkipExecutableValidation\?\.checked\)/);
   assert.match(page, /:not\(\.verification-control\)\{display:none\}/);
   assert.match(accessiblePageFoundation, /input\[type="checkbox"\],input\[type="radio"\]\{width:auto!important/);
 });
@@ -83,15 +86,14 @@ test("execution handoff presents the execution controls as a compact, responsive
   assert.match(page, /\.hero,.request-intro\{grid-template-columns:1fr\}/);
 });
 
-test("execution handoff does not expose submission controls outside execution readiness", () => {
+test("execution handoff exposes a corrective implementation path while a candidate awaits verification", () => {
   const page = renderExecutionHandoffPage(
     { ...changeCase, state: "AWAITING_VERIFICATION" },
     options,
   );
-  assert.match(page, /Implementation is not available/);
-  assert.match(page, /already left execution and is waiting for Gate D verification/);
-  assert.match(page, /Current state: <strong>AWAITING_VERIFICATION<\/strong>/);
-  assert.doesNotMatch(page, /id="dispatch-form"/);
+  assert.match(page, /id="dispatch-form"/);
+  assert.match(page, /Corrective implementation: this run replaces the retained candidate/);
+  assert.match(page, /Use it to complete missing reachable UI and backend behavior/);
 });
 
 test("execution handoff keeps submission disabled when no implementation providers are available", () => {
@@ -457,7 +459,7 @@ test("execution live script excludes previous-attempt events from the current ru
   assert.equal(context.currentEvents, JSON.stringify([snapshot.events[1]]));
 });
 
-test("execution live script marks workspace preparation as the active animated step", () => {
+test("execution live script marks candidate generation as the active animated step", () => {
   const script = buildExecutionLiveScript({
     statusEndpoint: "/execution",
     projectRepository: "cloud-asset-inventory",
@@ -467,6 +469,7 @@ test("execution live script marks workspace preparation as the active animated s
     classList: {
       toggle(name, enabled) { state.set(name, enabled); },
     },
+    querySelector() { return null; },
   }));
   const context = {
     clearInterval() {},
@@ -486,8 +489,8 @@ test("execution live script marks workspace preparation as the active animated s
 
   vm.runInNewContext(`${script}\napplySnapshot(${JSON.stringify(snapshot)});`, context);
 
-  assert.equal(classes[0].get("active"), true);
-  assert.equal(classes[1].get("active"), false);
+  assert.equal(classes[0].get("done"), true);
+  assert.equal(classes[1].get("active"), true);
   assert.equal(classes[2].get("active"), false);
 });
 

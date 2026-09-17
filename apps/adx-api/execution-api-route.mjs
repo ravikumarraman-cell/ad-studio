@@ -33,7 +33,7 @@ export async function handleExecutionApiRoute({ request, response, url, session,
         principal: session.principal,
         changeCase: current,
         provider: body?.provider,
-        task: executionTask(current, governance, body?.templateId, body?.verificationIntensity),
+        task: executionTask(current, governance, body?.templateId, body?.verificationIntensity, body?.skipExecutableValidation),
         expectedVersion: body?.expectedVersion,
         idempotencyKey: request.headers["idempotency-key"],
       }), traceId);

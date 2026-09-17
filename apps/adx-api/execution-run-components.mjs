@@ -21,6 +21,7 @@ const status = document.getElementById('status');
 const confirmation = document.getElementById('confirmation');
 let verificationIntensity = document.getElementById('verification-intensity');
 let verificationIntensityValue = document.getElementById('verification-intensity-value');
+let demoSkipExecutableValidation = document.getElementById('demo-skip-executable-validation');
 const providers = [...document.querySelectorAll('input[name="provider"]')];
 const submissionAvailable = ${JSON.stringify(Boolean(submissionAvailable))};
 
@@ -33,6 +34,14 @@ if (form && confirmation && !verificationIntensity) {
   verificationIntensityValue = control.querySelector('#verification-intensity-value');
 }
 
+if (form && confirmation && !demoSkipExecutableValidation) {
+  const control = document.createElement('label');
+  control.className = 'select-label demo-validation-control';
+  control.innerHTML = '<span><input id="demo-skip-executable-validation" type="checkbox"> Demo only: relax test evidence and skip executable tests</span><small>Clearly marked bypass for showing the flow. This also relaxes owner-level test-evidence checks; structural patch safety remains enforced. Semantic verification remains controlled by the slider above; this is not a production-safe validation result.</small>';
+  confirmation.closest('label')?.before(control);
+  demoSkipExecutableValidation = control.querySelector('#demo-skip-executable-validation');
+}
+
 function syncRunningState(running) {
   if (!form || !button) return;
   form.dataset.running = running ? 'true' : 'false';
@@ -40,6 +49,7 @@ function syncRunningState(running) {
   button.setAttribute('aria-busy', running ? 'true' : 'false');
   button.disabled = running;
   if (verificationIntensity) verificationIntensity.disabled = running;
+  if (demoSkipExecutableValidation) demoSkipExecutableValidation.disabled = running;
 }
 
 if (form && button && status) {
@@ -85,6 +95,7 @@ if (form && button && status) {
           provider: document.querySelector('input[name="provider"]:checked')?.value,
           templateId: document.getElementById('coding-spec-template')?.value,
           verificationIntensity: Number(verificationIntensity?.value ?? 100),
+          skipExecutableValidation: Boolean(demoSkipExecutableValidation?.checked),
           expectedVersion: ${JSON.stringify(changeCaseVersion)},
         }),
       });
@@ -114,7 +125,7 @@ export function buildExecutionLiveScript({ statusEndpoint, projectRepository, in
 const config = ${JSON.stringify({ statusEndpoint, evidenceReviewUrl: '/evidence-review', candidateUrl: '/generated-candidate', uiRevision: executionUiRevision }).replace(/</g, '\u003c')};
 const projectLabel = ${JSON.stringify(projectLabel)};
 let initialSnapshot = ${initialSnapshotJson};
-const stageOrder = ['leased', 'started', 'validated'];
+const stageOrder = ['leased', 'generating', 'validating'];
 let pollTimer = null;
 let clockTimer = null;
 let runStartedAt = null;
@@ -138,23 +149,23 @@ const escapeMarkup = (value) => String(value ?? '').replace(/[&<>"]/g, (characte
 }[character]));
 const eventLabels = {
   AgentRunLeased: { title: 'Lease issued', detail: 'Signed scope and policy limits have been recorded.', stage: 'leased' },
-  AgentRunStarted: { title: 'Building the bounded ' + projectLabel + ' candidate', detail: 'ADX is preparing the disposable workspace, requesting the constrained patch, then will run the fixed ' + projectLabel + ' verification.', stage: 'started' },
-  AgentRunCompleted: { title: 'Candidate ready for Gate D', detail: 'The run finished and the exact candidate is ready for independent verification.', stage: 'validated' },
-  AgentRunFailed: { title: 'Runner stopped', detail: 'The candidate was not promoted.', stage: 'started', failed: true },
-  AgentRunQuotaExceeded: { title: 'Runner limit reached', detail: 'The bounded run reached a configured limit.', stage: 'started', failed: true },
-  AgentRunCancellationObserved: { title: 'Run cancelled', detail: 'The run was cancelled before promotion.', stage: 'started', failed: true },
+  AgentRunStarted: { title: 'Building the bounded ' + projectLabel + ' candidate', detail: 'ADX is preparing the disposable workspace and requesting the constrained patch.', stage: 'generating' },
+  AgentRunCompleted: { title: 'Candidate retained', detail: 'The implementation run finished and the candidate is ready for its next workflow step.', stage: 'validating' },
+  AgentRunFailed: { title: 'Runner stopped', detail: 'The candidate was not promoted.', stage: 'generating', failed: true },
+  AgentRunQuotaExceeded: { title: 'Runner limit reached', detail: 'The bounded run reached a configured limit.', stage: 'generating', failed: true },
+  AgentRunCancellationObserved: { title: 'Run cancelled', detail: 'The run was cancelled before promotion.', stage: 'generating', failed: true },
   AgentRunLeaseRevoked: { title: 'Lease revoked', detail: 'The execution lease was revoked.', stage: 'leased', failed: true },
 };
 
 const phaseStages = {
-  CONTEXT_COLLECTION: 'leased',
-  CONTEXT_READY: 'started',
-  MODEL_REQUEST: 'started',
-  MODEL_RESPONSE: 'started',
-  PATCH_APPLIED: 'started',
-  VALIDATION: 'validated',
-  VALIDATION_RESULT: 'validated',
-  CANDIDATE_PROMOTION: 'validated',
+  CONTEXT_COLLECTION: 'generating',
+  CONTEXT_READY: 'generating',
+  MODEL_REQUEST: 'generating',
+  MODEL_RESPONSE: 'generating',
+  PATCH_APPLIED: 'generating',
+  VALIDATION: 'validating',
+  VALIDATION_RESULT: 'validating',
+  CANDIDATE_PROMOTION: 'validating',
 };
 
 const statusLabels = {
@@ -197,14 +208,14 @@ function operationDetail(details) {
 
 function progressEventLabel(phase, details = {}) {
   const normalized = String(phase || '').toUpperCase();
-  if (normalized === 'MODEL_REQUEST') return { title: activityLabel(details.activity) + ' started', detail: operationDetail(details) + ' · waiting for the model gateway', stage: 'started' };
-  if (normalized === 'MODEL_RESPONSE') return { title: activityLabel(details.activity) + ' response received', detail: operationDetail(details) + ' · ' + formatMilliseconds(details.durationMs), stage: 'started' };
-  if (normalized === 'PATCH_APPLIED') return { title: 'Patch applied', detail: operationDetail(details) + ' · ' + String(details.patchCount || 0) + ' files · ' + formatMilliseconds(details.durationMs), stage: 'started' };
-  if (normalized === 'VALIDATION') return { title: 'Executable validation started', detail: operationDetail(details) + ' · ' + String(details.commandCount || 0) + ' command groups', stage: 'validated' };
-  if (normalized === 'VALIDATION_RESULT') return { title: Number(details.exitCode) === 0 ? 'Executable validation passed' : 'Executable validation failed', detail: operationDetail(details) + ' · ' + formatMilliseconds(details.durationMs), stage: 'validated' };
-  if (normalized === 'CANDIDATE_PROMOTION') return { title: 'Candidate promotion recorded', detail: 'The validated candidate is being retained for review.', stage: 'validated' };
-  if (normalized === 'CONTEXT_COLLECTION') return { title: 'Workspace preparing', detail: 'ADX is collecting the bounded context and preparing the disposable workspace.', stage: 'leased' };
-  if (normalized === 'CONTEXT_READY') return { title: 'Workspace ready', detail: String(details.fileCount || 0) + ' files indexed · ' + formatMilliseconds(details.durationMs), stage: 'started' };
+  if (normalized === 'MODEL_REQUEST') return { title: activityLabel(details.activity) + ' started', detail: operationDetail(details) + ' · waiting for the model gateway', stage: 'generating' };
+  if (normalized === 'MODEL_RESPONSE') return { title: activityLabel(details.activity) + ' response received', detail: operationDetail(details) + ' · ' + formatMilliseconds(details.durationMs), stage: 'generating' };
+  if (normalized === 'PATCH_APPLIED') return { title: 'Patch applied', detail: operationDetail(details) + ' · ' + String(details.patchCount || 0) + ' files · ' + formatMilliseconds(details.durationMs), stage: 'generating' };
+  if (normalized === 'VALIDATION') return details.demoOnly ? { title: 'Demo validation and owner-test evidence skipped', detail: 'Demo-only execution continues without commands or owner-test evidence gating.', stage: 'validating' } : { title: 'Executable validation started', detail: operationDetail(details) + ' · ' + String(details.commandCount || 0) + ' command groups', stage: 'validating' };
+  if (normalized === 'VALIDATION_RESULT') return details.demoOnly ? { title: 'Executable validation skipped for demo', detail: 'No executable command was run.', stage: 'validating' } : { title: Number(details.exitCode) === 0 ? 'Executable validation passed' : 'Executable validation failed', detail: operationDetail(details) + ' · ' + formatMilliseconds(details.durationMs), stage: 'validating' };
+  if (normalized === 'CANDIDATE_PROMOTION') return { title: 'Candidate promotion recorded', detail: 'The validated candidate is retained for the next workflow step.', stage: 'validating' };
+  if (normalized === 'CONTEXT_COLLECTION') return { title: 'Workspace preparing', detail: 'ADX is collecting the bounded context and preparing the disposable workspace.', stage: 'generating' };
+  if (normalized === 'CONTEXT_READY') return { title: 'Workspace ready', detail: String(details.fileCount || 0) + ' files indexed · ' + formatMilliseconds(details.durationMs), stage: 'generating' };
   return null;
 }
 
@@ -240,13 +251,13 @@ function formatDuration(startedAt, endedAt = null) {
 function summarizeEvent(event) {
   const eventName = normalizeEventName(event?.eventType || event?.kind);
   const phaseEntry = eventName === 'AgentRunProgressed' ? progressEventLabel(event?.phase, event?.details) : null;
-  const entry = phaseEntry || eventLabels[eventName] || { title: eventName || 'Event', detail: event.detail || '', stage: phaseStages[String(event?.phase || '').toUpperCase()] || 'started' };
+  const entry = phaseEntry || eventLabels[eventName] || { title: eventName || 'Event', detail: event.detail || '', stage: phaseStages[String(event?.phase || '').toUpperCase()] || 'generating' };
   const errorCode = String(event?.errorCode || '').trim();
   const errorDetails = event?.errorDetails && typeof event.errorDetails === 'object' ? event.errorDetails : null;
   return {
     title: entry.title,
     detail: entry.detail,
-    stage: entry.stage || 'started',
+    stage: entry.stage || 'generating',
     failed: Boolean(entry.failed),
     errorCode,
     validationCommand: String(errorDetails?.validationCommand || '').trim(),
@@ -632,31 +643,31 @@ function renderLivePhase(snapshot) {
 }
 
 function renderRunSteps(snapshot) {
-  const verificationStep = document.querySelectorAll('.run-steps li')[3];
-  if (!verificationStep) return;
-  const title = verificationStep.querySelector('strong');
-  const detail = verificationStep.querySelector('small');
-  const status = String(snapshot?.runs?.[0]?.status || '').toUpperCase();
-  if (status === 'COMPLETED') {
-    if (title) title.textContent = 'Independent verification ready';
-    if (detail) detail.textContent = 'The validated candidate is available. Open Gate D to review and verify it.';
-    return;
+  const steps = document.querySelectorAll('.run-steps li');
+  const candidateStep = steps[1];
+  const validationStep = steps[2];
+  const verificationStep = steps[3];
+  if (verificationStep) verificationStep.remove();
+  if (candidateStep) {
+    const title = candidateStep.querySelector('strong');
+    const detail = candidateStep.querySelector('small');
+    if (title) title.textContent = 'Generate candidate';
+    if (detail) detail.textContent = 'ADX prepares the workspace, requests the patch, and applies it.';
   }
-  if (status === 'FAILED' || status === 'CANCELLED') {
-    if (title) title.textContent = 'Independent verification blocked';
-    if (detail) detail.textContent = 'This attempt produced no validated candidate. Review the failure details, then run bounded implementation again.';
-    return;
+  if (validationStep) {
+    const title = validationStep.querySelector('strong');
+    const detail = validationStep.querySelector('small');
+    if (title) title.textContent = 'Run fixed checks';
+    if (detail) detail.textContent = 'Validation starts only after a patch is applied (or is skipped in demo mode).';
   }
-  if (title) title.textContent = 'Independent verification pending';
-  if (detail) detail.textContent = 'The candidate will be exposed only after validation.';
 }
 
 function renderRunStepState(snapshot) {
   const latest = currentRunEvents(snapshot).at(-1) || null;
   if (!latest?.eventType && !latest?.kind) return;
   const eventName = normalizeEventName(latest.eventType || latest.kind);
-  const entry = eventLabels[eventName] || { stage: phaseStages[String(latest.phase || '').toUpperCase()] || 'started', failed: false };
-  const active = stageOrder.indexOf(entry.stage);
+  const entry = eventLabels[eventName] || { stage: phaseStages[String(latest.phase || '').toUpperCase()] || 'generating', failed: false };
+  const active = Math.max(0, stageOrder.indexOf(entry.stage));
   document.querySelectorAll('.run-steps li').forEach((item, index) => {
     item.classList.toggle('done', !entry.failed && index < active);
     item.classList.toggle('active', !entry.failed && index === active);
@@ -1105,6 +1116,7 @@ function applySnapshot(snapshot) {
     if (consoleEl) consoleEl.hidden = false;
     renderLivePhase(snapshot);
     renderRunCommentary(snapshot);
+    renderRunSteps(snapshot);
     renderRunStepState(snapshot);
     renderEvents(currentRunEvents(snapshot));
     renderRunHistory(snapshot);
